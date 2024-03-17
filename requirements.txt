@@ -1,0 +1,9 @@
+typing
+langchain_community
+langchain_core
+sqlalchemy
+python-dotenv
+fastapi
+psycopg2-binary
+pgvector
+uvicorn

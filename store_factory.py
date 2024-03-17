@@ -1,6 +1,6 @@
 from langchain_community.embeddings import OpenAIEmbeddings
 
-from store import AsnyPgVector, ExtendedPgVector
+from store import AsyncPgVector, ExtendedPgVector
 
 
 def get_vector_store(
@@ -16,7 +16,7 @@ def get_vector_store(
             collection_name=collection_name,
         )
     elif mode == "async":
-        return AsnyPgVector(
+        return AsyncPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,

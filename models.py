@@ -10,6 +10,7 @@ class DocumentResponse(BaseModel):
 
 
 class DocumentModel(BaseModel):
+    id: str
     page_content: str
     metadata: Optional[dict] = {}
 

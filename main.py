@@ -3,14 +3,12 @@ import os
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException
 from langchain.schema import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_core.runnables.config import run_in_executor
 
 from models import DocumentModel, DocumentResponse
-from store import AsnyPgVector
-from store_factory import get_vector_store
+from store import AsyncPgVector
+
+from config import pgvector_store
 
 load_dotenv(find_dotenv())
 
@@ -23,80 +21,33 @@ def get_env_variable(var_name: str) -> str:
         raise ValueError(f"Environment variable '{var_name}' not found.")
     return value
 
-
-try:
-    USE_ASYNC = os.getenv("USE_ASYNC", "False").lower() == "true"
-    if USE_ASYNC:
-        print("Async project used")
-
-    POSTGRES_DB = get_env_variable("POSTGRES_DB")
-    POSTGRES_USER = get_env_variable("POSTGRES_USER")
-    POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD")
-    DB_HOST = get_env_variable("DB_HOST")
-    DB_PORT = get_env_variable("DB_PORT")
-
-    CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
-
-    OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY")
-    embeddings = OpenAIEmbeddings()
-
-    mode = "async" if USE_ASYNC else "sync"
-    pgvector_store = get_vector_store(
-        connection_string=CONNECTION_STRING,
-        embeddings=embeddings,
-        collection_name="testcollection",
-        mode=mode,
-    )
-    retriever = pgvector_store.as_retriever()
-    template = """Answer the question based only on the following context:
-    {context}
-
-    Question: {question}
-    """
-    prompt = ChatPromptTemplate.from_template(template)
-    model = ChatOpenAI(model_name="gpt-3.5-turbo")
-    chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | prompt
-        | model
-        | StrOutputParser()
-    )
-
-
-except ValueError as e:
-    raise HTTPException(status_code=500, detail=str(e))
-except Exception as e:
-    raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/add-documents/")
 async def add_documents(documents: list[DocumentModel]):
     try:
         docs = [
             Document(
                 page_content=doc.page_content,
-                metadata=(
-                    {**doc.metadata, "digest": doc.generate_digest()}
-                    if doc.metadata
-                    else {"digest": doc.generate_digest()}
-                ),
+                metadata={
+                    "file_id": doc.id,
+                    "digest": doc.generate_digest(),
+                    **(doc.metadata or {}),
+                },
             )
             for doc in documents
         ]
         ids = (
-            await pgvector_store.aadd_documents(docs)
-            if isinstance(pgvector_store, AsnyPgVector)
+            await pgvector_store.aadd_documents(docs, ids=[doc.id for doc in documents])
+            if isinstance(pgvector_store, AsyncPgVector)
             else pgvector_store.add_documents(docs)
         )
         return {"message": "Documents added successfully", "ids": ids}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/get-all-ids/")
 async def get_all_ids():
     try:
-        if isinstance(pgvector_store, AsnyPgVector):
+        if isinstance(pgvector_store, AsyncPgVector):
             ids = await pgvector_store.get_all_ids()
         else:
             ids = pgvector_store.get_all_ids()
@@ -109,7 +60,7 @@ async def get_all_ids():
 @app.post("/get-documents-by-ids/", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str]):
     try:
-        if isinstance(pgvector_store, AsnyPgVector):
+        if isinstance(pgvector_store, AsyncPgVector):
             existing_ids = await pgvector_store.get_all_ids()
             documents = await pgvector_store.get_documents_by_ids(ids)
         else:
@@ -129,7 +80,7 @@ async def get_documents_by_ids(ids: list[str]):
 @app.delete("/delete-documents/")
 async def delete_documents(ids: list[str]):
     try:
-        if isinstance(pgvector_store, AsnyPgVector):
+        if isinstance(pgvector_store, AsyncPgVector):
             existing_ids = await pgvector_store.get_all_ids()
             await pgvector_store.delete(ids=ids)
         else:
@@ -143,8 +94,28 @@ async def delete_documents(ids: list[str]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/query-embeddings-by-file-id/")
+async def query_embeddings_by_file_id(file_id: str, query: str, k: int = 4):
+    try:
+        # Get the embedding of the query text
+        embedding = pgvector_store.embedding_function.embed_query(query)
 
-@app.post("/chat/")
-async def quick_response(msg: str):
-    result = chain.invoke(msg)
-    return result
+        # Perform similarity search with the query embedding and filter by the file_id in metadata
+        if isinstance(pgvector_store, AsyncPgVector):
+            documents = await run_in_executor(
+                None,
+                pgvector_store.similarity_search_with_score_by_vector,
+                embedding,
+                k=k,
+                filter={"file_id": file_id}
+            )
+        else:
+            documents = pgvector_store.similarity_search_with_score_by_vector(
+                embedding,
+                k=k,
+                filter={"file_id": file_id}
+            )
+
+        return documents
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
