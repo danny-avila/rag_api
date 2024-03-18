@@ -5,6 +5,8 @@ name: Docker Dev Images Build
 on:
   workflow_dispatch:
   push:
+    paths-ignore:
+      - 'README.md'
     branches:
       - main
 
