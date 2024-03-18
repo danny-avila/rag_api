@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  rag_api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    env_file:
+      - .env
+
+volumes:
+  pgdata2:
