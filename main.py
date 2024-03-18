@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain.schema import Document
 from langchain_core.runnables.config import run_in_executor
 
-from models import DocumentModel, DocumentResponse, StoreDocument
+from models import DocumentModel, DocumentResponse, StoreDocument, QueryRequestBody
 from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
@@ -133,10 +133,10 @@ async def delete_documents(ids: list[str]):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/query-embeddings-by-file-id/")
-async def query_embeddings_by_file_id(file_id: str, query: str, k: int = 4):
+async def query_embeddings_by_file_id(body: QueryRequestBody):
     try:
         # Get the embedding of the query text
-        embedding = pgvector_store.embedding_function.embed_query(query)
+        embedding = pgvector_store.embedding_function.embed_query(body.query)
 
         # Perform similarity search with the query embedding and filter by the file_id in metadata
         if isinstance(pgvector_store, AsyncPgVector):
@@ -144,14 +144,14 @@ async def query_embeddings_by_file_id(file_id: str, query: str, k: int = 4):
                 None,
                 pgvector_store.similarity_search_with_score_by_vector,
                 embedding,
-                k=k,
-                filter={"file_id": file_id}
+                k=body.k,
+                filter={"file_id": body.file_id}
             )
         else:
             documents = pgvector_store.similarity_search_with_score_by_vector(
                 embedding,
-                k=k,
-                filter={"file_id": file_id}
+                k=body.k,
+                filter={"file_id": body.file_id}
             )
 
         return documents

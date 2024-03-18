@@ -22,6 +22,11 @@ class StoreDocument(BaseModel):
     file_content_type: str
     file_id: str
 
+class QueryRequestBody(BaseModel):
+    file_id: str
+    query: str
+    k: int = 4
+
 class CleanupMethod(str, Enum):
     incremental = "incremental"
     full = "full"
