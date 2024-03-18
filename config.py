@@ -20,9 +20,13 @@ POSTGRES_USER = get_env_variable("POSTGRES_USER")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD")
 DB_HOST = get_env_variable("DB_HOST")
 DB_PORT = get_env_variable("DB_PORT")
+COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
+UPLOAD_DIR = get_env_variable("UPLOAD_DIR", "./uploads/")
+env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
+PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
@@ -32,7 +36,52 @@ embeddings = OpenAIEmbeddings()
 pgvector_store = get_vector_store(
     connection_string=CONNECTION_STRING,
     embeddings=embeddings,
-    collection_name="testcollection",
+    collection_name=COLLECTION_NAME,
     mode="async",
 )
 retriever = pgvector_store.as_retriever()
+
+known_source_ext = [
+    "go",
+    "py",
+    "java",
+    "sh",
+    "bat",
+    "ps1",
+    "cmd",
+    "js",
+    "ts",
+    "css",
+    "cpp",
+    "hpp",
+    "h",
+    "c",
+    "cs",
+    "sql",
+    "log",
+    "ini",
+    "pl",
+    "pm",
+    "r",
+    "dart",
+    "dockerfile",
+    "env",
+    "php",
+    "hs",
+    "hsc",
+    "lua",
+    "nginxconf",
+    "conf",
+    "m",
+    "mm",
+    "plsql",
+    "perl",
+    "rb",
+    "rs",
+    "db2",
+    "scala",
+    "bash",
+    "swift",
+    "vue",
+    "svelte",
+]

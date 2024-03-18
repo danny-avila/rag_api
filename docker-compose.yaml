@@ -12,5 +12,19 @@ services:
     ports:
       - "5433:5432"
 
+  fastapi:
+    build: .
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      - db
+    env_file:
+      - .env
+
 volumes:
   pgdata2:
