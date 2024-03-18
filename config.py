@@ -1,6 +1,7 @@
 # config.py
 
 import os
+import logging
 from dotenv import find_dotenv, load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from store_factory import get_vector_store
@@ -29,6 +30,13 @@ env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY")
 embeddings = OpenAIEmbeddings()

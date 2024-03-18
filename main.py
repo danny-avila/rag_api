@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain.schema import Document
 from langchain_core.runnables.config import run_in_executor
 
+from middleware import security_middleware
 from models import DocumentModel, DocumentResponse, StoreDocument, QueryRequestBody
 from store import AsyncPgVector
 
@@ -49,6 +50,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.middleware("http")(security_middleware)
+
 app.state.CHUNK_SIZE = CHUNK_SIZE
 app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
 app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
@@ -59,30 +62,7 @@ def get_env_variable(var_name: str) -> str:
         raise ValueError(f"Environment variable '{var_name}' not found.")
     return value
 
-@app.post("/add-documents/")
-async def add_documents(documents: list[DocumentModel]):
-    try:
-        docs = [
-            Document(
-                page_content=doc.page_content,
-                metadata={
-                    "file_id": doc.id,
-                    "digest": doc.generate_digest(),
-                    **(doc.metadata or {}),
-                },
-            )
-            for doc in documents
-        ]
-        ids = (
-            await pgvector_store.aadd_documents(docs, ids=[doc.id for doc in documents])
-            if isinstance(pgvector_store, AsyncPgVector)
-            else pgvector_store.add_documents(docs, ids=[doc.id for doc in documents])
-        )
-        return {"message": "Documents added successfully", "ids": ids}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/get-all-ids/")
+@app.get("/ids")
 async def get_all_ids():
     try:
         if isinstance(pgvector_store, AsyncPgVector):
@@ -95,7 +75,7 @@ async def get_all_ids():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/get-documents-by-ids/", response_model=list[DocumentResponse])
+@app.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str]):
     try:
         if isinstance(pgvector_store, AsyncPgVector):
@@ -115,7 +95,7 @@ async def get_documents_by_ids(ids: list[str]):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/delete-documents/")
+@app.delete("/documents")
 async def delete_documents(ids: list[str]):
     try:
         if isinstance(pgvector_store, AsyncPgVector):
@@ -128,11 +108,12 @@ async def delete_documents(ids: list[str]):
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
 
-        return {"message": f"{len(ids)} documents deleted successfully"}
+        file_count = len(ids)
+        return {"message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/query-embeddings-by-file-id/")
+@app.post("/query")
 async def query_embeddings_by_file_id(body: QueryRequestBody):
     try:
         # Get the embedding of the query text
@@ -238,14 +219,14 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
     return loader, known_type
 
-@app.post("/doc")
-async def store_doc(document: StoreDocument):
+@app.post("/embed")
+async def embed_file(document: StoreDocument):
     
     # Check if the file exists
     if not os.path.exists(document.filepath):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=ERROR_MESSAGES.FILE_NOT_FOUND(),
+            detail=ERROR_MESSAGES.FILE_NOT_FOUND,
         )
 
     try:
