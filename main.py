@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain.schema import Document
 from langchain_core.runnables.config import run_in_executor
 
-from models import DocumentModel, DocumentResponse
+from models import DocumentModel, DocumentResponse, StoreDocument
 from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
@@ -200,8 +200,6 @@ async def store_data_in_vector_db(data, file_id, overwrite: bool = False) -> boo
             return {"message": "Documents exist. Overwrite not implemented.", "error": str(e)}
         
         return {"message": "An error occurred while adding documents.", "error": str(e)}
-    
-
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
     file_ext = filename.split(".")[-1].lower()
@@ -240,32 +238,26 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
     return loader, known_type
 
-
 @app.post("/doc")
-async def store_doc(
-    filepath: str,
-    filename: str,
-    file_content_type: str,
-    file_id: str,
-):
+async def store_doc(document: StoreDocument):
     
     # Check if the file exists
-    if not os.path.exists(filepath):
+    if not os.path.exists(document.filepath):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.FILE_NOT_FOUND(),
         )
 
     try:
-        loader, known_type = get_loader(filename, file_content_type, filepath)
+        loader, known_type = get_loader(document.filename, document.file_content_type, document.filepath)
         data = loader.load()
-        result = await store_data_in_vector_db(data, file_id)
+        result = await store_data_in_vector_db(data, document.file_id)
 
         if result:
             return {
                 "status": True,
-                "file_id": file_id,
-                "filename": filename,
+                "file_id": document.file_id,
+                "filename": document.filename,
                 "known_type": known_type,
             }
         else:
@@ -285,4 +277,3 @@ async def store_doc(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
-
