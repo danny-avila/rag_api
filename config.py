@@ -3,6 +3,7 @@
 import os
 import logging
 from dotenv import find_dotenv, load_dotenv
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from store_factory import get_vector_store
 
@@ -36,6 +37,8 @@ PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
+## Logging
+
 logger = logging.getLogger()
 
 debug_mode = get_env_variable("DEBUG_RAG_API", "False").lower() == "true"
@@ -49,8 +52,35 @@ handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY")
-embeddings = OpenAIEmbeddings()
+## Credentials 
+
+OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
+HF_TOKEN = get_env_variable("HF_TOKEN", "")
+
+## Embeddings
+
+def init_embeddings(provider, model):
+    if provider == "openai":
+        return OpenAIEmbeddings(model=model)
+    elif provider == "huggingface":
+        return HuggingFaceEmbeddings(model_name=model,  encode_kwargs={'normalize_embeddings': True})
+    else:
+        raise ValueError(f"Unsupported embeddings provider: {provider}")
+    
+EMBEDDINGS_PROVIDER = get_env_variable("EMBEDDINGS_PROVIDER", "openai").lower()
+
+if EMBEDDINGS_PROVIDER == "openai":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+elif EMBEDDINGS_PROVIDER == "huggingface":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sangmini/msmarco-cotmae-MiniLM-L12_en-ko-ja")
+else:
+    raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
+
+embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+
+logger.info(f"Initialized embeddings of type: {type(embeddings)}")
+
+## Vector store
 
 vector_store = get_vector_store(
     connection_string=CONNECTION_STRING,
