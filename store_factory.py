@@ -23,3 +23,25 @@ def get_vector_store(
         )
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
+
+async def create_index_if_not_exists(conn, table_name: str, column_name: str):
+    # Construct index name conventionally
+    index_name = f"idx_{table_name}_{column_name}"
+    # Check if index exists
+    exists = await conn.fetchval(f"""
+        SELECT EXISTS (
+            SELECT FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = $1
+            AND n.nspname = 'public'  -- Or specify your schema if different
+        );
+    """, index_name)
+    # Create the index if it does not exist
+    if not exists:
+        await conn.execute(f"""
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
+            ON public.{table_name} ({column_name});
+        """)
+        print(f"Index {index_name} created on {table_name}.{column_name}")
+    else:
+        print(f"Index {index_name} already exists on {table_name}.{column_name}")

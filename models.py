@@ -1,7 +1,7 @@
 import hashlib
 from enum import Enum
-from typing import Optional
 from pydantic import BaseModel
+from typing import Optional, List
 
 class DocumentResponse(BaseModel):
     page_content: str
@@ -30,3 +30,8 @@ class QueryRequestBody(BaseModel):
 class CleanupMethod(str, Enum):
     incremental = "incremental"
     full = "full"
+
+class QueryMultipleBody(BaseModel):
+    query: str
+    file_ids: List[str]
+    k: int = 4

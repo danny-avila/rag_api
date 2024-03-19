@@ -30,10 +30,11 @@ env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
 logger = logging.getLogger()
 
-debug_mode = get_env_variable("DEBUG", "False").lower() == "true"
+debug_mode = get_env_variable("DEBUG_RAG_API", "False").lower() == "true"
 if debug_mode:
     logger.setLevel(logging.DEBUG)
 else:
@@ -47,13 +48,13 @@ logger.addHandler(handler)
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY")
 embeddings = OpenAIEmbeddings()
 
-pgvector_store = get_vector_store(
+vector_store = get_vector_store(
     connection_string=CONNECTION_STRING,
     embeddings=embeddings,
     collection_name=COLLECTION_NAME,
     mode="async",
 )
-retriever = pgvector_store.as_retriever()
+retriever = vector_store.as_retriever()
 
 known_source_ext = [
     "go",

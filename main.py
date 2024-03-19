@@ -1,29 +1,12 @@
 import os
-
 import hashlib
+from langchain.schema import Document
+from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from langchain.schema import Document
 from langchain_core.runnables.config import run_in_executor
-
-from middleware import security_middleware
-from models import DocumentModel, DocumentResponse, StoreDocument, QueryRequestBody
-from store import AsyncPgVector
-
-load_dotenv(find_dotenv())
-
-from config import (
-    PDF_EXTRACT_IMAGES,
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
-    pgvector_store,
-    known_source_ext,
-    # RAG_EMBEDDING_MODEL,
-    # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-    # RAG_TEMPLATE,
-)
-
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
@@ -36,11 +19,39 @@ from langchain_community.document_loaders import (
     UnstructuredRSTLoader,
     UnstructuredExcelLoader,
 )
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 
+from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
+from psql import PSQLDatabase, ensure_custom_id_index_on_embedding
+from middleware import security_middleware
+from pgvector_routes import router as pgvector_router
 from constants import ERROR_MESSAGES
+from store import AsyncPgVector
+
+load_dotenv(find_dotenv())
+
+from config import (
+    debug_mode,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    vector_store,
+    known_source_ext,
+    PDF_EXTRACT_IMAGES,
+    # RAG_EMBEDDING_MODEL,
+    # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
+    # RAG_TEMPLATE,
+)
 
 app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic goes here
+    await PSQLDatabase.get_pool()  # Initialize the pool
+    await ensure_custom_id_index_on_embedding()
+    
+    yield  # The application is now up and serving requests
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,19 +67,13 @@ app.state.CHUNK_SIZE = CHUNK_SIZE
 app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
 app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
-def get_env_variable(var_name: str) -> str:
-    value = os.getenv(var_name)
-    if value is None:
-        raise ValueError(f"Environment variable '{var_name}' not found.")
-    return value
-
 @app.get("/ids")
 async def get_all_ids():
     try:
-        if isinstance(pgvector_store, AsyncPgVector):
-            ids = await pgvector_store.get_all_ids()
+        if isinstance(vector_store, AsyncPgVector):
+            ids = await vector_store.get_all_ids()
         else:
-            ids = pgvector_store.get_all_ids()
+            ids = vector_store.get_all_ids()
 
         return list(set(ids))
     except Exception as e:
@@ -78,12 +83,12 @@ async def get_all_ids():
 @app.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str]):
     try:
-        if isinstance(pgvector_store, AsyncPgVector):
-            existing_ids = await pgvector_store.get_all_ids()
-            documents = await pgvector_store.get_documents_by_ids(ids)
+        if isinstance(vector_store, AsyncPgVector):
+            existing_ids = await vector_store.get_all_ids()
+            documents = await vector_store.get_documents_by_ids(ids)
         else:
-            existing_ids = pgvector_store.get_all_ids()
-            documents = pgvector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_all_ids()
+            documents = vector_store.get_documents_by_ids(ids)
 
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
@@ -98,12 +103,12 @@ async def get_documents_by_ids(ids: list[str]):
 @app.delete("/documents")
 async def delete_documents(ids: list[str]):
     try:
-        if isinstance(pgvector_store, AsyncPgVector):
-            existing_ids = await pgvector_store.get_all_ids()
-            await pgvector_store.delete(ids=ids)
+        if isinstance(vector_store, AsyncPgVector):
+            existing_ids = await vector_store.get_all_ids()
+            await vector_store.delete(ids=ids)
         else:
-            existing_ids = pgvector_store.get_all_ids()
-            pgvector_store.delete(ids=ids)
+            existing_ids = vector_store.get_all_ids()
+            vector_store.delete(ids=ids)
 
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
@@ -117,22 +122,22 @@ async def delete_documents(ids: list[str]):
 async def query_embeddings_by_file_id(body: QueryRequestBody):
     try:
         # Get the embedding of the query text
-        embedding = pgvector_store.embedding_function.embed_query(body.query)
+        embedding = vector_store.embedding_function.embed_query(body.query)
 
         # Perform similarity search with the query embedding and filter by the file_id in metadata
-        if isinstance(pgvector_store, AsyncPgVector):
+        if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
                 None,
-                pgvector_store.similarity_search_with_score_by_vector,
+                vector_store.similarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"file_id": body.file_id}
+                filter={"custom_id": body.file_id}
             )
         else:
-            documents = pgvector_store.similarity_search_with_score_by_vector(
+            documents = vector_store.similarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": body.file_id}
+                filter={"custom_id": body.file_id}
             )
 
         return documents
@@ -165,10 +170,10 @@ async def store_data_in_vector_db(data, file_id, overwrite: bool = False) -> boo
     ]
     
     try:
-        if isinstance(pgvector_store, AsyncPgVector):
-            ids = await pgvector_store.aadd_documents(docs, ids=[file_id]*len(documents))
+        if isinstance(vector_store, AsyncPgVector):
+            ids = await vector_store.aadd_documents(docs, ids=[file_id]*len(documents))
         else:
-            ids = pgvector_store.add_documents(docs, ids=[file_id]*len(documents))
+            ids = vector_store.add_documents(docs, ids=[file_id]*len(documents))
         
         return {"message": "Documents added successfully", "ids": ids}
 
@@ -258,3 +263,32 @@ async def embed_file(document: StoreDocument):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
+
+@app.post("/query_multiple")
+async def query_embeddings_by_file_ids(body: QueryMultipleBody):
+    try:
+        # Get the embedding of the query text
+        embedding = vector_store.embedding_function.embed_query(body.query)
+
+        # Perform similarity search with the query embedding and filter by the file_ids in metadata
+        if isinstance(vector_store, AsyncPgVector):
+            documents = await run_in_executor(
+                None,
+                vector_store.similarity_search_with_score_by_vector,
+                embedding,
+                k=body.k,
+                filter={"custom_id": {"$in": body.file_ids}}
+            )
+        else:
+            documents = vector_store.similarity_search_with_score_by_vector(
+                embedding,
+                k=body.k,
+                filter={"custom_id": {"$in": body.file_ids}}
+            )
+
+        return documents
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if debug_mode:
+    app.include_router(router=pgvector_router)
