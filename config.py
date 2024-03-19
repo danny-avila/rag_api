@@ -32,7 +32,13 @@ PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
 logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+
+debug_mode = get_env_variable("DEBUG", "False").lower() == "true"
+if debug_mode:
+    logger.setLevel(logging.DEBUG)
+else:
+    logger.setLevel(logging.INFO)
+
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)
