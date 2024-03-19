@@ -74,3 +74,20 @@ async def get_all_records(table_name: str):
     records_json = [dict(record) for record in records]
     
     return records_json
+
+@router.get("/records")
+async def get_records_filtered_by_custom_id(custom_id: str, table_name: str = "langchain_pg_embedding"):
+    # Validate that the table name is one of the expected ones to prevent SQL injection
+    if table_name not in ["langchain_pg_collection", "langchain_pg_embedding"]:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    
+    pool = await PSQLDatabase.get_pool()
+    async with pool.acquire() as conn:
+        # Use parameterized queries to prevent SQL Injection
+        query = f"SELECT * FROM {table_name} WHERE custom_id=$1;"
+        records = await conn.fetch(query, custom_id)
+    
+    # Convert records to JSON serializable format, assuming the Record class has a dict method.
+    records_json = [dict(record) for record in records]
+    
+    return records_json

@@ -16,6 +16,10 @@ def get_env_variable(var_name: str, default_value: str = None) -> str:
         return default_value
     return value
 
+RAG_UPLOAD_DIR = get_env_variable("RAG_UPLOAD_DIR", "./uploads/")
+if not os.path.exists(RAG_UPLOAD_DIR):
+    os.makedirs(RAG_UPLOAD_DIR, exist_ok=True)
+
 POSTGRES_DB = get_env_variable("POSTGRES_DB")
 POSTGRES_USER = get_env_variable("POSTGRES_USER")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD")
@@ -25,7 +29,7 @@ COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
-UPLOAD_DIR = get_env_variable("UPLOAD_DIR", "./uploads/")
+
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 

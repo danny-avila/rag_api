@@ -1,9 +1,10 @@
 import os
 import hashlib
+from shutil import copyfileobj
 from langchain.schema import Document
 from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -34,6 +35,7 @@ from config import (
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     vector_store,
+    RAG_UPLOAD_DIR,
     known_source_ext,
     PDF_EXTRACT_IMAGES,
     # RAG_EMBEDDING_MODEL,
@@ -121,29 +123,26 @@ async def delete_documents(ids: list[str]):
 @app.post("/query")
 async def query_embeddings_by_file_id(body: QueryRequestBody):
     try:
-        # Get the embedding of the query text
         embedding = vector_store.embedding_function.embed_query(body.query)
 
-        # Perform similarity search with the query embedding and filter by the file_id in metadata
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"custom_id": body.file_id}
+                filter={"file_id": body.file_id}
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"custom_id": body.file_id}
+                filter={"file_id": body.file_id}
             )
 
         return documents
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
 
 def generate_digest(page_content: str):
     hash_obj = hashlib.md5(page_content.encode())
@@ -263,6 +262,42 @@ async def embed_file(document: StoreDocument):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
+
+@app.post("/embed-upload")
+async def embed_file_upload(file_id: str = Form(...), uploaded_file: UploadFile = File(...)):
+    temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
+
+    try:
+        with open(temp_file_path, 'wb') as temp_file:
+            copyfileobj(uploaded_file.file, temp_file)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to save the uploaded file. Error: {str(e)}")
+    
+    try:
+        loader, known_type = get_loader(uploaded_file.filename, uploaded_file.content_type, temp_file_path)
+        
+        data = loader.load()
+        result = await store_data_in_vector_db(data, file_id)
+        
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process/store the file data.",
+            )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Error during file processing: {str(e)}")
+    finally:
+        os.remove(temp_file_path)
+    
+    return {
+        "status": True,
+        "message": "File processed successfully.",
+        "file_id": file_id,
+        "filename": uploaded_file.filename,
+        "known_type": known_type,
+    }
 
 @app.post("/query_multiple")
 async def query_embeddings_by_file_ids(body: QueryMultipleBody):
