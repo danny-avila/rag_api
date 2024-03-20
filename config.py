@@ -21,11 +21,11 @@ RAG_UPLOAD_DIR = get_env_variable("RAG_UPLOAD_DIR", "./uploads/")
 if not os.path.exists(RAG_UPLOAD_DIR):
     os.makedirs(RAG_UPLOAD_DIR, exist_ok=True)
 
-POSTGRES_DB = get_env_variable("POSTGRES_DB")
-POSTGRES_USER = get_env_variable("POSTGRES_USER")
-POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD")
-DB_HOST = get_env_variable("DB_HOST")
-DB_PORT = get_env_variable("DB_PORT")
+POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
+POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
+POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
+DB_HOST = get_env_variable("DB_HOST", "db")
+DB_PORT = get_env_variable("DB_PORT", "5432")
 COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
