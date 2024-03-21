@@ -80,7 +80,7 @@ elif EMBEDDINGS_PROVIDER == "azure":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
 
 elif EMBEDDINGS_PROVIDER == "huggingface":
-    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sangmini/msmarco-cotmae-MiniLM-L12_en-ko-ja")
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
