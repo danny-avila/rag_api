@@ -3,7 +3,7 @@
 import os
 import logging
 from dotenv import find_dotenv, load_dotenv
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings, HuggingFaceHubEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from store_factory import get_vector_store
 
@@ -68,6 +68,8 @@ def init_embeddings(provider, model):
         return AzureOpenAIEmbeddings(model=model, api_key=AZURE_OPENAI_API_KEY) # AZURE_OPENAI_ENDPOINT is being grabbed from the environment
     elif provider == "huggingface":
         return HuggingFaceEmbeddings(model_name=model,  encode_kwargs={'normalize_embeddings': True})
+    elif provider == "huggingfacetei":
+        return HuggingFaceHubEmbeddings(model=model)
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
     
@@ -81,6 +83,9 @@ elif EMBEDDINGS_PROVIDER == "azure":
 
 elif EMBEDDINGS_PROVIDER == "huggingface":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+elif EMBEDDINGS_PROVIDER == "huggingfacetei":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "http://localhost:3000")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
