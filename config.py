@@ -4,7 +4,7 @@ import os
 import logging
 from dotenv import find_dotenv, load_dotenv
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from store_factory import get_vector_store
 
 load_dotenv(find_dotenv())
@@ -55,13 +55,17 @@ logger.addHandler(handler)
 ## Credentials 
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
+AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 
 ## Embeddings
 
 def init_embeddings(provider, model):
     if provider == "openai":
-        return OpenAIEmbeddings(model=model)
+        return OpenAIEmbeddings(model=model, api_key=OPENAI_API_KEY)
+    elif provider == "azure":
+        return AzureOpenAIEmbeddings(model=model, api_key=AZURE_OPENAI_API_KEY) # AZURE_OPENAI_ENDPOINT is being grabbed from the environment
     elif provider == "huggingface":
         return HuggingFaceEmbeddings(model_name=model,  encode_kwargs={'normalize_embeddings': True})
     else:
@@ -71,6 +75,10 @@ EMBEDDINGS_PROVIDER = get_env_variable("EMBEDDINGS_PROVIDER", "openai").lower()
 
 if EMBEDDINGS_PROVIDER == "openai":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+
+elif EMBEDDINGS_PROVIDER == "azure":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+
 elif EMBEDDINGS_PROVIDER == "huggingface":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sangmini/msmarco-cotmae-MiniLM-L12_en-ko-ja")
 else:
