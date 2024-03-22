@@ -20,3 +20,4 @@ python-jose==3.3.0
 asyncpg==0.29.0
 python-multipart==0.0.9
 sentence_transformers==2.5.1
+aiofiles==23.2.1
