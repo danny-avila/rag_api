@@ -4,8 +4,8 @@ from shutil import copyfileobj
 from langchain.schema import Document
 from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
@@ -25,6 +25,7 @@ from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMulti
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding
 from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
+from parsers import process_documents
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
 
@@ -262,6 +263,28 @@ async def embed_file(document: StoreDocument):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
+
+@app.get("/documents/{id}/context")
+async def load_document_context(id: str):
+    ids = [id]
+    try:
+        if isinstance(vector_store, AsyncPgVector):
+            existing_ids = await vector_store.get_all_ids()
+            documents = await vector_store.get_documents_by_ids(ids)
+        else:
+            existing_ids = vector_store.get_all_ids()
+            documents = vector_store.get_documents_by_ids(ids)
+
+        if not all(id in existing_ids for id in ids):
+            raise HTTPException(status_code=404, detail="The specified file_id was not found")
+
+        return process_documents(documents)
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(e),
+        )
 
 @app.post("/embed-upload")
 async def embed_file_upload(file_id: str = Form(...), uploaded_file: UploadFile = File(...)):
