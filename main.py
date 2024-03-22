@@ -1,13 +1,16 @@
 import os
 import hashlib
+import aiofiles
+import aiofiles.os
+from typing import Optional
 from shutil import copyfileobj
 from langchain.schema import Document
 from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status, Request
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
@@ -32,6 +35,7 @@ from store import AsyncPgVector
 load_dotenv(find_dotenv())
 
 from config import (
+    logger,
     debug_mode,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
@@ -224,8 +228,8 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
     return loader, known_type
 
-@app.post("/embed")
-async def embed_file(document: StoreDocument):
+@app.post("/local/embed")
+async def embed_local_file(document: StoreDocument):
     
     # Check if the file exists
     if not os.path.exists(document.filepath):
@@ -263,6 +267,54 @@ async def embed_file(document: StoreDocument):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
+        
+@app.post("/embed")
+async def embed_file(request: Request, file_id: str = Form(...), file: UploadFile = File(...)):
+    known_type = None
+    if not hasattr(request.state, 'user'):
+        subfolder = "public"
+    else:
+        subfolder = request.state.user.get('id');
+    
+    temp_base_path = os.path.join(RAG_UPLOAD_DIR, subfolder)
+    os.makedirs(temp_base_path, exist_ok=True)
+    temp_file_path = os.path.join(RAG_UPLOAD_DIR, subfolder, file.filename)
+
+    try:
+        async with aiofiles.open(temp_file_path, 'wb') as temp_file:
+            chunk_size = 64 * 1024  # 64 KB
+            while content := await file.read(chunk_size):
+                await temp_file.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to save the uploaded file. Error: {str(e)}")
+    
+    try:
+        loader, known_type = get_loader(file.filename, file.content_type, temp_file_path)
+        data = loader.load()
+        result = await store_data_in_vector_db(data, file_id)
+        
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process/store the file data.",
+            )
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Error during file processing: {str(e)}")
+    finally:
+        try:
+            await aiofiles.os.remove(temp_file_path)
+        except Exception as e:
+            logger.info(f"Failed to remove temporary file: {str(e)}")
+    
+    return {
+        "status": True,
+        "message": "File processed successfully.",
+        "file_id": file_id,
+        "filename": file.filename,
+        "known_type": known_type,
+    }
 
 @app.get("/documents/{id}/context")
 async def load_document_context(id: str):
