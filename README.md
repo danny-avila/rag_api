@@ -58,12 +58,12 @@ The following environment variables are required to run the application:
     - openai: "text-embedding-3-small"
     - azure: "text-embedding-3-small"
     - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
-    - huggingfacetei: "http://localhost:3000". Hugging Face TEI uses model defined on TEI service launch.
+    - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
     - ollama: "nomic-embed-text"
 - `AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
 - `AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource. Example: `https://example-resource.azure.openai.com/`.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
-- `OLLAMA_BASE_URL`: (Optional) defaults to `http://localhost:11434`.
+- `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
