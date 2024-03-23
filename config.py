@@ -58,7 +58,7 @@ OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
-OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 
 ## Embeddings
 
@@ -88,7 +88,7 @@ elif EMBEDDINGS_PROVIDER == "huggingface":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 elif EMBEDDINGS_PROVIDER == "huggingfacetei":
-    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "http://localhost:3000")
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "http://huggingfacetei:3000")
 
 elif EMBEDDINGS_PROVIDER == "ollama":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
