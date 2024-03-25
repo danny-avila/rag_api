@@ -6,7 +6,6 @@ from typing import Iterable
 from shutil import copyfileobj
 from langchain.schema import Document
 from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse
 from dotenv import find_dotenv, load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
