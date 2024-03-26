@@ -3,7 +3,7 @@
 import os
 import logging
 from dotenv import find_dotenv, load_dotenv
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings, HuggingFaceHubEmbeddings, OllamaEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from store_factory import get_vector_store
 
@@ -58,6 +58,7 @@ OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
+OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 
 ## Embeddings
 
@@ -68,6 +69,10 @@ def init_embeddings(provider, model):
         return AzureOpenAIEmbeddings(model=model, api_key=AZURE_OPENAI_API_KEY) # AZURE_OPENAI_ENDPOINT is being grabbed from the environment
     elif provider == "huggingface":
         return HuggingFaceEmbeddings(model_name=model,  encode_kwargs={'normalize_embeddings': True})
+    elif provider == "huggingfacetei":
+        return HuggingFaceHubEmbeddings(model=model)
+    elif provider == "ollama":
+        return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)        
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
     
@@ -81,6 +86,12 @@ elif EMBEDDINGS_PROVIDER == "azure":
 
 elif EMBEDDINGS_PROVIDER == "huggingface":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+
+elif EMBEDDINGS_PROVIDER == "huggingfacetei":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "http://huggingfacetei:3000")
+
+elif EMBEDDINGS_PROVIDER == "ollama":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
