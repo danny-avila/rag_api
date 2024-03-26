@@ -1,0 +1,51 @@
+version: '3.4'
+
+# TO USE THIS FILE, FIRST UNCOMMENT THE LINE ('services:')
+
+# THEN UNCOMMENT ONLY THE SECTION OR SECTIONS CONTAINING THE CHANGES YOU WANT TO APPLY
+# SAVE THIS FILE AS 'docker-compose.override.yaml'
+# See https://ollama.com/library
+# for list of supported embedding modules
+
+# Need to run "docker exec -it ollama /bin/bash" and "ollama run nomic-embed-text" 
+# after starting the Ollama service
+
+# services:
+#  ollama:
+#    container_name: ollama
+#    image: ollama/ollama
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              capabilities: [compute, utility]
+#    healthcheck:
+#      test: ollama --version || exit 1
+#      interval: 1s
+#    ports:
+#      - "11434:11434"
+#    volumes:
+#      - ./ollama:/root/.ollama
+
+# See https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker-images
+# for additional options like cpu only images and other model options
+
+#  huggingfacetei:
+#    image: ghcr.io/huggingface/text-embeddings-inference:1.1.0
+#    platform: linux/amd64
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
+#    command: --model-id nomic-ai/nomic-embed-text-v1.5
+#    ports:
+#      - "3000:3000"
+#    environment:
+#      - CORS_ALLOW_ORIGIN=http://0.0.0.0:3000
+#      - PORT=3000
+#    volumes:
+#      - ./embedding:/data
