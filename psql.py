@@ -2,6 +2,7 @@
 import asyncpg
 from config import DSN, logger
 
+
 class PSQLDatabase:
     pool = None
 
@@ -17,6 +18,7 @@ class PSQLDatabase:
             await cls.pool.close()
             cls.pool = None
 
+
 async def ensure_custom_id_index_on_embedding():
     table_name = "langchain_pg_embedding"
     column_name = "custom_id"
@@ -27,7 +29,7 @@ async def ensure_custom_id_index_on_embedding():
     async with pool.acquire() as conn:
         # Check if the index exists
         index_exists = await check_index_exists(conn, index_name)
-        
+
         if not index_exists:
             # If the index does not exist, create it
             await conn.execute(f"""
@@ -36,6 +38,7 @@ async def ensure_custom_id_index_on_embedding():
             logger.debug(f"Created index '{index_name}' on '{table_name}({column_name})'")
         else:
             logger.debug(f"Index '{index_name}' already exists on '{table_name}({column_name})'")
+
 
 async def check_index_exists(conn, index_name: str) -> bool:
     # Adjust the SQL query if necessary
@@ -47,3 +50,14 @@ async def check_index_exists(conn, index_name: str) -> bool:
         );
     """, index_name)
     return result
+
+
+async def pg_health_check() -> bool:
+    try:
+        pool = await PSQLDatabase.get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        return True
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return False

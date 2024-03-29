@@ -25,7 +25,8 @@ from langchain_community.document_loaders import (
 )
 
 from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
-from psql import PSQLDatabase, ensure_custom_id_index_on_embedding
+from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, \
+    pg_health_check
 from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents
@@ -50,12 +51,13 @@ from config import (
 
 app = FastAPI()
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
     await PSQLDatabase.get_pool()  # Initialize the pool
     await ensure_custom_id_index_on_embedding()
-    
+
     yield  # The application is now up and serving requests
 
 app = FastAPI(lifespan=lifespan)
@@ -74,6 +76,7 @@ app.state.CHUNK_SIZE = CHUNK_SIZE
 app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
 app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
+
 @app.get("/ids")
 async def get_all_ids():
     try:
@@ -85,6 +88,18 @@ async def get_all_ids():
         return list(set(ids))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def isHealthOK():
+    return pg_health_check()
+
+
+@app.get("/health")
+async def health_check():
+    if isHealthOK():
+        return {"status": "UP"}
+    else:
+        return {"status": "DOWN"}, 503
 
 
 @app.get("/documents", response_model=list[DocumentResponse])
@@ -125,13 +140,14 @@ async def delete_documents(ids: list[str]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/query")
 async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
     if not hasattr(request.state, 'user'):
         user_authorized = "public"
     else:
         user_authorized = request.state.user.get('id');
-    
+
     authorized_documents = []
     try:
         embedding = vector_store.embedding_function.embed_query(body.query)
@@ -164,9 +180,11 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def generate_digest(page_content: str):
     hash_obj = hashlib.md5(page_content.encode())
     return hash_obj.hexdigest()
+
 
 async def store_data_in_vector_db(data: Iterable[Document], file_id: str, user_id: str = '') -> bool:
     text_splitter = RecursiveCharacterTextSplitter(
@@ -188,18 +206,19 @@ async def store_data_in_vector_db(data: Iterable[Document], file_id: str, user_i
         )
         for doc in documents
     ]
-    
+
     try:
         if isinstance(vector_store, AsyncPgVector):
             ids = await vector_store.aadd_documents(docs, ids=[file_id]*len(documents))
         else:
             ids = vector_store.add_documents(docs, ids=[file_id]*len(documents))
-        
+
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
         logger.error(e)
         return {"message": "An error occurred while adding documents.", "error": str(e)}
+
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
     file_ext = filename.split(".")[-1].lower()
@@ -238,16 +257,17 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
     return loader, known_type
 
+
 @app.post("/local/embed")
 async def embed_local_file(document: StoreDocument, request: Request):
-    
+
     # Check if the file exists
     if not os.path.exists(document.filepath):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
         )
-    
+
     if not hasattr(request.state, 'user'):
         user_id = "public"
     else:
@@ -282,7 +302,8 @@ async def embed_local_file(document: StoreDocument, request: Request):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
-        
+
+
 @app.post("/embed")
 async def embed_file(request: Request, file_id: str = Form(...), file: UploadFile = File(...)):
     known_type = None
@@ -290,7 +311,7 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
         user_id = "public"
     else:
         user_id = request.state.user.get('id');
-    
+
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
@@ -303,12 +324,12 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Failed to save the uploaded file. Error: {str(e)}")
-    
+
     try:
         loader, known_type = get_loader(file.filename, file.content_type, temp_file_path)
         data = loader.load()
         result = await store_data_in_vector_db(data, file_id, user_id)
-        
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -322,7 +343,7 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
             await aiofiles.os.remove(temp_file_path)
         except Exception as e:
             logger.info(f"Failed to remove temporary file: {str(e)}")
-    
+
     return {
         "status": True,
         "message": "File processed successfully.",
@@ -330,6 +351,7 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
         "filename": file.filename,
         "known_type": known_type,
     }
+
 
 @app.get("/documents/{id}/context")
 async def load_document_context(id: str):
@@ -353,6 +375,7 @@ async def load_document_context(id: str):
             detail=ERROR_MESSAGES.DEFAULT(e),
         )
 
+
 @app.post("/embed-upload")
 async def embed_file_upload(request: Request, file_id: str = Form(...), uploaded_file: UploadFile = File(...)):
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
@@ -368,13 +391,13 @@ async def embed_file_upload(request: Request, file_id: str = Form(...), uploaded
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Failed to save the uploaded file. Error: {str(e)}")
-    
+
     try:
         loader, known_type = get_loader(uploaded_file.filename, uploaded_file.content_type, temp_file_path)
-        
+
         data = loader.load()
         result = await store_data_in_vector_db(data, file_id, user_id)
-        
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -385,7 +408,7 @@ async def embed_file_upload(request: Request, file_id: str = Form(...), uploaded
                             detail=f"Error during file processing: {str(e)}")
     finally:
         os.remove(temp_file_path)
-    
+
     return {
         "status": True,
         "message": "File processed successfully.",
@@ -393,6 +416,7 @@ async def embed_file_upload(request: Request, file_id: str = Form(...), uploaded
         "filename": uploaded_file.filename,
         "known_type": known_type,
     }
+
 
 @app.post("/query_multiple")
 async def query_embeddings_by_file_ids(body: QueryMultipleBody):

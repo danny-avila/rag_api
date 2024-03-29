@@ -5,6 +5,8 @@ import logging
 from dotenv import find_dotenv, load_dotenv
 from langchain_community.embeddings import HuggingFaceEmbeddings, HuggingFaceHubEmbeddings, OllamaEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
+from pythonjsonlogger import jsonlogger
+
 from store_factory import get_vector_store
 
 load_dotenv(find_dotenv())
@@ -42,17 +44,23 @@ DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{PO
 logger = logging.getLogger()
 
 debug_mode = get_env_variable("DEBUG_RAG_API", "False").lower() == "true"
+console_json = get_env_variable("CONSOLE_JSON", "False").lower() == "true"
+
 if debug_mode:
     logger.setLevel(logging.DEBUG)
 else:
     logger.setLevel(logging.INFO)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+if console_json:
+    formatter = jsonlogger.JsonFormatter()
+else:
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-## Credentials 
+## Credentials
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
@@ -72,10 +80,10 @@ def init_embeddings(provider, model):
     elif provider == "huggingfacetei":
         return HuggingFaceHubEmbeddings(model=model)
     elif provider == "ollama":
-        return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)        
+        return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
-    
+
 EMBEDDINGS_PROVIDER = get_env_variable("EMBEDDINGS_PROVIDER", "openai").lower()
 
 if EMBEDDINGS_PROVIDER == "openai":
