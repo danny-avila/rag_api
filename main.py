@@ -37,9 +37,6 @@ from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
 
-RAG_HOST = os.getenv('HOST', '0.0.0.0')
-RAG_PORT = int(os.getenv('PORT', 8000))
-
 from config import (
     logger,
     debug_mode,
@@ -49,6 +46,8 @@ from config import (
     RAG_UPLOAD_DIR,
     known_source_ext,
     PDF_EXTRACT_IMAGES, LogMiddleware,
+    RAG_HOST,
+    RAG_PORT,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
@@ -61,7 +60,7 @@ async def lifespan(app: FastAPI):
     await PSQLDatabase.get_pool()  # Initialize the pool
     await ensure_custom_id_index_on_embedding()
 
-    yield  # The application is now up and serving requests
+    yield
 
 app = FastAPI(lifespan=lifespan)
 
