@@ -4,6 +4,8 @@ import aiofiles
 import aiofiles.os
 from typing import Iterable
 from shutil import copyfileobj
+
+import uvicorn
 from langchain.schema import Document
 from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
@@ -35,6 +37,7 @@ from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
 
+
 from config import (
     logger,
     debug_mode,
@@ -43,13 +46,11 @@ from config import (
     vector_store,
     RAG_UPLOAD_DIR,
     known_source_ext,
-    PDF_EXTRACT_IMAGES,
+    PDF_EXTRACT_IMAGES, LogMiddleware,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
 )
-
-app = FastAPI()
 
 
 @asynccontextmanager
@@ -69,6 +70,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(LogMiddleware)
 
 app.middleware("http")(security_middleware)
 
@@ -96,7 +99,7 @@ def isHealthOK():
 
 @app.get("/health")
 async def health_check():
-    if isHealthOK():
+    if await isHealthOK():
         return {"status": "UP"}
     else:
         return {"status": "DOWN"}, 503
@@ -446,3 +449,6 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
 
 if debug_mode:
     app.include_router(router=pgvector_router)
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
