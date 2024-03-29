@@ -1,7 +1,7 @@
 langchain==0.1.12
 langchain_community==0.0.28
 langchain_openai==0.0.8
-langchain_core==0.1.32
+langchain_core==0.1.35
 sqlalchemy==2.0.28
 python-dotenv==1.0.1
 fastapi==0.110.0

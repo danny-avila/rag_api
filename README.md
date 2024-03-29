@@ -22,26 +22,30 @@ The API will evolve over time to employ different querying/re-ranking methods, e
 - **Setup pgvector database:**
   - Run an existing PSQL/PGVector setup, or,
   - Docker: `docker compose up` (also starts RAG API)
-    - or, use docker just for DB: `docker compose -f ./db-compose.yaml`
+    - or, use docker just for DB: `docker compose -f ./db-compose.yaml up`
 - **Run API**:
   - Docker: `docker compose up` (also starts PSQL/pgvector)
-    - or, use docker just for RAG API: `docker compose -f ./api-compose.yaml`
+    - or, use docker just for RAG API: `docker compose -f ./api-compose.yaml up`
   - Local:
+    - Make sure to setup `DB_HOST` to the correct database hostname
+    - Run the following commands (preferably in a [virtual environment](https://realpython.com/python-virtual-environments-a-primer/))
 ```bash
 pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app
 ```
 
 ### Environment Variables
 
 The following environment variables are required to run the application:
 
-- `OPENAI_API_KEY`: The API key for OpenAI API Embeddings.
+- `OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
 - `POSTGRES_DB`: (Optional) The name of the PostgreSQL database.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
+- `RAG_HOST`: (Optional) The hostname or IP address where the API server will run. Defaults to "0.0.0.0"
+- `RAG_PORT`: (Optional) The port number where the API server will run. Defaults to port 8000.
 - `JWT_SECRET`: (Optional) The secret key used for verifying JWT tokens for requests.
   - The secret is only used for verification. This basic approach assumes a signed JWT from elsewhere.
   - Omit to run API without requiring authentication
