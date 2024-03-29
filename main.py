@@ -37,6 +37,8 @@ from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
 
+HOST = os.getenv('HOST', '0.0.0.0')
+PORT = int(os.getenv('PORT', 8000))
 
 from config import (
     logger,
@@ -451,4 +453,4 @@ if debug_mode:
     app.include_router(router=pgvector_router)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
+    uvicorn.run(app, host=HOST, port=PORT, log_config=None)
