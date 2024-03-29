@@ -37,7 +37,6 @@ from store import AsyncPgVector
 
 load_dotenv(find_dotenv())
 
-
 from config import (
     logger,
     debug_mode,
@@ -47,6 +46,8 @@ from config import (
     RAG_UPLOAD_DIR,
     known_source_ext,
     PDF_EXTRACT_IMAGES, LogMiddleware,
+    RAG_HOST,
+    RAG_PORT,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
@@ -59,7 +60,7 @@ async def lifespan(app: FastAPI):
     await PSQLDatabase.get_pool()  # Initialize the pool
     await ensure_custom_id_index_on_embedding()
 
-    yield  # The application is now up and serving requests
+    yield
 
 app = FastAPI(lifespan=lifespan)
 
@@ -451,4 +452,4 @@ if debug_mode:
     app.include_router(router=pgvector_router)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
+    uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, log_config=None)
