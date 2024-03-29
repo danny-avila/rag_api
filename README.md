@@ -27,6 +27,8 @@ The API will evolve over time to employ different querying/re-ranking methods, e
   - Docker: `docker compose up` (also starts PSQL/pgvector)
     - or, use docker just for RAG API: `docker compose -f ./api-compose.yaml up`
   - Local:
+    - Make sure to setup `DB_HOST` to the correct database hostname
+    - Run the following commands (preferably in a [virtual environment](https://realpython.com/python-virtual-environments-a-primer/))
 ```bash
 pip install -r requirements.txt
 uvicorn main:app
