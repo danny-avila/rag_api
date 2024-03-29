@@ -42,8 +42,8 @@ The following environment variables are required to run the application:
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
-- `HOST`: (Optional) The hostname or IP address where the API server will run
-- `PORT`: (Optional) The port number where the API server will run
+- `RAG_HOST`: (Optional) The hostname or IP address where the API server will run
+- `RAG_PORT`: (Optional) The port number where the API server will run
 - `JWT_SECRET`: (Optional) The secret key used for verifying JWT tokens for requests.
   - The secret is only used for verification. This basic approach assumes a signed JWT from elsewhere.
   - Omit to run API without requiring authentication
