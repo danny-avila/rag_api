@@ -15,10 +15,10 @@ from store_factory import get_vector_store
 load_dotenv(find_dotenv())
 
 
-def get_env_variable(var_name: str, default_value: str = None) -> str:
+def get_env_variable(var_name: str, default_value: str = None, required: bool = False) -> str:
     value = os.getenv(var_name)
     if value is None:
-        if default_value is None:
+        if default_value is None and required:
             raise ValueError(f"Environment variable '{var_name}' not found.")
         return default_value
     return value
@@ -130,8 +130,13 @@ logging.getLogger("uvicorn.access").disabled = True
 ## Credentials
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
+RAG_OPENAI_API_KEY = get_env_variable("RAG_OPENAI_API_KEY", OPENAI_API_KEY)
+OPENAI_BASEURL = get_env_variable("OPENAI_BASEURL", None)
+RAG_OPENAI_PROXY = get_env_variable("RAG_OPENAI_PROXY", None)
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
+RAG_AZURE_OPENAI_API_KEY = get_env_variable("RAG_AZURE_OPENAI_API_KEY", AZURE_OPENAI_API_KEY)
 AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
+RAG_AZURE_OPENAI_ENDPOINT = get_env_variable("RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 
@@ -140,10 +145,18 @@ OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 
 def init_embeddings(provider, model):
     if provider == "openai":
-        return OpenAIEmbeddings(model=model, api_key=OPENAI_API_KEY)
+        return OpenAIEmbeddings(
+            model=model,
+            api_key=RAG_OPENAI_API_KEY,
+            openai_api_base=OPENAI_BASEURL,
+            openai_proxy=RAG_OPENAI_PROXY
+        )
     elif provider == "azure":
-        return AzureOpenAIEmbeddings(model=model,
-                                     api_key=AZURE_OPENAI_API_KEY)  # AZURE_OPENAI_ENDPOINT is being grabbed from the environment
+        return AzureOpenAIEmbeddings(
+            model=model,
+            api_key=RAG_AZURE_OPENAI_API_KEY,
+            azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT
+        )
     elif provider == "huggingface":
         return HuggingFaceEmbeddings(model_name=model, encode_kwargs={
             'normalize_embeddings': True})
