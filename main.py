@@ -310,6 +310,8 @@ async def embed_local_file(document: StoreDocument, request: Request):
 
 @app.post("/embed")
 async def embed_file(request: Request, file_id: str = Form(...), file: UploadFile = File(...)):
+    response_status = True
+    response_message = "File processed successfully."
     known_type = None
     if not hasattr(request.state, 'user'):
         user_id = "public"
@@ -335,11 +337,25 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
         result = await store_data_in_vector_db(data, file_id, user_id)
 
         if not result:
+            response_status = False
+            response_message = "Failed to process/store the file data."
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
+        elif 'error' in result:
+            response_status = False
+            response_message = "Failed to process/store the file data."
+            if isinstance(result['error'], str):
+                response_message = result['error']
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="An unspecified error occurred.",
+                )
     except Exception as e:
+        response_status = False
+        response_message = f"Error during file processing: {str(e)}"
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=f"Error during file processing: {str(e)}")
     finally:
@@ -349,8 +365,8 @@ async def embed_file(request: Request, file_id: str = Form(...), file: UploadFil
             logger.info(f"Failed to remove temporary file: {str(e)}")
 
     return {
-        "status": True,
-        "message": "File processed successfully.",
+        "status": response_status,
+        "message": response_message,
         "file_id": file_id,
         "filename": file.filename,
         "known_type": known_type,
