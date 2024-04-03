@@ -182,6 +182,7 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
 
         return authorized_documents
     except Exception as e:
+        logger.error(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
