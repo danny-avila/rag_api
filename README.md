@@ -38,7 +38,10 @@ uvicorn main:app
 
 The following environment variables are required to run the application:
 
-- `OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
+- `RAG_OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
+    - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
+- `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
+- `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
 - `POSTGRES_DB`: (Optional) The name of the PostgreSQL database.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
@@ -65,8 +68,11 @@ The following environment variables are required to run the application:
     - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
     - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
     - ollama: "nomic-embed-text"
-- `AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
-- `AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource. Example: `https://example-resource.azure.openai.com/`.
+- `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
+    - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
+- `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
+    - Example: `https://example-resource.azure.openai.com`.
+    - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 
