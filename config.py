@@ -131,7 +131,7 @@ logging.getLogger("uvicorn.access").disabled = True
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 RAG_OPENAI_API_KEY = get_env_variable("RAG_OPENAI_API_KEY", OPENAI_API_KEY)
-OPENAI_BASEURL = get_env_variable("OPENAI_BASEURL", None)
+RAG_OPENAI_BASEURL = get_env_variable("RAG_OPENAI_BASEURL", None)
 RAG_OPENAI_PROXY = get_env_variable("RAG_OPENAI_PROXY", None)
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
 RAG_AZURE_OPENAI_API_KEY = get_env_variable("RAG_AZURE_OPENAI_API_KEY", AZURE_OPENAI_API_KEY)
@@ -148,7 +148,7 @@ def init_embeddings(provider, model):
         return OpenAIEmbeddings(
             model=model,
             api_key=RAG_OPENAI_API_KEY,
-            openai_api_base=OPENAI_BASEURL,
+            openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY
         )
     elif provider == "azure":

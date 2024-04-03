@@ -40,7 +40,7 @@ The following environment variables are required to run the application:
 
 - `RAG_OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
     - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
-- `OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
+- `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
 - `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
 - `POSTGRES_DB`: (Optional) The name of the PostgreSQL database.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
