@@ -78,3 +78,27 @@ The following environment variables are required to run the application:
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
+### Cloud Installation Settings:
+
+#### AWS:
+Make sure your RDS Postgres instance adheres to this requirement:
+
+`The pgvector extension version 0.5.0 is available on database instances in Amazon RDS running PostgreSQL 15.4-R2 and higher, 14.9-R2 and higher, 13.12-R2 and higher, and 12.16-R2 and higher in all applicable AWS Regions, including the AWS GovCloud (US) Regions.`
+
+In order to setup RDS Postgres with RAG API, you can follow these steps:
+
+* Create a RDS Instance/Cluster using the provided [AWS Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CreateDBInstance.html).
+* Login to the RDS Cluster using the Endpoint connection string from the RDS Console or from your IaC Solution output.
+* The login is via the *Master User*.
+* Create a dedicated database for rag_api:
+``` create database rag_api;```.
+* Create a dedicated user\role for that database:
+``` create role rag;```
+
+* Switch to the database you just created: ```\c rag_api```
+* Enable the Vector extension: ```create extension vector;```
+* Use the documentation provided above to set up the connection string to the RDS Postgres Instance\Cluster.
+
+Notes:
+  * Even though you're logging with a Master user, it doesn't have all the super user privileges, that's why we cannot use the command: ```create role x with superuser;```
+  * If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
