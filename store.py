@@ -5,6 +5,7 @@ from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
 
+from langchain_mongodb import MongoDBAtlasVectorSearch
 class ExtendedPgVector(PGVector):
 
     def get_all_ids(self) -> list[str]:
@@ -67,3 +68,7 @@ class AsyncPgVector(ExtendedPgVector):
             collection_only: bool = False
         ) -> None:
             await run_in_executor(None, self._delete_multiple, ids, collection_only)
+
+class AtlasMongoVector(MongoDBAtlasVectorSearch):
+    def get_all_ids(self) -> list[str]:
+        return  run_in_executor(None)

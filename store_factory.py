@@ -1,7 +1,8 @@
 from langchain_community.embeddings import OpenAIEmbeddings
 
 from store import AsyncPgVector, ExtendedPgVector
-
+from store import AtlasMongoVector
+from pymongo import MongoClient
 
 def get_vector_store(
     connection_string: str,
@@ -21,8 +22,14 @@ def get_vector_store(
             embedding_function=embeddings,
             collection_name=collection_name,
         )
+    elif mode == "atlas-mongo":
+        mongo_db = MongoClient(connection_string).get_database()
+        mong_collection = mongo_db[collection_name]
+        return AtlasMongoVector(collection=mong_collection, embedding=embeddings)
+
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
+
 
 async def create_index_if_not_exists(conn, table_name: str, column_name: str):
     # Construct index name conventionally

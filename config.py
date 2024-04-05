@@ -139,7 +139,7 @@ AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 RAG_AZURE_OPENAI_ENDPOINT = get_env_variable("RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
-
+ATLAS_MONGO_DB_URI = get_env_variable("ATLAS_MONGO_DB_URI", "")
 
 ## Embeddings
 
@@ -197,11 +197,20 @@ logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 ## Vector store
 
+# This was the pgvector:
+# vector_store = get_vector_store(
+#         connection_string=CONNECTION_STRING,
+#         embeddings=embeddings,
+#         collection_name=COLLECTION_NAME,
+#         mode="async",
+# )
+
+# new atlas-mongo vector:
 vector_store = get_vector_store(
-        connection_string=CONNECTION_STRING,
+        connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
-        mode="async",
+        mode="atlas-mongo",
 )
 retriever = vector_store.as_retriever()
 

@@ -27,8 +27,8 @@ from langchain_community.document_loaders import (
 )
 
 from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
-from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, \
-    pg_health_check
+# from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, \
+#     pg_health_check
 from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents
@@ -57,8 +57,8 @@ from config import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
-    await PSQLDatabase.get_pool()  # Initialize the pool
-    await ensure_custom_id_index_on_embedding()
+    # await PSQLDatabase.get_pool()  # Initialize the pool
+    # await ensure_custom_id_index_on_embedding()
 
     yield
 
@@ -95,7 +95,8 @@ async def get_all_ids():
 
 
 def isHealthOK():
-    return pg_health_check()
+    # return pg_health_check()
+    return True
 
 
 @app.get("/health")
