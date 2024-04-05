@@ -12,6 +12,7 @@ from typing import (
     Optional,
     Tuple,
 )
+import copy
 class ExtendedPgVector(PGVector):
 
     def get_all_ids(self) -> list[str]:
@@ -94,7 +95,23 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             post_filter_pipeline=None,
             **kwargs,
         )
-        return docs
+        # remove `metadata._id` since MongoDB ObjectID is not serializable
+        # Process the documents to remove metadata._id
+        processed_documents: List[Tuple[Document, float]] = []
+        for document, score in docs:
+            # Make a deep copy of the document to avoid mutating the original
+            doc_copy = copy.deepcopy(document.__dict__)  # If Document is a dataclass or similar; adjust as needed
+
+            # Remove _id field from metadata if it exists
+            if 'metadata' in doc_copy and '_id' in doc_copy['metadata']:
+                del doc_copy['metadata']['_id']
+
+            # Create a new Document instance without the _id
+            new_document = Document(**doc_copy)  # Adjust this line according to how you instantiate your Document
+
+            # Append the new document and score to the list as a tuple
+            processed_documents.append((new_document, score))
+        return processed_documents
 
     def get_all_ids(self) -> list[str]:
         return  run_in_executor(None)
