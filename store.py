@@ -6,6 +6,12 @@ from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
 
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_core.embeddings import Embeddings
+from typing import (
+    List,
+    Optional,
+    Tuple,
+)
 class ExtendedPgVector(PGVector):
 
     def get_all_ids(self) -> list[str]:
@@ -70,5 +76,25 @@ class AsyncPgVector(ExtendedPgVector):
             await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
+    @property
+    def embedding_function(self) -> Embeddings:
+        return self.embeddings
+
+    def similarity_search_with_score_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        docs = self._similarity_search_with_score(
+            embedding,
+            k=k,
+            pre_filter=filter,
+            post_filter_pipeline=None,
+            **kwargs,
+        )
+        return docs
+
     def get_all_ids(self) -> list[str]:
         return  run_in_executor(None)
