@@ -72,7 +72,7 @@ The following environment variables are required to run the application:
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
-    - Example: `https://example-resource.azure.openai.com`.
+    - Example: `https://YOUR_RESOURCE_NAME.openai.azure.com`.
     - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
