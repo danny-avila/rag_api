@@ -64,10 +64,11 @@ The following environment variables are required to run the application:
 - `EMBEDDINGS_MODEL`: (Optional) Set a valid embeddings model to use from the configured provider.
     - **Defaults**
     - openai: "text-embedding-3-small"
-    - azure: "text-embedding-3-small"
+    - azure: "text-embedding-3-small" (will be used as your Azure Deployment)
     - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
     - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
     - ollama: "nomic-embed-text"
+- `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
