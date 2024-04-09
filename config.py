@@ -134,6 +134,7 @@ RAG_OPENAI_API_KEY = get_env_variable("RAG_OPENAI_API_KEY", OPENAI_API_KEY)
 RAG_OPENAI_BASEURL = get_env_variable("RAG_OPENAI_BASEURL", None)
 RAG_OPENAI_PROXY = get_env_variable("RAG_OPENAI_PROXY", None)
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
+RAG_AZURE_OPENAI_API_VERSION = get_env_variable("RAG_AZURE_OPENAI_API_VERSION", None)
 RAG_AZURE_OPENAI_API_KEY = get_env_variable("RAG_AZURE_OPENAI_API_KEY", AZURE_OPENAI_API_KEY)
 AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 RAG_AZURE_OPENAI_ENDPOINT = get_env_variable("RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT).rstrip("/")
@@ -153,9 +154,10 @@ def init_embeddings(provider, model):
         )
     elif provider == "azure":
         return AzureOpenAIEmbeddings(
-            model=model,
+            azure_deployment=model,
             api_key=RAG_AZURE_OPENAI_API_KEY,
-            azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT
+            azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
+            api_version=RAG_AZURE_OPENAI_API_VERSION
         )
     elif provider == "huggingface":
         return HuggingFaceEmbeddings(model_name=model, encode_kwargs={
