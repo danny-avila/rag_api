@@ -114,4 +114,5 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         return processed_documents
 
     def get_all_ids(self) -> list[str]:
-        return  run_in_executor(None)
+        # implement the return of unique file_id fields in self._collection
+        return self._collection.distinct("file_id")
