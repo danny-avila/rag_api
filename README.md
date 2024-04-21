@@ -103,3 +103,14 @@ In order to setup RDS Postgres with RAG API, you can follow these steps:
 Notes:
   * Even though you're logging with a Master user, it doesn't have all the super user privileges, that's why we cannot use the command: ```create role x with superuser;```
   * If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
+
+### Dev notes:
+
+#### Installing pre-commit formatter
+
+Run the following commands to install pre-commit formatter, which uses [black](https://github.com/psf/black) code formatter:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
