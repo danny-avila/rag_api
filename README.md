@@ -64,14 +64,15 @@ The following environment variables are required to run the application:
 - `EMBEDDINGS_MODEL`: (Optional) Set a valid embeddings model to use from the configured provider.
     - **Defaults**
     - openai: "text-embedding-3-small"
-    - azure: "text-embedding-3-small"
+    - azure: "text-embedding-3-small" (will be used as your Azure Deployment)
     - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
     - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
     - ollama: "nomic-embed-text"
+- `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
-    - Example: `https://example-resource.azure.openai.com`.
+    - Example: `https://YOUR_RESOURCE_NAME.openai.azure.com`.
     - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
@@ -102,3 +103,14 @@ In order to setup RDS Postgres with RAG API, you can follow these steps:
 Notes:
   * Even though you're logging with a Master user, it doesn't have all the super user privileges, that's why we cannot use the command: ```create role x with superuser;```
   * If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
+
+### Dev notes:
+
+#### Installing pre-commit formatter
+
+Run the following commands to install pre-commit formatter, which uses [black](https://github.com/psf/black) code formatter:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
