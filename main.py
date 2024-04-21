@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status, Request
+from fastapi import Query
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
@@ -109,7 +110,7 @@ async def health_check():
 
 
 @app.get("/documents", response_model=list[DocumentResponse])
-async def get_documents_by_ids(ids: list[str]):
+async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
