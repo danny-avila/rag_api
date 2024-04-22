@@ -12,8 +12,16 @@ from dotenv import find_dotenv, load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, status, Request
-from fastapi import Query
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    Query,
+    UploadFile,
+    HTTPException,
+    status,
+    Request,
+)
 from langchain_community.document_loaders import (
     WebBaseLoader,
     TextLoader,
@@ -31,7 +39,7 @@ from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMulti
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
 from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
-from parsers import process_documents
+from parsers import process_documents, clean_text
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
 
@@ -196,12 +204,20 @@ def generate_digest(page_content: str):
 
 
 async def store_data_in_vector_db(
-    data: Iterable[Document], file_id: str, user_id: str = ""
+    data: Iterable[Document],
+    file_id: str,
+    user_id: str = "",
+    clean_content: bool = False,
 ) -> bool:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
+
+    # If `clean_content` is True, clean the page_content of each document (remove null bytes)
+    if clean_content:
+        for doc in documents:
+            doc.page_content = clean_text(doc.page_content)
 
     # Preparing documents with page content and metadata for insertion.
     docs = [
@@ -267,7 +283,7 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         loader = TextLoader(filepath, autodetect_encoding=True)
         known_type = False
 
-    return loader, known_type
+    return loader, known_type, file_ext
 
 
 @app.post("/local/embed")
@@ -346,11 +362,13 @@ async def embed_file(
         )
 
     try:
-        loader, known_type = get_loader(
+        loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
         data = loader.load()
-        result = await store_data_in_vector_db(data, file_id, user_id)
+        result = await store_data_in_vector_db(
+            data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+        )
 
         if not result:
             response_status = False
