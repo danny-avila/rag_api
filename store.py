@@ -127,6 +127,13 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         return [
             Document(
                 page_content=doc["text"],
+                metadata={
+                    "file_id": doc["file_id"],
+                    "user_id": doc["user_id"],
+                    "digest": doc["digest"],
+                    "source": doc["source"],
+                    "page": int(doc.get("page", 0)),
+                },
             )
             for doc in self._collection.find({"file_id": {"$in": ids}})
         ]
