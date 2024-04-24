@@ -498,11 +498,11 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"custom_id": {"$in": body.file_ids}},
+                filter={"file_id": {"$in": body.file_ids}},
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
 
         return documents
