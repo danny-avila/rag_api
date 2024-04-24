@@ -138,7 +138,7 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
 
 @app.delete("/documents")
-async def delete_documents(ids: list[str]):
+async def delete_documents(ids: list[str] = Query(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()

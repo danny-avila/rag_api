@@ -137,3 +137,8 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             )
             for doc in self._collection.find({"file_id": {"$in": ids}})
         ]
+
+    def delete(self, ids: Optional[list[str]] = None) -> None:
+        # implement the deletion of documents by file_id in self._collection
+        if ids is not None:
+            self._collection.delete_many({"file_id": {"$in": ids}})
