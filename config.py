@@ -140,7 +140,9 @@ AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 RAG_AZURE_OPENAI_ENDPOINT = get_env_variable("RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
-
+GOOGLE_API_KEY = get_env_variable("GOOGLE_KEY", "")
+VOYAGE_API_KEY = get_env_variable("VOYAGE_API_KEY", "")
+SHUTTLEAI_KEY = get_env_variable("SHUTTLEAI_KEY", "") # use embeddings from shuttleai
 
 ## Embeddings
 
@@ -166,6 +168,23 @@ def init_embeddings(provider, model):
         return HuggingFaceHubEmbeddings(model=model)
     elif provider == "ollama":
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
+    elif provider == "google":
+        from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(
+            model=model,
+            api_key=GOOGLE_API_KEY,
+        )
+    elif provider == "voyage":
+        from langchain_voyageai import VoyageAIEmbeddings
+        return VoyageAIEmbeddings(
+            model=model,
+        )
+    elif provider == "shuttleai":
+        return OpenAIEmbeddings(
+            model=model,
+            api_key=SHUTTLEAI_KEY,
+            openai_api_base="https://api.shuttleai.app/v1",
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -190,6 +209,18 @@ elif EMBEDDINGS_PROVIDER == "huggingfacetei":
 
 elif EMBEDDINGS_PROVIDER == "ollama":
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
+
+elif EMBEDDINGS_PROVIDER == "google":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "models/embedding-001")
+
+elif EMBEDDINGS_PROVIDER == "voyage":
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "voyage-large-2")
+
+elif EMBEDDINGS_PROVIDER == "shuttleai":
+    # text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL",
+                                        "text-embedding-3-large")
+
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
