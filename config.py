@@ -36,12 +36,19 @@ RAG_UPLOAD_DIR = get_env_variable("RAG_UPLOAD_DIR", "./uploads/")
 if not os.path.exists(RAG_UPLOAD_DIR):
     os.makedirs(RAG_UPLOAD_DIR, exist_ok=True)
 
+VECTOR_DB_TYPE = get_env_variable("VECTOR_DB_TYPE", "pgvector")
 POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
 POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
 DB_HOST = get_env_variable("DB_HOST", "db")
 DB_PORT = get_env_variable("DB_PORT", "5432")
 COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
+ATLAS_MONGO_DB_URI = get_env_variable(
+    "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
+)
+MONGO_VECTOR_COLLECTION = get_env_variable(
+    "MONGO_VECTOR_COLLECTION", "vector_collection"
+)
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
@@ -151,7 +158,6 @@ RAG_AZURE_OPENAI_ENDPOINT = get_env_variable(
 ).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
-ATLAS_MONGO_DB_URI = get_env_variable("ATLAS_MONGO_DB_URI", "")
 
 ## Embeddings
 
@@ -210,23 +216,25 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
-## Vector store
+# Vector store
+if VECTOR_DB_TYPE == "pgvector":
+    vector_store = get_vector_store(
+        connection_string=CONNECTION_STRING,
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="async",
+    )
+elif VECTOR_DB_TYPE == "atlas-mongo":
+    # atlas-mongo vector:
+    vector_store = get_vector_store(
+        connection_string=ATLAS_MONGO_DB_URI,
+        embeddings=embeddings,
+        collection_name=MONGO_VECTOR_COLLECTION,
+        mode="atlas-mongo",
+    )
+else:
+    raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
 
-# This was the pgvector:
-# vector_store = get_vector_store(
-#         connection_string=CONNECTION_STRING,
-#         embeddings=embeddings,
-#         collection_name=COLLECTION_NAME,
-#         mode="async",
-# )
-
-# new atlas-mongo vector:
-vector_store = get_vector_store(
-    connection_string=ATLAS_MONGO_DB_URI,
-    embeddings=embeddings,
-    collection_name=COLLECTION_NAME,
-    mode="atlas-mongo",
-)
 retriever = vector_store.as_retriever()
 
 known_source_ext = [
