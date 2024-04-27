@@ -6,3 +6,4 @@ uploads/
 myenv/
 venv/
 *.pyc
+env/
