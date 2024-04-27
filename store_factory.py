@@ -2,27 +2,67 @@ from langchain_community.embeddings import OpenAIEmbeddings
 
 from store import AsyncPgVector, ExtendedPgVector
 
+from langchain_community.vectorstores import Qdrant
+
+import qdrant_client
+
 
 def get_vector_store(
     connection_string: str,
     embeddings: OpenAIEmbeddings,
     collection_name: str,
     mode: str = "sync",
+    vector_db: str = None,
+    qdrant_host: str = None,
+    qdrant_api_key: str = None
 ):
-    if mode == "sync":
-        return ExtendedPgVector(
-            connection_string=connection_string,
-            embedding_function=embeddings,
-            collection_name=collection_name,
+    print(vector_db)
+    if vector_db == "pgvector":
+        if mode == "sync":
+            return ExtendedPgVector(
+                connection_string=connection_string,
+                embedding_function=embeddings,
+                collection_name=collection_name,
+            )
+        elif mode == "async":
+            return AsyncPgVector(
+                connection_string=connection_string,
+                embedding_function=embeddings,
+                collection_name=collection_name,
+            )
+        else:
+            raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
+    elif vector_db == "qdrant":
+        print("Imprimindo embeddings", embeddings)
+
+        client = qdrant_client.QdrantClient(
+            qdrant_host,
+            api_key=qdrant_api_key
         )
-    elif mode == "async":
-        return AsyncPgVector(
-            connection_string=connection_string,
-            embedding_function=embeddings,
-            collection_name=collection_name,
+
+        collection_config = qdrant_client.http.models.VectorParams(
+            size=768,  # Adjust as per your model's embedding size
+            distance=qdrant_client.http.models.Distance.COSINE
         )
-    else:
-        raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
+
+        # Recreate collection if needed
+        try:
+            # Verify if collection exists
+            collection = client.get_collection(collection_name=collection_name)
+        except Exception:
+            # Recreate collection
+            client.recreate_collection(
+                collection_name=collection_name,
+                vectors_config=collection_config
+            )
+    
+        vector_store = Qdrant(
+            client=client,
+            collection_name=collection_name,
+            embeddings=embeddings
+        )
+
+        return vector_store
 
 async def create_index_if_not_exists(conn, table_name: str, column_name: str):
     # Construct index name conventionally
