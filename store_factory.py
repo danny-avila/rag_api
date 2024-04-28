@@ -1,8 +1,6 @@
 from langchain_community.embeddings import OpenAIEmbeddings
 
-from store import AsyncPgVector, ExtendedPgVector
-
-from langchain_community.vectorstores import Qdrant
+from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant
 
 import qdrant_client
 
@@ -14,7 +12,8 @@ def get_vector_store(
     mode: str = "sync",
     vector_db: str = None,
     qdrant_host: str = None,
-    qdrant_api_key: str = None
+    qdrant_api_key: str = None,
+    embeddings_dimension: str = None
 ):
     print(vector_db)
     if vector_db == "pgvector":
@@ -33,19 +32,17 @@ def get_vector_store(
         else:
             raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
     elif vector_db == "qdrant":
-        print("Imprimindo embeddings", embeddings)
-
         client = qdrant_client.QdrantClient(
-            qdrant_host,
-            api_key=qdrant_api_key
+        qdrant_host,
+        api_key=qdrant_api_key
         )
 
         collection_config = qdrant_client.http.models.VectorParams(
-            size=768,  # Adjust as per your model's embedding size
+            size=embeddings_dimension,  # Adjust as per your model's embedding size
             distance=qdrant_client.http.models.Distance.COSINE
         )
 
-        # Recreate collection if needed
+
         try:
             # Verify if collection exists
             collection = client.get_collection(collection_name=collection_name)
@@ -55,14 +52,13 @@ def get_vector_store(
                 collection_name=collection_name,
                 vectors_config=collection_config
             )
-    
-        vector_store = Qdrant(
+        return AsyncQdrant(
             client=client,
             collection_name=collection_name,
             embeddings=embeddings
-        )
-
-        return vector_store
+            
+            )
+    
 
 async def create_index_if_not_exists(conn, table_name: str, column_name: str):
     # Construct index name conventionally

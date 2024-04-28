@@ -41,7 +41,8 @@ from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents, clean_text
 from constants import ERROR_MESSAGES
-from store import AsyncPgVector
+from store import AsyncPgVector, AsyncQdrant
+from qdrant_client.http import models 
 
 load_dotenv(find_dotenv())
 
@@ -57,6 +58,7 @@ from config import (
     LogMiddleware,
     RAG_HOST,
     RAG_PORT,
+    VECTOR_DB
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
@@ -71,8 +73,10 @@ async def lifespan(app: FastAPI):
 
     yield
 
-
-app = FastAPI(lifespan=lifespan)
+if VECTOR_DB == "pgvector":
+    app = FastAPI(lifespan=lifespan)
+else:
+    app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -119,7 +123,7 @@ async def health_check():
 @app.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, (AsyncPgVector, AsyncQdrant)):
             existing_ids = await vector_store.get_all_ids()
             documents = await vector_store.get_documents_by_ids(ids)
         else:
@@ -128,7 +132,6 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
-
         return documents
     except HTTPException as http_exc:
         raise http_exc
@@ -142,13 +145,13 @@ async def delete_documents(ids: list[str]):
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
             await vector_store.delete(ids=ids)
+            if not all(id in existing_ids for id in ids):
+                raise HTTPException(status_code=404, detail="One or more IDs not found")
+        elif isinstance(vector_store, AsyncQdrant):
+            await vector_store.delete_vectors(ids=ids)
         else:
             existing_ids = vector_store.get_all_ids()
             vector_store.delete(ids=ids)
-
-        if not all(id in existing_ids for id in ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
-
         file_count = len(ids)
         return {
             "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
@@ -234,12 +237,12 @@ async def store_data_in_vector_db(
     ]
 
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store,  (AsyncPgVector, AsyncQdrant)):
             ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
+                docs
             )
-        else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+        elif isinstance(vector_store, AsyncQdrant):
+            ids = vector_store.aadd_documents(docs, ids=[file_id] * len(documents))
 
         return {"message": "Documents added successfully", "ids": ids}
 

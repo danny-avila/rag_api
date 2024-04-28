@@ -32,7 +32,8 @@ if not os.path.exists(RAG_UPLOAD_DIR):
 
 QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY", "")
 QDRANT_HOST = get_env_variable("QDRANT_HOST", "http://qdrant:6333")
-VECTOR_DB = get_env_variable("VECTOR_DB", "pgvectpr")
+EMBEDDINGS_DIMENSION = int(get_env_variable("EMBEDDINGS_DIMENSION", "1536"))
+VECTOR_DB = get_env_variable("VECTOR_DB", "pgvector")
 POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
 POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
@@ -209,7 +210,8 @@ vector_store = get_vector_store(
         mode="async",
         vector_db=VECTOR_DB,
         qdrant_host=QDRANT_HOST,
-        qdrant_api_key=QDRANT_API_KEY
+        qdrant_api_key=QDRANT_API_KEY,
+        embeddings_dimension=EMBEDDINGS_DIMENSION
 )
 retriever = vector_store.as_retriever()
 
