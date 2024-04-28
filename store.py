@@ -41,7 +41,6 @@ class ExtendedQdrant(Qdrant):
                 ],
                 ),
             )
-            print("Imprimindo resultados", result[0])
             return [result[0] for result in results if result[0] is not None]
 
 class ExtendedPgVector(PGVector):
@@ -110,7 +109,6 @@ class AsyncPgVector(ExtendedPgVector):
             
 class AsyncQdrant(ExtendedQdrant):
     async def get_all_ids(self) -> list[str]:
-        print("passando por aqui store")
         return await run_in_executor(None, super().get_all_ids)
 
     async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
@@ -118,10 +116,8 @@ class AsyncQdrant(ExtendedQdrant):
 
     async def delete_vectors(
         self,
-        ids: Optional[list[str]] = None,
-        collection_only: bool = False
+        ids: Optional[list[str]] = None
     ) -> None:
-        print("passando aqui para deletar")
         # Garantir que o argumento correto está sendo passado
         await run_in_executor(None, self.delete_vectors_by_source_document, ids)
 
