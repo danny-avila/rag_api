@@ -239,12 +239,14 @@ async def store_data_in_vector_db(
     ]
 
     try:
-        if isinstance(vector_store,  (AsyncPgVector, AsyncQdrant)):
+        if isinstance(vector_store, AsyncPgVector):
             ids = await vector_store.aadd_documents(
-                docs
+                docs, ids=[file_id] * len(documents)
             )
         elif isinstance(vector_store, AsyncQdrant):
-            ids = vector_store.aadd_documents(docs, ids=[file_id] * len(documents))
+            ids = await vector_store.aadd_documents(docs)
+        else:
+            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
         return {"message": "Documents added successfully", "ids": ids}
 
