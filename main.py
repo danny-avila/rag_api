@@ -60,14 +60,16 @@ from config import (
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
+    VECTOR_DB_TYPE,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
-    # await PSQLDatabase.get_pool()  # Initialize the pool
-    # await ensure_custom_id_index_on_embedding()
+    if VECTOR_DB_TYPE == "pgvector":
+        await PSQLDatabase.get_pool()  # Initialize the pool
+        await ensure_custom_id_index_on_embedding()
 
     yield
 
@@ -105,8 +107,10 @@ async def get_all_ids():
 
 
 def isHealthOK():
-    # return pg_health_check()
-    return True
+    if VECTOR_DB_TYPE == "pgvector":
+        return pg_health_check()
+    else:
+        return True
 
 
 @app.get("/health")
