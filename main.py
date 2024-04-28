@@ -169,9 +169,8 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
 
     authorized_documents = []
     try:
-        embedding = vector_store.embedding_function.embed_query(body.query)
-
         if isinstance(vector_store, AsyncPgVector):
+            embedding = vector_store.embedding_function.embed_query(body.query)
             documents = await run_in_executor(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
@@ -179,7 +178,10 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
                 k=body.k,
                 filter={"file_id": body.file_id},
             )
+        elif isinstance(vector_store, AsyncQdrant):
+             documents = await vector_store.asimilarity_search_with_score(body.query, k=body.k, filter={"file_id": body.file_id})
         else:
+            embedding = vector_store.embedding_function.embed_query(body.query)
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": body.file_id}
             )
