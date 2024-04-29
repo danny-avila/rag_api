@@ -73,7 +73,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-if VECTOR_DB == "pgvector":
+
+if isinstance(vector_store, AsyncPgVector):
     app = FastAPI(lifespan=lifespan)
 else:
     app = FastAPI()
