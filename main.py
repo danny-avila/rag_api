@@ -275,6 +275,8 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ] or file_ext in ["xls", "xlsx"]:
         loader = UnstructuredExcelLoader(filepath)
+    elif file_content_type == "application/json":
+        loader = TextLoader(filepath, autodetect_encoding=True)
     elif file_ext in known_source_ext or (
         file_content_type and file_content_type.find("text/") >= 0
     ):
