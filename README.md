@@ -79,6 +79,38 @@ The following environment variables are required to run the application:
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
+### Use Atlas MongoDB as Vector Database
+
+Instead of using the default pgvector, we could use [Atlas MongoDB](https://www.mongodb.com/products/platform/atlas-vector-search) as the vector database. To do so, set the following environment variables
+
+```env
+VECTOR_DB_TYPE=atlas-mongo
+ATLAS_MONGO_DB_URI=<mongodb+srv://...>
+MONGO_VECTOR_COLLECTION=<collection name>
+```
+
+In additional, make sure the collection defined by `$MONGO_VECTOR_COLLECTION` has the following vector search index created
+
+```json
+{
+  "fields": [
+    {
+      "numDimensions": 1536,
+      "path": "embedding",
+      "similarity": "cosine",
+      "type": "vector"
+    },
+    {
+      "path": "file_id",
+      "type": "filter"
+    }
+  ]
+}
+```
+
+Follw one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+
+
 ### Cloud Installation Settings:
 
 #### AWS:
