@@ -89,7 +89,7 @@ ATLAS_MONGO_DB_URI=<mongodb+srv://...>
 MONGO_VECTOR_COLLECTION=<collection name>
 ```
 
-In additional, make sure the collection defined by `$MONGO_VECTOR_COLLECTION` has the following vector search index created
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$MONGO_VECTOR_COLLECTION` collection needs to be a completely new one, separate from all collections used by LibreChat. In additional,  create a vector search index for  `$MONGO_VECTOR_COLLECTION`  with the following json:
 
 ```json
 {
