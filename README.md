@@ -42,7 +42,8 @@ The following environment variables are required to run the application:
     - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
 - `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
-- `POSTGRES_DB`: (Optional) The name of the PostgreSQL database.
+- `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
+- `POSTGRES_DB`: (Optional) The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
@@ -78,6 +79,38 @@ The following environment variables are required to run the application:
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
+
+### Use Atlas MongoDB as Vector Database
+
+Instead of using the default pgvector, we could use [Atlas MongoDB](https://www.mongodb.com/products/platform/atlas-vector-search) as the vector database. To do so, set the following environment variables
+
+```env
+VECTOR_DB_TYPE=atlas-mongo
+ATLAS_MONGO_DB_URI=<mongodb+srv://...>
+MONGO_VECTOR_COLLECTION=<collection name>
+```
+
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$MONGO_VECTOR_COLLECTION` collection needs to be a completely new one, separate from all collections used by LibreChat. In additional,  create a vector search index for  `$MONGO_VECTOR_COLLECTION`  with the following json:
+
+```json
+{
+  "fields": [
+    {
+      "numDimensions": 1536,
+      "path": "embedding",
+      "similarity": "cosine",
+      "type": "vector"
+    },
+    {
+      "path": "file_id",
+      "type": "filter"
+    }
+  ]
+}
+```
+
+Follw one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+
 
 ### Cloud Installation Settings:
 
