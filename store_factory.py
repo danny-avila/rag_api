@@ -1,8 +1,10 @@
 from langchain_community.embeddings import OpenAIEmbeddings
-
+from pymongo import MongoClient
+import qdrant_client
+from store import AtlasMongoVector
 from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant
 
-import qdrant_client
+
 
 
 def get_vector_store(
@@ -41,7 +43,7 @@ def get_vector_store(
             distance=qdrant_client.http.models.Distance.COSINE
         )
 
-
+        print(f"Creating collection {collection_name}...")
         try:
             # Verify if collection exists
             collection = client.get_collection(collection_name=collection_name)
@@ -58,6 +60,14 @@ def get_vector_store(
             
             )
     
+    elif mode == "atlas-mongo":
+        mongo_db = MongoClient(connection_string).get_database()
+        mong_collection = mongo_db[collection_name]
+        return AtlasMongoVector(collection=mong_collection, embedding=embeddings)
+
+    else:
+        raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
+
 
 async def create_index_if_not_exists(conn, table_name: str, column_name: str):
     # Construct index name conventionally
