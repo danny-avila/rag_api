@@ -60,14 +60,16 @@ from config import (
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
+    VECTOR_DB_TYPE,
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
-    await PSQLDatabase.get_pool()  # Initialize the pool
-    await ensure_custom_id_index_on_embedding()
+    if VECTOR_DB_TYPE == "pgvector":
+        await PSQLDatabase.get_pool()  # Initialize the pool
+        await ensure_custom_id_index_on_embedding()
 
     yield
 
@@ -105,7 +107,10 @@ async def get_all_ids():
 
 
 def isHealthOK():
-    return pg_health_check()
+    if VECTOR_DB_TYPE == "pgvector":
+        return pg_health_check()
+    else:
+        return True
 
 
 @app.get("/health")
@@ -137,7 +142,7 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
 
 @app.delete("/documents")
-async def delete_documents(ids: list[str]):
+async def delete_documents(ids: list[str] = Query(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
@@ -499,11 +504,11 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
                 vector_store.similarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"custom_id": {"$in": body.file_ids}},
+                filter={"file_id": {"$in": body.file_ids}},
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
 
         return documents
