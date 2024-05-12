@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 from langchain_community.vectorstores import Qdrant
 import qdrant_client as client
 from qdrant_client.http import models
+
+
+
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
 from typing import (
@@ -67,28 +70,21 @@ class ExtendedPgVector(PGVector):
 
 class AsyncPgVector(ExtendedPgVector):
 
-    def get_all_ids(self) -> list[str]:
-        return run_in_executor(None, super().get_all_ids)
+    async def get_all_ids(self) -> list[str]:
+        return await run_in_executor(None, super().get_all_ids)
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        return run_in_executor(None, super().get_documents_by_ids, ids)
+    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+        return await run_in_executor(None, super().get_documents_by_ids, ids)
 
-    def delete(
+    async def delete(
             self,
             ids: Optional[list[str]] = None,
             collection_only: bool = False
         ) -> None:
-           run_in_executor(None, self._delete_multiple, ids, collection_only)
-           
+            await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
 class ExtendedQdrant(Qdrant):
     def delete_vectors_by_source_document(self, source_document_ids: list[str]) -> None:
-        """Delete vectors from the collection associated with specific source documents.
-
-        Args:
-            source_document_ids: The IDs of the source documents whose associated vectors should be deleted.
-        """
-        
         points_selector = models.Filter(
             must=[
                 models.FieldCondition(
@@ -97,10 +93,10 @@ class ExtendedQdrant(Qdrant):
                 ),
             ],
         )
-        
         response = self.client.delete(collection_name=self.collection_name, points_selector=points_selector)
         status = response.status.name
         return status
+      
     
     def get_all_ids(self) -> list[str]:
             results = self.client.scroll(
@@ -114,24 +110,20 @@ class ExtendedQdrant(Qdrant):
                 ],
                 ),
             )
-            return [result[0] for result in results if result[0] is not None]
-            
+            return [result[0] for result in results if result[0] is not None]            
 class AsyncQdrant(ExtendedQdrant):
-    def get_all_ids(self) -> list[str]:
-        return run_in_executor(None, super().get_all_ids)
+    async def get_all_ids(self) -> list[str]:
+        return await run_in_executor(None, super().get_all_ids)
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        return run_in_executor(None, super().get_all_ids, ids)
+    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+        return await run_in_executor(None, super().get_all_ids, ids)
 
-    def delete_vectors(
+    async def delete_vectors(
         self,
         ids: Optional[list[str]] = None
     ) -> None:
         # Garantir que o argumento correto está sendo passado
-        run_in_executor(None, self.delete_vectors_by_source_document, ids)
-
- 
-  
+        await run_in_executor(None, self.delete_vectors_by_source_document, ids)
 
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
