@@ -17,22 +17,21 @@ def get_vector_store(
     qdrant_api_key: str = None,
     embeddings_dimension: str = None
 ):
-    if vector_db == "pgvector":
-        if mode == "sync":
-            return ExtendedPgVector(
-                connection_string=connection_string,
-                embedding_function=embeddings,
-                collection_name=collection_name,
-            )
-        elif mode == "async":
-            return AsyncPgVector(
-                connection_string=connection_string,
-                embedding_function=embeddings,
-                collection_name=collection_name,
-            )
-        else:
-            raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
-    elif vector_db == "qdrant":
+    print(vector_db)
+    
+    if mode == "sync":
+        return ExtendedPgVector(
+            connection_string=connection_string,
+            embedding_function=embeddings,
+            collection_name=collection_name,
+        )
+    elif mode == "async":
+        return AsyncPgVector(
+            connection_string=connection_string,
+            embedding_function=embeddings,
+            collection_name=collection_name,
+        )
+    elif mode == "qdrant":
         client = qdrant_client.QdrantClient(
         qdrant_host,
         api_key=qdrant_api_key

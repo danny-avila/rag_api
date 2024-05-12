@@ -15,6 +15,7 @@ class ExtendedQdrant(Qdrant):
         Args:
             source_document_ids: The IDs of the source documents whose associated vectors should be deleted.
         """
+        print("document_id", source_document_ids)
         points_selector = models.Filter(
             must=[
                 models.FieldCondition(
@@ -23,7 +24,7 @@ class ExtendedQdrant(Qdrant):
                 ),
             ],
         )
-
+        print("deleting", self.collection_name)
         response = self.client.delete(collection_name=self.collection_name, points_selector=points_selector)
         status = response.status.name
         return status

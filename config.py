@@ -221,6 +221,7 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # Vector store
+print("VECTOR_DB_TYPE",COLLECTION_NAME)
 if VECTOR_DB_TYPE == "pgvector":
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
@@ -240,16 +241,15 @@ elif VECTOR_DB_TYPE == "qdrant":
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
-        collection_name=COLLECTION_NAME,
-        mode="async",
-        vector_db=VECTOR_DB,
+        collection_name="test",
+        mode="qdrant",
         qdrant_host=QDRANT_HOST,
         qdrant_api_key=QDRANT_API_KEY,
         embeddings_dimension=EMBEDDINGS_DIMENSION
 )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
-)
+
 retriever = vector_store.as_retriever()
 
 known_source_ext = [
