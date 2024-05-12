@@ -221,7 +221,6 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # Vector store
-print("VECTOR_DB_TYPE",COLLECTION_NAME)
 if VECTOR_DB_TYPE == "pgvector":
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,

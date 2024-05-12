@@ -17,8 +17,7 @@ def get_vector_store(
     qdrant_api_key: str = None,
     embeddings_dimension: str = None
 ):
-    print(vector_db)
-    
+        
     if mode == "sync":
         return ExtendedPgVector(
             connection_string=connection_string,
