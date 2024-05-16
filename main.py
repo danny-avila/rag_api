@@ -249,6 +249,7 @@ async def store_data_in_vector_db(
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
+        
         logger.error(e)
         return {"message": "An error occurred while adding documents.", "error": str(e)}
 

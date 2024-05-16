@@ -49,7 +49,8 @@ ATLAS_MONGO_DB_URI = get_env_variable(
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", "vector_collection"
 )
-
+PINECONE_API_KEY = get_env_variable("PINECONE_API_KEY", "")
+PINECONE_NAMESPACE = get_env_variable("PINECONE_NAMESPACE", "rag_api")
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
@@ -223,6 +224,13 @@ if VECTOR_DB_TYPE == "pgvector":
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
         mode="async",
+    )
+elif VECTOR_DB_TYPE == "pinecone":
+    vector_store = get_vector_store(
+        connection_string=f'{PINECONE_NAMESPACE}@{PINECONE_API_KEY}',
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="pinecone",
     )
 elif VECTOR_DB_TYPE == "atlas-mongo":
     # atlas-mongo vector:

@@ -4,8 +4,10 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
-
+import pinecone
+from langchain_pinecone._utilities import DistanceStrategy
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_pinecone import PineconeVectorStore, Pinecone
 from langchain_core.embeddings import Embeddings
 from typing import (
     List,
@@ -142,3 +144,59 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         # implement the deletion of documents by file_id in self._collection
         if ids is not None:
             self._collection.delete_many({"file_id": {"$in": ids}})
+
+class PineconeVector(PineconeVectorStore):
+    @property
+    def embedding_function(self) -> Embeddings:
+        return self.embeddings
+    
+    def __init__(self, embedding: Embeddings, api_key: str, index_name: str, namespace: Optional[str] = None):
+        self.index_name = index_name
+        self.namespace = namespace
+        super().__init__(index_name=self.index_name, embedding=embedding, text_key="text", namespace=namespace, distance_strategy=DistanceStrategy.COSINE, pinecone_api_key=api_key)
+
+    def get_all_ids(self) -> List[str]:
+        """
+        Retrieve all vector IDs in the Pinecone index.
+        """
+        return self._index.list(self.namespace)
+
+    def get_documents_by_ids(self, ids: List[str]) -> List[Document]:
+        """
+        Retrieve documents by their IDs from the Pinecone index.
+        """
+        results = self._index.fetch(ids, namespace=self.namespace)
+        documents = []
+        for result in results['vectors'].values():
+            metadata = result['metadata']
+            doc = Document(page_content=metadata['text'], metadata=metadata)
+            documents.append(doc)
+        return documents
+
+    def delete(self, ids: Optional[List[str]] = None) -> None:
+        """
+        Delete vectors by their IDs from the Pinecone index.
+        """
+        if ids:
+            self._index.delete(ids, namespace=self.namespace)
+
+    def similarity_search_with_score_by_vector(
+        self, 
+        embedding: List[float], 
+        k: int = 4, 
+        filter: Optional[dict] = None, 
+        **kwargs: Any
+    ) -> List[Tuple[Document, float]]:
+        """
+        Perform a similarity search with scores using an embedding vector.
+        """
+        query_results = self._index.query(embedding, top_k=k, include_metadata=True, namespace=self.namespace, **kwargs)
+        docs = query_results['matches']
+        processed_documents = []
+        for match in docs:
+            metadata = match['metadata']
+            if 'metadata' in metadata and '_id' in metadata['metadata']:
+                del metadata['metadata']['_id']
+            doc = Document(page_content=metadata['text'], metadata=metadata)
+            processed_documents.append((doc, match['score']))
+        return processed_documents

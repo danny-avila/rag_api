@@ -1,6 +1,6 @@
 from langchain_community.embeddings import OpenAIEmbeddings
 
-from store import AsyncPgVector, ExtendedPgVector
+from store import AsyncPgVector, ExtendedPgVector, PineconeVector
 from store import AtlasMongoVector
 from pymongo import MongoClient
 
@@ -26,7 +26,9 @@ def get_vector_store(
         mongo_db = MongoClient(connection_string).get_database()
         mong_collection = mongo_db[collection_name]
         return AtlasMongoVector(collection=mong_collection, embedding=embeddings)
-
+    elif mode == "pinecone":
+        namespace, api_key = connection_string.split("@")
+        return PineconeVector(embedding=embeddings, api_key=api_key, index_name=collection_name, namespace=namespace)
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
 
