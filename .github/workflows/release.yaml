@@ -3,8 +3,8 @@ name: Docker Dev Images Release
 on:
   workflow_dispatch:
   push:
-    # tags:
-    #   - '*'
+    tags:
+      - '*'
 
 jobs:
   call-docker-build:
