@@ -240,7 +240,7 @@ elif VECTOR_DB_TYPE == "qdrant":
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
-        collection_name="test",
+        collection_name=COLLECTION_NAME,
         mode="qdrant",
         qdrant_host=QDRANT_HOST,
         qdrant_api_key=QDRANT_API_KEY,
