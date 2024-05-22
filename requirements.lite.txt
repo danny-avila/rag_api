@@ -16,7 +16,7 @@ pandas==2.2.1
 openpyxl==3.1.2
 docx2txt==0.8
 pypandoc==1.13
-python-jose==3.3.0
+PyJWT==2.8.0
 asyncpg==0.29.0
 python-multipart==0.0.9
 aiofiles==23.2.1
