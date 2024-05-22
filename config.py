@@ -236,6 +236,7 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         mode="async",
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+    logger.warning("Using Atlas MongoDB as vector store is not fully supported yet.")
     vector_store = get_vector_store(
         connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,
