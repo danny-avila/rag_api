@@ -174,12 +174,11 @@ async def delete_documents(document_ids: DocumentIDs):
 
 @app.post("/query")
 async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
-    if not hasattr(request.state, "user"):
-        user_authorized = "public"
-    else:
-        user_authorized = request.state.user.get("id")
-
+    user_authorized = (
+        "public" if not hasattr(request.state, "user") else request.state.user.get("id")
+    )
     authorized_documents = []
+
     try:
         embedding = vector_store.embedding_function.embed_query(body.query)
 
@@ -196,6 +195,9 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
                 embedding, k=body.k, filter={"file_id": body.file_id}
             )
 
+        if not documents:
+            return authorized_documents
+
         document, score = documents[0]
         doc_metadata = document.metadata
         doc_user_id = doc_metadata.get("user_id")
@@ -208,6 +210,7 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
             )
 
         return authorized_documents
+
     except Exception as e:
         logger.error(e)
         raise HTTPException(status_code=500, detail=str(e))
