@@ -35,7 +35,13 @@ from langchain_community.document_loaders import (
     UnstructuredExcelLoader,
 )
 
-from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
+from models import (
+    DocumentResponse,
+    DocumentIDs,
+    StoreDocument,
+    QueryRequestBody,
+    QueryMultipleBody,
+)
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents, clean_text
@@ -146,19 +152,19 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
 
 @app.delete("/documents")
-async def delete_documents(ids: list[str] = Query(...)):
+async def delete_documents(document_ids: DocumentIDs):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
-            await vector_store.delete(ids=ids)
+            await vector_store.delete(ids=document_ids)
         else:
             existing_ids = vector_store.get_all_ids()
-            vector_store.delete(ids=ids)
+            vector_store.delete(ids=document_ids)
 
-        if not all(id in existing_ids for id in ids):
+        if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
 
-        file_count = len(ids)
+        file_count = len(document_ids)
         return {
             "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
         }
