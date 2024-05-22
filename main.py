@@ -447,9 +447,16 @@ async def load_document_context(id: str):
             existing_ids = vector_store.get_all_ids()
             documents = vector_store.get_documents_by_ids(ids)
 
+        # Ensure the requested id exists
         if not all(id in existing_ids for id in ids):
             raise HTTPException(
                 status_code=404, detail="The specified file_id was not found"
+            )
+
+        # Ensure documents list is not empty
+        if not documents:
+            raise HTTPException(
+                status_code=404, detail="No document found for the given ID"
             )
 
         return process_documents(documents)
