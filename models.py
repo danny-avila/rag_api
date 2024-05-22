@@ -9,10 +9,6 @@ class DocumentResponse(BaseModel):
     metadata: dict
 
 
-class DocumentIDs(BaseModel):
-    ids: List[str]
-
-
 class DocumentModel(BaseModel):
     page_content: str
     metadata: Optional[dict] = {}

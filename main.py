@@ -2,7 +2,7 @@ import os
 import hashlib
 import aiofiles
 import aiofiles.os
-from typing import Iterable
+from typing import Iterable, List
 from shutil import copyfileobj
 
 import uvicorn
@@ -13,14 +13,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import (
-    FastAPI,
     File,
     Form,
+    Body,
     Query,
+    status,
+    FastAPI,
+    Request,
     UploadFile,
     HTTPException,
-    status,
-    Request,
 )
 from langchain_community.document_loaders import (
     WebBaseLoader,
@@ -36,10 +37,9 @@ from langchain_community.document_loaders import (
 )
 
 from models import (
-    DocumentResponse,
-    DocumentIDs,
     StoreDocument,
     QueryRequestBody,
+    DocumentResponse,
     QueryMultipleBody,
 )
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
@@ -159,7 +159,7 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
 
 @app.delete("/documents")
-async def delete_documents(document_ids: DocumentIDs):
+async def delete_documents(document_ids: List[str] = Body(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
