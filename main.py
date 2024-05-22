@@ -538,6 +538,12 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
 
+        # Ensure documents list is not empty
+        if not documents:
+            raise HTTPException(
+                status_code=404, detail="No documents found for the given query"
+            )
+
         return documents
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
