@@ -141,8 +141,15 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
             existing_ids = vector_store.get_all_ids()
             documents = vector_store.get_documents_by_ids(ids)
 
+        # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
+
+        # Ensure documents list is not empty
+        if not documents:
+            raise HTTPException(
+                status_code=404, detail="No documents found for the given IDs"
+            )
 
         return documents
     except HTTPException as http_exc:
