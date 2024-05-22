@@ -37,9 +37,10 @@ from langchain_community.document_loaders import (
 
 from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
-from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents, clean_text
+from middleware import security_middleware
+from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
 
@@ -57,6 +58,7 @@ from config import (
     LogMiddleware,
     RAG_HOST,
     RAG_PORT,
+    VectorDBType,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
@@ -107,8 +109,10 @@ async def get_all_ids():
 
 
 def isHealthOK():
-    if VECTOR_DB_TYPE == "pgvector":
+    if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         return pg_health_check()
+    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+        return mongo_health_check()
     else:
         return True
 
