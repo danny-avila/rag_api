@@ -1,16 +1,13 @@
-name: Docker Dev Images Build
+name: Docker Dev Images Release
 
 on:
   workflow_dispatch:
   push:
-    paths-ignore:
-      - 'README.md'
-    branches:
-      - main
-    
+    tags:
+      - '*'
 
 jobs:
   call-docker-build:
     uses: ./.github/workflows/docker-build-workflow.yaml
     with:
-      tag: latest
+      tag: ${{ github.ref_name }}
