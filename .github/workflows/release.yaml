@@ -1,0 +1,13 @@
+name: Docker Dev Images Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  call-docker-build:
+    uses: ./.github/workflows/docker-build-workflow.yaml
+    with:
+      tag: ${{ github.ref_name }}

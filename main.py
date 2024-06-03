@@ -2,7 +2,7 @@ import os
 import hashlib
 import aiofiles
 import aiofiles.os
-from typing import Iterable
+from typing import Iterable, List
 from shutil import copyfileobj
 
 import uvicorn
@@ -13,14 +13,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import (
-    FastAPI,
     File,
     Form,
+    Body,
     Query,
+    status,
+    FastAPI,
+    Request,
     UploadFile,
     HTTPException,
-    status,
-    Request,
 )
 from langchain_community.document_loaders import (
     WebBaseLoader,
@@ -35,14 +36,20 @@ from langchain_community.document_loaders import (
     UnstructuredExcelLoader,
 )
 
-from models import DocumentResponse, StoreDocument, QueryRequestBody, QueryMultipleBody
+from models import (
+    StoreDocument,
+    QueryRequestBody,
+    DocumentResponse,
+    QueryMultipleBody,
+)
 from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
-from middleware import security_middleware
 from pgvector_routes import router as pgvector_router
 from parsers import process_documents, clean_text
+from middleware import security_middleware
+from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector, AsyncQdrant
-from qdrant_client.http import models 
+
 
 load_dotenv(find_dotenv())
 
@@ -130,6 +137,7 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
             existing_ids = vector_store.get_all_ids()
             documents = vector_store.get_documents_by_ids(ids)
 
+        # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
         return documents
@@ -162,12 +170,11 @@ async def delete_documents(ids: list[str]):
 
 @app.post("/query")
 async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
-    if not hasattr(request.state, "user"):
-        user_authorized = "public"
-    else:
-        user_authorized = request.state.user.get("id")
-
+    user_authorized = (
+        "public" if not hasattr(request.state, "user") else request.state.user.get("id")
+    )
     authorized_documents = []
+
     try:
         if isinstance(vector_store, AsyncPgVector):
             embedding = vector_store.embedding_function.embed_query(body.query)
@@ -186,6 +193,9 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
                 embedding, k=body.k, filter={"file_id": body.file_id}
             )
 
+        if not documents:
+            return authorized_documents
+
         document, score = documents[0]
         doc_metadata = document.metadata
         doc_user_id = doc_metadata.get("user_id")
@@ -198,6 +208,7 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
             )
 
         return authorized_documents
+
     except Exception as e:
         logger.error(e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -427,9 +438,16 @@ async def load_document_context(id: str):
             existing_ids = vector_store.get_all_ids()
             documents = vector_store.get_documents_by_ids(ids)
 
+        # Ensure the requested id exists
         if not all(id in existing_ids for id in ids):
             raise HTTPException(
                 status_code=404, detail="The specified file_id was not found"
+            )
+
+        # Ensure documents list is not empty
+        if not documents:
+            raise HTTPException(
+                status_code=404, detail="No document found for the given ID"
             )
 
         return process_documents(documents)
@@ -513,6 +531,12 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
+            )
+
+        # Ensure documents list is not empty
+        if not documents:
+            raise HTTPException(
+                status_code=404, detail="No documents found for the given query"
             )
 
         return documents

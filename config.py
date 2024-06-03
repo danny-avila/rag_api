@@ -1,9 +1,9 @@
 # config.py
-import json
 import os
+import json
 import logging
+from enum import Enum
 from datetime import datetime
-
 from dotenv import find_dotenv, load_dotenv
 from langchain_community.embeddings import (
     HuggingFaceEmbeddings,
@@ -12,10 +12,23 @@ from langchain_community.embeddings import (
 )
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
-
 from store_factory import get_vector_store
 
 load_dotenv(find_dotenv())
+
+
+class VectorDBType(Enum):
+    PGVECTOR = "pgvector"
+    ATLAS_MONGO = "atlas-mongo"
+    QDRANT = "qdrant"
+
+
+class EmbeddingsProvider(Enum):
+    OPENAI = "openai"
+    AZURE = "azure"
+    HUGGINGFACE = "huggingface"
+    HUGGINGFACETEI = "huggingfacetei"
+    OLLAMA = "ollama"
 
 
 def get_env_variable(
@@ -36,11 +49,9 @@ RAG_UPLOAD_DIR = get_env_variable("RAG_UPLOAD_DIR", "./uploads/")
 if not os.path.exists(RAG_UPLOAD_DIR):
     os.makedirs(RAG_UPLOAD_DIR, exist_ok=True)
 
-VECTOR_DB_TYPE = get_env_variable("VECTOR_DB_TYPE", "pgvector")
-QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY", "")
-QDRANT_HOST = get_env_variable("QDRANT_HOST", "http://qdrant:6333")
-EMBEDDINGS_DIMENSION = int(get_env_variable("EMBEDDINGS_DIMENSION", "1536"))
-VECTOR_DB = get_env_variable("VECTOR_DB", "pgvector")
+VECTOR_DB_TYPE = VectorDBType(
+    get_env_variable("VECTOR_DB_TYPE", VectorDBType.PGVECTOR.value)
+)
 POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
 POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
@@ -53,6 +64,12 @@ ATLAS_MONGO_DB_URI = get_env_variable(
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", "vector_collection"
 )
+QDRANT_HOST = get_env_variable("QDRANT_HOST", "127.0.0.1")
+QDRANT_VECTOR_COLLECTION = get_env_variable(
+    "QDRANT_VECTOR_COLLECTION", "vector_collection"
+)
+QDRANT_EMBEDDINGS_DIMENSION = get_env_variable("QDRANT_EMBEDDINGS_DIMENSION", "768")
+QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY", "api_key")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
@@ -144,7 +161,6 @@ class LogMiddleware(BaseHTTPMiddleware):
 
 logging.getLogger("uvicorn.access").disabled = True
 
-
 ## Credentials
 
 OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
@@ -167,51 +183,49 @@ OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 
 
 def init_embeddings(provider, model):
-    if provider == "openai":
+    if provider == EmbeddingsProvider.OPENAI:
         return OpenAIEmbeddings(
             model=model,
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
         )
-    elif provider == "azure":
+    elif provider == EmbeddingsProvider.AZURE:
         return AzureOpenAIEmbeddings(
             azure_deployment=model,
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
         )
-    elif provider == "huggingface":
+    elif provider == EmbeddingsProvider.HUGGINGFACE:
         return HuggingFaceEmbeddings(
             model_name=model, encode_kwargs={"normalize_embeddings": True}
         )
-    elif provider == "huggingfacetei":
+    elif provider == EmbeddingsProvider.HUGGINGFACETEI:
         return HuggingFaceHubEmbeddings(model=model)
-    elif provider == "ollama":
+    elif provider == EmbeddingsProvider.OLLAMA:
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
 
-EMBEDDINGS_PROVIDER = get_env_variable("EMBEDDINGS_PROVIDER", "openai").lower()
+EMBEDDINGS_PROVIDER = EmbeddingsProvider(
+    get_env_variable("EMBEDDINGS_PROVIDER", EmbeddingsProvider.OPENAI.value).lower()
+)
 
-if EMBEDDINGS_PROVIDER == "openai":
+if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
-
-elif EMBEDDINGS_PROVIDER == "azure":
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.AZURE:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
-
-elif EMBEDDINGS_PROVIDER == "huggingface":
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACE:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
     )
-
-elif EMBEDDINGS_PROVIDER == "huggingfacetei":
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "http://huggingfacetei:3000"
     )
-
-elif EMBEDDINGS_PROVIDER == "ollama":
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
@@ -221,22 +235,23 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # Vector store
-if VECTOR_DB_TYPE == "pgvector":
+print(VECTOR_DB_TYPE)
+if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
         mode="async",
     )
-elif VECTOR_DB_TYPE == "atlas-mongo":
-    # atlas-mongo vector:
+elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+    logger.warning("Using Atlas MongoDB as vector store is not fully supported yet.")
     vector_store = get_vector_store(
         connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,
         collection_name=MONGO_VECTOR_COLLECTION,
         mode="atlas-mongo",
     )
-elif VECTOR_DB_TYPE == "qdrant":
+elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
@@ -244,7 +259,7 @@ elif VECTOR_DB_TYPE == "qdrant":
         mode="qdrant",
         qdrant_host=QDRANT_HOST,
         qdrant_api_key=QDRANT_API_KEY,
-        embeddings_dimension=EMBEDDINGS_DIMENSION
+        embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION
 )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")

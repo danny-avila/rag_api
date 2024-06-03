@@ -12,10 +12,9 @@ def get_vector_store(
     embeddings: OpenAIEmbeddings,
     collection_name: str,
     mode: str = "sync",
-    vector_db: str = None,
     qdrant_host: str = None,
     qdrant_api_key: str = None,
-    embeddings_dimension: str = None
+    qdrant_embedding_dimension: int = None,
 ):
         
     if mode == "sync":
@@ -30,6 +29,11 @@ def get_vector_store(
             embedding_function=embeddings,
             collection_name=collection_name,
         )
+    elif mode == "atlas-mongo":
+        mongo_db = MongoClient(connection_string).get_database()
+        mong_collection = mongo_db[collection_name]
+        return AtlasMongoVector(collection=mong_collection, embedding=embeddings)    
+    
     elif mode == "qdrant":
         client = qdrant_client.QdrantClient(
         qdrant_host,
@@ -37,7 +41,7 @@ def get_vector_store(
         )
 
         collection_config = qdrant_client.http.models.VectorParams(
-            size=embeddings_dimension,  # Adjust as per your model's embedding size
+            size=qdrant_embedding_dimension,
             distance=qdrant_client.http.models.Distance.COSINE
         )
 
