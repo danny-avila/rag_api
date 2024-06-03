@@ -64,7 +64,7 @@ ATLAS_MONGO_DB_URI = get_env_variable(
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", "vector_collection"
 )
-QDRANT_HOST = get_env_variable("QDRANT_HOST", "127.0.0.1")
+QDRANT_HOST= get_env_variable("QDRANT_HOST", "127.0.0.1:6333")
 QDRANT_VECTOR_COLLECTION = get_env_variable(
     "QDRANT_VECTOR_COLLECTION", "vector_collection"
 )
@@ -253,13 +253,13 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     )
 elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
     vector_store = get_vector_store(
-        connection_string=CONNECTION_STRING,
+        connection_string=QDRANT_HOST,
         embeddings=embeddings,
-        collection_name=COLLECTION_NAME,
-        mode="qdrant",
-        qdrant_host=QDRANT_HOST,
+        collection_name=QDRANT_VECTOR_COLLECTION,
         qdrant_api_key=QDRANT_API_KEY,
-        embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION
+        qdrant_host=QDRANT_HOST,
+        qdrant_embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION,
+        mode="qdrant",
 )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")

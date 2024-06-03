@@ -14,7 +14,7 @@ def get_vector_store(
     mode: str = "sync",
     qdrant_host: str = None,
     qdrant_api_key: str = None,
-    qdrant_embedding_dimension: int = None,
+    qdrant_embeddings_dimension: int = None,
 ):
         
     if mode == "sync":
@@ -41,7 +41,7 @@ def get_vector_store(
         )
 
         collection_config = qdrant_client.http.models.VectorParams(
-            size=qdrant_embedding_dimension,
+            size=qdrant_embeddings_dimension,
             distance=qdrant_client.http.models.Distance.COSINE
         )
 
