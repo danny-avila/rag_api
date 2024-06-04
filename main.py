@@ -367,16 +367,15 @@ async def embed_local_file(document: StoreDocument, request: Request):
 async def embed_file(
     request: Request, file_id: str = Form(None), file: UploadFile = File(None), url: str = Form(None)
 ):
-    
+    response_status = True
+    response_message = "File processed successfully."
+    known_type = None    
     if not hasattr(request.state, "user"):
         user_id = "public"
     else:
         user_id = request.state.user.get("id")
     
     if url is not None:
-        response_status = True
-        response_message = "File processed successfully."
-        known_type = "url"
         if "youtube.com" in url:
             loader = YoutubeLoader.from_youtube_url(url)
             data = loader.load()
