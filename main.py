@@ -363,7 +363,6 @@ async def embed_file(
         user_id = "public"
     else:
         user_id = request.state.user.get("id")
-
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
