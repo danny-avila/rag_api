@@ -6,6 +6,9 @@ on:
     tags:
       - '*'
 
+permissions:
+  packages: write
+
 jobs:
   call-docker-build:
     uses: ./.github/workflows/docker-build-workflow.yaml
