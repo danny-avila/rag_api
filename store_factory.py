@@ -25,7 +25,7 @@ def get_vector_store(
     elif mode == "atlas-mongo":
         mongo_db = MongoClient(connection_string).get_database()
         mong_collection = mongo_db[collection_name]
-        return AtlasMongoVector(collection=mong_collection, embedding=embeddings)
+        return AtlasMongoVector(collection=mong_collection, embedding=embeddings, index_name=collection_name)
 
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
