@@ -4,7 +4,7 @@ import aiofiles
 import aiofiles.os
 from typing import Iterable, List
 from shutil import copyfileobj
-
+import re
 import uvicorn
 from langchain.schema import Document
 from contextlib import asynccontextmanager
@@ -25,6 +25,7 @@ from fastapi import (
 )
 from langchain_community.document_loaders import (
     WebBaseLoader,
+    YoutubeLoader,
     TextLoader,
     PyPDFLoader,
     CSVLoader,
@@ -34,6 +35,7 @@ from langchain_community.document_loaders import (
     UnstructuredXMLLoader,
     UnstructuredRSTLoader,
     UnstructuredExcelLoader,
+    ArxivLoader,
 )
 
 from models import (
@@ -363,38 +365,60 @@ async def embed_local_file(document: StoreDocument, request: Request):
 
 @app.post("/embed")
 async def embed_file(
-    request: Request, file_id: str = Form(...), file: UploadFile = File(...)
+    request: Request, file_id: str = Form(None), file: UploadFile = File(None), url: str = Form(None)
 ):
     response_status = True
     response_message = "File processed successfully."
-    known_type = None
+    known_type = None    
     if not hasattr(request.state, "user"):
         user_id = "public"
     else:
         user_id = request.state.user.get("id")
+    
+    if url is not None:
+        if "youtube.com" in url:
+            loader = YoutubeLoader.from_youtube_url(url)
+            data = loader.load()
+        elif "arxiv.org" in url:
+            pattern = r"(\d+\.\d+)"
+            match = re.search(pattern, url)
+            if match:
+                doc = match.group(1)
+                loader = ArxivLoader(doc)
+                data = loader.load()
+        else:
+            loader = WebBaseLoader(url)
+            data = loader.load()
+    else:
+        temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
+        os.makedirs(temp_base_path, exist_ok=True)
+        temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
 
-    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    os.makedirs(temp_base_path, exist_ok=True)
-    temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+        try:
+            async with aiofiles.open(temp_file_path, "wb") as temp_file:
+                chunk_size = 64 * 1024  # 64 KB
+                while content := await file.read(chunk_size):
+                    await temp_file.write(content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save the uploaded file. Error: {str(e)}",
+            )
+
+        try:
+            loader, known_type, file_ext = get_loader(
+                file.filename, file.content_type, temp_file_path
+            )
+            data = loader.load()
+        finally:
+            try:
+                await aiofiles.os.remove(temp_file_path)
+            except Exception as e:
+                logger.info(f"Failed to remove temporary file: {str(e)}")
 
     try:
-        async with aiofiles.open(temp_file_path, "wb") as temp_file:
-            chunk_size = 64 * 1024  # 64 KB
-            while content := await file.read(chunk_size):
-                await temp_file.write(content)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save the uploaded file. Error: {str(e)}",
-        )
-
-    try:
-        loader, known_type, file_ext = get_loader(
-            file.filename, file.content_type, temp_file_path
-        )
-        data = loader.load()
         result = await store_data_in_vector_db(
-            data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+            data=data, file_id=file_id, user_id=user_id, clean_content=False
         )
 
         if not result:
@@ -421,19 +445,15 @@ async def embed_file(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",
         )
-    finally:
-        try:
-            await aiofiles.os.remove(temp_file_path)
-        except Exception as e:
-            logger.info(f"Failed to remove temporary file: {str(e)}")
 
     return {
         "status": response_status,
         "message": response_message,
         "file_id": file_id,
-        "filename": file.filename,
+        "filename": file.filename if file else url,
         "known_type": known_type,
     }
+
 
 
 @app.get("/documents/{id}/context")
