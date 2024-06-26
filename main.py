@@ -34,6 +34,7 @@ from langchain_community.document_loaders import (
     UnstructuredXMLLoader,
     UnstructuredRSTLoader,
     UnstructuredExcelLoader,
+    UnstructuredPowerPointLoader,
 )
 
 from models import (
@@ -285,6 +286,8 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         loader = UnstructuredRSTLoader(filepath, mode="elements")
     elif file_ext == "xml":
         loader = UnstructuredXMLLoader(filepath)
+    elif file_ext == "pptx":
+        loader = UnstructuredPowerPointLoader(filepath)
     elif file_ext == "md":
         loader = UnstructuredMarkdownLoader(filepath)
     elif file_content_type == "application/epub+zip":
