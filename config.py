@@ -9,6 +9,7 @@ from langchain_community.embeddings import (
     HuggingFaceEmbeddings,
     HuggingFaceHubEmbeddings,
     OllamaEmbeddings,
+    BedrockEmbeddings,
 )
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -28,6 +29,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACE = "huggingface"
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
+    BEDROCK = "bedrock"
 
 
 def get_env_variable(
@@ -198,6 +200,8 @@ def init_embeddings(provider, model):
         return HuggingFaceHubEmbeddings(model=model)
     elif provider == EmbeddingsProvider.OLLAMA:
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
+    elif provider == EmbeddingsProvider.BEDROCK:
+        return BedrockEmbeddings(model_id=model)
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -220,6 +224,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
