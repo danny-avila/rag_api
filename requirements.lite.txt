@@ -25,3 +25,5 @@ opencv-python-headless==4.9.0.80
 pymongo==4.6.3
 langchain-mongodb==0.1.3
 cryptography==42.0.7
+python-magic==0.4.27
+python-pptx==0.6.23
