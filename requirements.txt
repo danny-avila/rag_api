@@ -1,33 +1,46 @@
-langchain==0.1.12
-langchain_community==0.0.34
-langchain_openai==0.0.8
-langchain_core==0.1.45
-sqlalchemy==2.0.28
-python-dotenv==1.0.1
-fastapi==0.110.0
-psycopg2-binary==2.9.9
-pgvector==0.2.5
-uvicorn==0.28.0
-pypdf==4.1.0
-unstructured==0.12.6
-markdown==3.6
-networkx==3.2.1
-pandas==2.2.1
-openpyxl==3.1.2
-docx2txt==0.8
-pypandoc==1.13
-PyJWT==2.8.0
-asyncpg==0.29.0
-python-multipart==0.0.9
-sentence_transformers==2.5.1
-aiofiles==23.2.1
-rapidocr-onnxruntime==1.3.17
-opencv-python-headless==4.9.0.80
-pymongo==4.6.3
-langchain-mongodb==0.1.3
-cryptography==42.0.7
-python-magic==0.4.27
-python-pptx==0.6.23
+# LangChain
+langchain==0.2.12
+langchain_community==0.2.11
+langchain_openai==0.1.21
+langchain_core==0.2.29
+langchain-mongodb==0.1.8
 langchain-voyageai==0.1.1
 langchain-google-genai==1.0.8
 langchain-cohere==0.2.1
+
+# API
+fastapi==0.112.0
+uvicorn==0.30.5
+python-multipart==0.0.9
+aiofiles==24.1.0
+
+# Database
+sqlalchemy==2.0.32
+psycopg2-binary==2.9.9
+pgvector==0.3.2
+asyncpg==0.29.0
+pymongo==4.8.0
+
+# Data Processing and Analysis
+pandas==2.2.2
+openpyxl==3.1.5
+networkx==3.3
+
+# File Handling and Parsing
+pypdf==4.3.1
+unstructured==0.15.1
+docx2txt==0.8
+pypandoc==1.13
+python-magic==0.4.27
+python-pptx==1.0.2
+
+# Security
+PyJWT==2.9.0
+cryptography==43.0.0
+
+# Miscellaneous
+python-dotenv==1.0.1
+markdown==3.6
+rapidocr-onnxruntime==1.3.24
+opencv-python-headless==4.10.0.84
+sentence_transformers==3.0.1
