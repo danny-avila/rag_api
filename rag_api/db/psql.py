@@ -1,6 +1,7 @@
 # db.py
 import asyncpg
-from config import DSN, logger
+
+from rag_api.config import DSN, logger
 
 
 class PSQLDatabase:
@@ -32,23 +33,32 @@ async def ensure_custom_id_index_on_embedding():
 
         if not index_exists:
             # If the index does not exist, create it
-            await conn.execute(f"""
+            await conn.execute(
+                f"""
                 CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name});
-            """)
-            logger.debug(f"Created index '{index_name}' on '{table_name}({column_name})'")
+            """
+            )
+            logger.debug(
+                f"Created index '{index_name}' on '{table_name}({column_name})'"
+            )
         else:
-            logger.debug(f"Index '{index_name}' already exists on '{table_name}({column_name})'")
+            logger.debug(
+                f"Index '{index_name}' already exists on '{table_name}({column_name})'"
+            )
 
 
 async def check_index_exists(conn, index_name: str) -> bool:
     # Adjust the SQL query if necessary
-    result = await conn.fetchval("""
+    result = await conn.fetchval(
+        """
         SELECT EXISTS (
             SELECT FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE  c.relname = $1 AND n.nspname = 'public' -- Adjust schema if necessary
         );
-    """, index_name)
+    """,
+        index_name,
+    )
     return result
 
 

@@ -1,76 +1,75 @@
-import os
 import hashlib
+import os
+from contextlib import asynccontextmanager
+from shutil import copyfileobj
+from typing import Iterable, List
+
 import aiofiles
 import aiofiles.os
-from typing import Iterable, List
-from shutil import copyfileobj
-
 import uvicorn
-from langchain.schema import Document
-from contextlib import asynccontextmanager
 from dotenv import find_dotenv, load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.runnables.config import run_in_executor
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from fastapi import (
+    Body,
+    FastAPI,
     File,
     Form,
-    Body,
+    HTTPException,
     Query,
-    status,
-    FastAPI,
     Request,
     UploadFile,
-    HTTPException,
+    status,
 )
+from fastapi.middleware.cors import CORSMiddleware
+from langchain.schema import Document
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import (
-    WebBaseLoader,
-    TextLoader,
-    PyPDFLoader,
     CSVLoader,
     Docx2txtLoader,
+    PyPDFLoader,
+    TextLoader,
     UnstructuredEPubLoader,
-    UnstructuredMarkdownLoader,
-    UnstructuredXMLLoader,
-    UnstructuredRSTLoader,
     UnstructuredExcelLoader,
+    UnstructuredMarkdownLoader,
     UnstructuredPowerPointLoader,
+    UnstructuredRSTLoader,
+    UnstructuredXMLLoader,
 )
+from langchain_core.runnables.config import run_in_executor
 
-from models import (
-    StoreDocument,
-    QueryRequestBody,
-    DocumentResponse,
-    QueryMultipleBody,
-)
-from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
-from pgvector_routes import router as pgvector_router
-from parsers import process_documents, clean_text
-from middleware import security_middleware
-from mongo import mongo_health_check
-from constants import ERROR_MESSAGES
-from store import AsyncPgVector
-
-load_dotenv(find_dotenv())
-
-from config import (
-    logger,
-    debug_mode,
-    CHUNK_SIZE,
+from rag_api.config import (
     CHUNK_OVERLAP,
-    vector_store,
-    RAG_UPLOAD_DIR,
-    known_source_ext,
+    CHUNK_SIZE,
     PDF_EXTRACT_IMAGES,
-    LogMiddleware,
     RAG_HOST,
     RAG_PORT,
-    VectorDBType,
-    # RAG_EMBEDDING_MODEL,
-    # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-    # RAG_TEMPLATE,
+    RAG_UPLOAD_DIR,
     VECTOR_DB_TYPE,
+    LogMiddleware,
+    VectorDBType,
+    debug_mode,
+    known_source_ext,
+    logger,
+    vector_store,
 )
+from rag_api.api.middleware import security_middleware
+from rag_api.api.models import (
+    DocumentResponse,
+    QueryMultipleBody,
+    QueryRequestBody,
+    StoreDocument,
+)
+from rag_api.api.pgvector_routes import router as pgvector_router
+from rag_api.config.constants import ERROR_MESSAGES
+from rag_api.db.mongo import mongo_health_check
+from rag_api.db.psql import (
+    PSQLDatabase,
+    ensure_custom_id_index_on_embedding,
+    pg_health_check,
+)
+from rag_api.db.store import AsyncPgVector
+from rag_api.utils.parsers import clean_text, process_documents
+
+load_dotenv(find_dotenv())
 
 
 @asynccontextmanager
@@ -318,7 +317,6 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
 @app.post("/local/embed")
 async def embed_local_file(document: StoreDocument, request: Request):
-
     # Check if the file exists
     if not os.path.exists(document.filepath):
         raise HTTPException(
@@ -392,7 +390,9 @@ async def embed_file(
         )
 
     try:
-        logger.info(f"Received file for embedding: filename={file.filename}, content_type={file.content_type}, file_id={file_id}")
+        logger.info(
+            f"Received file for embedding: filename={file.filename}, content_type={file.content_type}, file_id={file_id}"
+        )
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )

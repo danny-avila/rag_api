@@ -1,7 +1,9 @@
 import logging
+
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
-from config import ATLAS_MONGO_DB_URI
+
+from rag_api.config import ATLAS_MONGO_DB_URI
 
 logger = logging.getLogger(__name__)
 

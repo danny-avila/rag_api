@@ -1,6 +1,8 @@
 from typing import List, Optional
+
 from langchain.schema import Document
-from config import CHUNK_OVERLAP
+
+from rag_api.config import CHUNK_OVERLAP
 
 
 def clean_text(text: str) -> str:

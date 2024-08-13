@@ -1,11 +1,12 @@
 import os
-from fastapi import Request
 from datetime import datetime, timezone
-from fastapi.responses import JSONResponse
-from config import logger
 
 import jwt
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from jwt import PyJWTError
+
+from rag_api.config import logger
 
 
 async def security_middleware(request: Request, call_next):

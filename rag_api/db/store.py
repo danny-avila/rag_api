@@ -1,22 +1,16 @@
-from typing import Any, Optional
-from sqlalchemy import delete
+import copy
+from typing import Any, List, Optional, Tuple
+
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
-from langchain_core.runnables.config import run_in_executor
-from sqlalchemy.orm import Session
-
-from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
-from typing import (
-    List,
-    Optional,
-    Tuple,
-)
-import copy
+from langchain_core.runnables.config import run_in_executor
+from langchain_mongodb import MongoDBAtlasVectorSearch
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 
 class ExtendedPgVector(PGVector):
-
     def get_all_ids(self) -> list[str]:
         with Session(self._bind) as session:
             results = session.query(self.EmbeddingStore.custom_id).all()
@@ -63,7 +57,6 @@ class ExtendedPgVector(PGVector):
 
 
 class AsyncPgVector(ExtendedPgVector):
-
     async def get_all_ids(self) -> list[str]:
         return await run_in_executor(None, super().get_all_ids)
 
