@@ -5,6 +5,7 @@ import aiofiles.os
 from typing import Iterable, List
 from shutil import copyfileobj
 
+import asyncio
 import uvicorn
 from langchain.schema import Document
 from contextlib import asynccontextmanager
@@ -234,18 +235,17 @@ async def store_data_in_vector_db(
     file_id: str,
     user_id: str = "",
     clean_content: bool = False,
-) -> bool:
+    batch_size: int = 50,
+) -> dict:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
 
-    # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
-    # Preparing documents with page content and metadata for insertion.
     docs = [
         Document(
             page_content=doc.page_content,
@@ -259,15 +259,27 @@ async def store_data_in_vector_db(
         for doc in documents
     ]
 
-    try:
-        if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
-            )
-        else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+    async def process_batch(batch: List[Document]):
+        try:
+            if isinstance(vector_store, AsyncPgVector):
+                return await vector_store.aadd_documents(
+                    batch, ids=[file_id] * len(batch)
+                )
+            else:
+                return vector_store.add_documents(batch, ids=[file_id] * len(batch))
+        except Exception as e:
+            logger.error(f"Error processing batch: {e}")
+            return []
 
-        return {"message": "Documents added successfully", "ids": ids}
+    try:
+        all_ids = []
+        for i in range(0, len(docs), batch_size):
+            batch = docs[i : i + batch_size]
+            batch_tasks = [process_batch(batch)]
+            batch_results = await asyncio.gather(*batch_tasks)
+            all_ids.extend([id for batch_ids in batch_results for id in batch_ids])
+
+        return {"message": "Documents added successfully", "ids": all_ids}
 
     except Exception as e:
         logger.error(e)
