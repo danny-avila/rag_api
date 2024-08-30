@@ -109,7 +109,7 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 }
 ```
 
-Follw one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
 
 ### Cloud Installation Settings:
