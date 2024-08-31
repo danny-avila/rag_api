@@ -392,6 +392,7 @@ async def embed_file(
         )
 
     try:
+        logger.info(f"Received file for embedding: filename={file.filename}, content_type={file.content_type}, file_id={file_id}")
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
@@ -403,6 +404,7 @@ async def embed_file(
         if not result:
             response_status = False
             response_message = "Failed to process/store the file data."
+            logger.error(response_message, exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
@@ -410,6 +412,7 @@ async def embed_file(
         elif "error" in result:
             response_status = False
             response_message = "Failed to process/store the file data."
+            logger.error(response_message, exc_info=True)
             if isinstance(result["error"], str):
                 response_message = result["error"]
             else:
@@ -420,6 +423,7 @@ async def embed_file(
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
+        logger.error(response_message, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",

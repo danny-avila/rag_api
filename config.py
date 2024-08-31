@@ -28,6 +28,10 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACE = "huggingface"
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
+    GOOGLE = "google"
+    VOYAGE = "voyage"
+    SHUTTLEAI = "shuttleai"
+    COHERE = "cohere"
 
 
 def get_env_variable(
@@ -171,7 +175,10 @@ RAG_AZURE_OPENAI_ENDPOINT = get_env_variable(
 ).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
-
+GOOGLE_API_KEY = get_env_variable("GOOGLE_KEY", "")
+VOYAGE_API_KEY = get_env_variable("VOYAGE_API_KEY", "")
+SHUTTLEAI_KEY = get_env_variable("SHUTTLEAI_KEY", "")  # use embeddings from shuttleai
+COHERE_API_KEY = get_env_variable("COHERE_API_KEY", "")
 ## Embeddings
 
 
@@ -198,6 +205,31 @@ def init_embeddings(provider, model):
         return HuggingFaceHubEmbeddings(model=model)
     elif provider == EmbeddingsProvider.OLLAMA:
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
+    elif provider == EmbeddingsProvider.GOOGLE:
+        from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
+
+        return GoogleGenerativeAIEmbeddings(
+            model=model,
+            api_key=GOOGLE_API_KEY,
+        )
+    elif provider == EmbeddingsProvider.VOYAGE:
+        from langchain_voyageai import VoyageAIEmbeddings
+
+        return VoyageAIEmbeddings(
+            model=model,
+        )
+    elif provider == EmbeddingsProvider.SHUTTLEAI:
+        return OpenAIEmbeddings(
+            model=model,
+            api_key=SHUTTLEAI_KEY,
+            openai_api_base="https://api.shuttleai.app/v1",
+        )
+    elif provider == EmbeddingsProvider.COHERE:
+        from langchain_cohere import CohereEmbeddings
+
+        return CohereEmbeddings(
+            model=model,
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -220,6 +252,15 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "models/embedding-001")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.VOYAGE:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "voyage-large-2")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.SHUTTLEAI:
+    # text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-large")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.COHERE:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "embed-multilingual-v3.0")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
