@@ -60,6 +60,7 @@ from config import (
     debug_mode,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
+    MAX_CHUNKS,
     BATCH_SIZE,
     CONCURRENT_LIMIT,
     vector_store,
@@ -238,12 +239,18 @@ async def store_data_in_vector_db(
     file_id: str,
     user_id: str = "",
     clean_content: bool = False,
-) -> dict[str:str]:
+) -> dict:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
     )
+    ids = []
     documents = text_splitter.split_documents(data)
 
+    if MAX_CHUNKS and len(documents) > MAX_CHUNKS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Too big file, Attempted to process {len(documents)} chunks, but MAX_CHUNKS is set to {MAX_CHUNKS} chunks",
+        )
     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
@@ -262,19 +269,20 @@ async def store_data_in_vector_db(
         )
         for doc in documents
     ]
+    
 
     try:
         if isinstance(vector_store, AsyncPgVector):
             start_time = time.perf_counter()
             #vector_store.add_documents(docs, ids=[file_id] * len(documents))
-            await process_documents(docs,ids=[file_id]*len(documents))
+            ids = await process_documents(docs,ids=[file_id]*len(documents))
             end_time = time.perf_counter()
             elapsed = end_time - start_time 
             logger.info(f"Finished processing {len(docs)} documents in {elapsed}")
         else:
-            vector_store.add_documents(docs, ids=[file_id] * len(documents))
+            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
-        return {"message": "Documents added successfully", "ids": file_id}
+        return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
         logger.error(e)
@@ -289,15 +297,16 @@ async def process_documents(
     logger.info(f"Processing list of documents of length: {len(docs)}")
     for i in range(0, len(docs), BATCH_SIZE):
         batch = docs[i : min(i + BATCH_SIZE, len(docs))]
-        logger.info(f"Sending batch {i} to {i+len(BATCH_SIZE)} / {len(docs)}")
+        logger.info(f"Sending batch {i} to {i+len(batch)} / {len(docs)}")
         task = asyncio.create_task(process_batch(batch, ids, semaphore))
         tasks.append(task)
-    await asyncio.gather(*tasks)
+    idList = await asyncio.gather(*tasks)
+    return [id for sublist in idList for id in sublist]
 
-
+#Helper for process_documents
 async def process_batch(batch: list[Document], ids: list[str], semaphore):
     async with semaphore:
-        await vector_store.aadd_documents(batch,ids=ids)
+        return await vector_store.aadd_documents(batch,ids=ids)
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
     file_ext = filename.split(".")[-1].lower()
