@@ -4,6 +4,7 @@ import json
 import logging
 from enum import Enum
 from datetime import datetime
+from threading import TIMEOUT_MAX
 from dotenv import find_dotenv, load_dotenv
 from langchain_community.embeddings import (
     HuggingFaceEmbeddings,
@@ -66,7 +67,10 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
-MAX_CHUNKS = int(get_env_variable("MAX_CHUNKS", "100000"))
+maxChunks = get_env_variable("MAX_CHUNKS")
+MAX_CHUNKS = int(maxChunks) if maxChunks else None 
+embeddingTimeout = get_env_variable("EMBEDDING_TIMEOUT")
+EMBEDDING_TIMEOUT = int(get_env_variable("EMBEDDING_TIMEOUT",100000))#default 100 second timeout
 
 BATCH_SIZE = int(get_env_variable("BATCH_SIZE","75"))
 CONCURRENT_LIMIT = int(get_env_variable("CONCURRENT_LIMIT","10"))

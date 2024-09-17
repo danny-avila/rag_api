@@ -9,7 +9,6 @@ from shutil import copyfileobj
 import uvicorn
 from langchain.schema import Document
 from contextlib import asynccontextmanager
-import asyncio
 from dotenv import find_dotenv, load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
@@ -52,6 +51,7 @@ from middleware import security_middleware
 from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
+from process_docs import store_documents
 
 load_dotenv(find_dotenv())
 
@@ -60,6 +60,7 @@ from config import (
     debug_mode,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
+    EMBEDDING_TIMEOUT,
     MAX_CHUNKS,
     BATCH_SIZE,
     CONCURRENT_LIMIT,
@@ -274,8 +275,7 @@ async def store_data_in_vector_db(
     try:
         if isinstance(vector_store, AsyncPgVector):
             start_time = time.perf_counter()
-            #vector_store.add_documents(docs, ids=[file_id] * len(documents))
-            ids = await process_documents(docs,ids=[file_id]*len(documents))
+            ids = await store_documents(docs,ids=[file_id]*len(documents))
             end_time = time.perf_counter()
             elapsed = end_time - start_time 
             logger.info(f"Finished processing {len(docs)} documents in {elapsed}")
@@ -288,25 +288,6 @@ async def store_data_in_vector_db(
         logger.error(e)
         return {"message": "An error occurred while adding documents.", "error": str(e)}
     
-#Prepare documents to be async added to vectorstore async in batches
-async def process_documents(
-    docs: list[Document], ids:list[str]
-):
-    semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
-    tasks = []
-    logger.info(f"Processing list of documents of length: {len(docs)}")
-    for i in range(0, len(docs), BATCH_SIZE):
-        batch = docs[i : min(i + BATCH_SIZE, len(docs))]
-        logger.info(f"Sending batch {i} to {i+len(batch)} / {len(docs)}")
-        task = asyncio.create_task(process_batch(batch, ids, semaphore))
-        tasks.append(task)
-    idList = await asyncio.gather(*tasks)
-    return [id for sublist in idList for id in sublist]
-
-#Helper for process_documents
-async def process_batch(batch: list[Document], ids: list[str], semaphore):
-    async with semaphore:
-        return await vector_store.aadd_documents(batch,ids=ids)
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
     file_ext = filename.split(".")[-1].lower()
