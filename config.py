@@ -70,7 +70,7 @@ QDRANT_VECTOR_COLLECTION = get_env_variable(
     "QDRANT_VECTOR_COLLECTION", "vector_collection"
 )
 QDRANT_EMBEDDINGS_DIMENSION = get_env_variable("QDRANT_EMBEDDINGS_DIMENSION", "768")
-QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY", "api_key")
+QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))

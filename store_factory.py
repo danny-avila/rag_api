@@ -46,21 +46,18 @@ def get_vector_store(
         qdrant_host,
         api_key=qdrant_api_key
         )
-
         collection_config = qdrant_client.http.models.VectorParams(
             size=qdrant_embeddings_dimension,
             distance=qdrant_client.http.models.Distance.COSINE
         )
-
-        print(f"Creating collection {collection_name}...")
-        try:
-            # Verify if collection exists
-            collection = client.get_collection(collection_name=collection_name)
-        except Exception:
-            # Recreate collection
-            client.recreate_collection(
-                collection_name=collection_name,
-                vectors_config=collection_config
+        if not client.collection_exists(collection_name):
+            collection_config = qdrant_client.http.models.VectorParams(
+            size=qdrant_embeddings_dimension,
+            distance=qdrant_client.http.models.Distance.COSINE
+        )
+            client.create_collection(
+            collection_name=collection_name,
+            vectors_config=collection_config
             )
         return AsyncQdrant(
             client=client,
