@@ -13,6 +13,7 @@ from dotenv import find_dotenv, load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.runnables.config import run_in_executor
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from uuid import uuid4
 from fastapi import (
     File,
     Form,
@@ -263,12 +264,13 @@ async def store_data_in_vector_db(
     
 
     try:
+        uuids = [str(uuid4()) for _ in range(len(docs))]
         if isinstance(vector_store, AsyncPgVector):
             ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
+                docs, ids=uuids
             )
         else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+            ids = vector_store.add_documents(docs, ids=uuids)
 
         return {"message": "Documents added successfully", "ids": ids}
 
