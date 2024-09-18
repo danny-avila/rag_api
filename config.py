@@ -268,7 +268,7 @@ elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
         additional_kwargs = QdrantConfig(
             qdrant_host=QDRANT_HOST,
             qdrant_api_key=QDRANT_API_KEY,
-            QDRANT_EMBEDDINGS_DIMENSION=QDRANT_EMBEDDINGS_DIMENSION
+            qdrant_embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION
         )
 )
 else:

@@ -40,8 +40,8 @@ def get_vector_store(
         if additional_kwargs is None:
             additional_kwargs = {}
         qdrant_host = additional_kwargs['qdrant_host']
-        qdrant_api_key = additional_kwargs.get['qdrant_api_key']
-        qdrant_embeddings_dimension = additional_kwargs.get('qdrant_embeddings_dimension')
+        qdrant_api_key = additional_kwargs['qdrant_api_key']
+        qdrant_embeddings_dimension = additional_kwargs['qdrant_embeddings_dimension']
         client = qdrant_client.QdrantClient(
         qdrant_host,
         api_key=qdrant_api_key
@@ -52,9 +52,9 @@ def get_vector_store(
         )
         if not client.collection_exists(collection_name):
             collection_config = qdrant_client.http.models.VectorParams(
-            size=qdrant_embeddings_dimension,
-            distance=qdrant_client.http.models.Distance.COSINE
-        )
+                size=qdrant_embeddings_dimension,
+                distance=qdrant_client.http.models.Distance.COSINE
+            )
             client.create_collection(
             collection_name=collection_name,
             vectors_config=collection_config
