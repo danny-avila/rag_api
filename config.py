@@ -13,7 +13,7 @@ from langchain_community.embeddings import (
 )
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
-from store_factory import get_vector_store
+from store_factory import QdrantConfig, get_vector_store
 
 load_dotenv(find_dotenv())
 
@@ -264,10 +264,12 @@ elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
         connection_string=QDRANT_HOST,
         embeddings=embeddings,
         collection_name=QDRANT_VECTOR_COLLECTION,
-        qdrant_api_key=QDRANT_API_KEY,
-        qdrant_host=QDRANT_HOST,
-        qdrant_embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION,
         mode="qdrant",
+        additional_kwargs = QdrantConfig(
+            qdrant_host=QDRANT_HOST,
+            qdrant_api_key=QDRANT_API_KEY,
+            QDRANT_EMBEDDINGS_DIMENSION=QDRANT_EMBEDDINGS_DIMENSION
+        )
 )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")

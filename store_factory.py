@@ -1,21 +1,24 @@
+from typing import Optional, TypedDict
 from langchain_community.embeddings import OpenAIEmbeddings
 from pymongo import MongoClient
 import qdrant_client
 from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant, AtlasMongoVector
 
 
-
+class QdrantConfig(TypedDict, total=False):
+    qdrant_host: Optional[str]
+    qdrant_api_key:  Optional[str]
+    qdrant_embeddings_dimension: Optional[int]
 
 def get_vector_store(
     connection_string: str,
     embeddings: OpenAIEmbeddings,
     collection_name: str,
     mode: str = "sync",
-    qdrant_host: str = None,
-    qdrant_api_key: str = None,
-    qdrant_embeddings_dimension: int = None,
-) -> ExtendedPgVector | AsyncPgVector | AtlasMongoVector | AsyncQdrant:
-        
+    *,
+    additional_kwargs: Optional[QdrantConfig]  = None 
+):
+    
     if mode == "sync":
         return ExtendedPgVector(
             connection_string=connection_string,
@@ -34,6 +37,11 @@ def get_vector_store(
         return AtlasMongoVector(collection=mong_collection, embedding=embeddings)    
     
     elif mode == "qdrant":
+        if additional_kwargs is None:
+            additional_kwargs = {}
+        qdrant_host = additional_kwargs['qdrant_host']
+        qdrant_api_key = additional_kwargs.get['qdrant_api_key']
+        qdrant_embeddings_dimension = additional_kwargs.get('qdrant_embeddings_dimension')
         client = qdrant_client.QdrantClient(
         qdrant_host,
         api_key=qdrant_api_key
