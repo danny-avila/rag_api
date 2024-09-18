@@ -50,7 +50,7 @@ from parsers import process_documents, clean_text
 from middleware import security_middleware
 from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
-from store import AsyncPgVector
+from store import AsyncPgVector, AsyncQdrant
 from process_docs import store_documents
 
 load_dotenv(find_dotenv())
@@ -71,11 +71,10 @@ from config import (
     LogMiddleware,
     RAG_HOST,
     RAG_PORT,
-    VectorDBType,
+    VECTOR_DB_TYPE,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
-    VECTOR_DB_TYPE,
 )
 
 
@@ -90,6 +89,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,12 +122,7 @@ async def get_all_ids():
 
 
 def isHealthOK():
-    if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
-        return pg_health_check()
-    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
-        return mongo_health_check()
-    else:
-        return True
+    return pg_health_check()
 
 
 @app.get("/health")
@@ -141,7 +136,7 @@ async def health_check():
 @app.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, (AsyncPgVector, AsyncQdrant)):
             existing_ids = await vector_store.get_all_ids()
             documents = await vector_store.get_documents_by_ids(ids)
         else:
@@ -151,13 +146,6 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
         # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
-
-        # Ensure documents list is not empty
-        if not documents:
-            raise HTTPException(
-                status_code=404, detail="No documents found for the given IDs"
-            )
-
         return documents
     except HTTPException as http_exc:
         raise http_exc
@@ -166,19 +154,19 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
 
 @app.delete("/documents")
-async def delete_documents(document_ids: List[str] = Body(...)):
+async def delete_documents(ids: list[str]):
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_all_ids()
-            await vector_store.delete(ids=document_ids)
+            await vector_store.delete(ids=ids)
+            if not all(id in existing_ids for id in ids):
+                raise HTTPException(status_code=404, detail="One or more IDs not found")
+        elif isinstance(vector_store, AsyncQdrant):
+            await vector_store.delete_vectors(ids=ids)
         else:
             existing_ids = vector_store.get_all_ids()
-            vector_store.delete(ids=document_ids)
-
-        if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
-
-        file_count = len(document_ids)
+            vector_store.delete(ids=ids)
+        file_count = len(ids)
         return {
             "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
         }
@@ -194,9 +182,8 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
     authorized_documents = []
 
     try:
-        embedding = vector_store.embedding_function.embed_query(body.query)
-
         if isinstance(vector_store, AsyncPgVector):
+            embedding = vector_store.embedding_function.embed_query(body.query)
             documents = await run_in_executor(
                 None,
                 vector_store.similarity_search_with_score_by_vector,
@@ -204,7 +191,10 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
                 k=body.k,
                 filter={"file_id": body.file_id},
             )
+        elif isinstance(vector_store, AsyncQdrant):
+             documents = await vector_store.asimilarity_search_with_score(body.query, k=body.k, filter={"file_id": body.file_id})
         else:
+            embedding = vector_store.embedding_function.embed_query(body.query)
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": body.file_id}
             )
@@ -274,11 +264,9 @@ async def store_data_in_vector_db(
 
     try:
         if isinstance(vector_store, AsyncPgVector):
-            start_time = time.perf_counter()
-            ids = await store_documents(docs,ids=[file_id]*len(documents))
-            end_time = time.perf_counter()
-            elapsed = end_time - start_time 
-            logger.info(f"Finished processing {len(docs)} documents in {elapsed}")
+            ids = await vector_store.aadd_documents(
+                docs, ids=[file_id] * len(documents)
+            )
         else:
             ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
@@ -318,8 +306,6 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ] or file_ext in ["xls", "xlsx"]:
         loader = UnstructuredExcelLoader(filepath)
-    elif file_content_type == "application/json" or file_ext == "json":
-        loader = TextLoader(filepath, autodetect_encoding=True)
     elif file_ext in known_source_ext or (
         file_content_type and file_content_type.find("text/") >= 0
     ):
@@ -390,7 +376,6 @@ async def embed_file(
         user_id = "public"
     else:
         user_id = request.state.user.get("id")
-
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
@@ -546,14 +531,18 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
                 None,
-                vector_store.similarity_search_with_score_by_vector,
+                vector_store.asimilarity_search_with_score_by_vector,
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$in": body.file_ids}},
+                filter={"custom_id": {"$in": body.file_ids}},
+            )
+        elif isinstance(vector_store, AsyncQdrant):
+            documents = await vector_store.asimilarity_search_with_score_by_vector(
+                embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
             )
 
         # Ensure documents list is not empty

@@ -21,6 +21,7 @@ load_dotenv(find_dotenv())
 class VectorDBType(Enum):
     PGVECTOR = "pgvector"
     ATLAS_MONGO = "atlas-mongo"
+    QDRANT = "qdrant"
 
 
 class EmbeddingsProvider(Enum):
@@ -64,6 +65,12 @@ ATLAS_MONGO_DB_URI = get_env_variable(
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", "vector_collection"
 )
+QDRANT_HOST= get_env_variable("QDRANT_HOST", "127.0.0.1:6333")
+QDRANT_VECTOR_COLLECTION = get_env_variable(
+    "QDRANT_VECTOR_COLLECTION", "vector_collection"
+)
+QDRANT_EMBEDDINGS_DIMENSION = get_env_variable("QDRANT_EMBEDDINGS_DIMENSION", "768")
+QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY", "api_key")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
@@ -236,6 +243,7 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # Vector store
+print(VECTOR_DB_TYPE)
 if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
@@ -251,6 +259,16 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         collection_name=MONGO_VECTOR_COLLECTION,
         mode="atlas-mongo",
     )
+elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
+    vector_store = get_vector_store(
+        connection_string=QDRANT_HOST,
+        embeddings=embeddings,
+        collection_name=QDRANT_VECTOR_COLLECTION,
+        qdrant_api_key=QDRANT_API_KEY,
+        qdrant_host=QDRANT_HOST,
+        qdrant_embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION,
+        mode="qdrant",
+)
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
 

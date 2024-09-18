@@ -1,15 +1,21 @@
 from langchain_community.embeddings import OpenAIEmbeddings
-
-from store import AsyncPgVector, ExtendedPgVector
-from store import AtlasMongoVector
 from pymongo import MongoClient
+import qdrant_client
+from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant, AtlasMongoVector
+
+
+
 
 def get_vector_store(
     connection_string: str,
     embeddings: OpenAIEmbeddings,
     collection_name: str,
     mode: str = "sync",
+    qdrant_host: str = None,
+    qdrant_api_key: str = None,
+    qdrant_embeddings_dimension: int = None,
 ):
+        
     if mode == "sync":
         return ExtendedPgVector(
             connection_string=connection_string,
@@ -22,6 +28,39 @@ def get_vector_store(
             embedding_function=embeddings,
             collection_name=collection_name,
         )
+    elif mode == "atlas-mongo":
+        mongo_db = MongoClient(connection_string).get_database()
+        mong_collection = mongo_db[collection_name]
+        return AtlasMongoVector(collection=mong_collection, embedding=embeddings)    
+    
+    elif mode == "qdrant":
+        client = qdrant_client.QdrantClient(
+        qdrant_host,
+        api_key=qdrant_api_key
+        )
+
+        collection_config = qdrant_client.http.models.VectorParams(
+            size=qdrant_embeddings_dimension,
+            distance=qdrant_client.http.models.Distance.COSINE
+        )
+
+        print(f"Creating collection {collection_name}...")
+        try:
+            # Verify if collection exists
+            collection = client.get_collection(collection_name=collection_name)
+        except Exception:
+            # Recreate collection
+            client.recreate_collection(
+                collection_name=collection_name,
+                vectors_config=collection_config
+            )
+        return AsyncQdrant(
+            client=client,
+            collection_name=collection_name,
+            embeddings=embeddings
+            
+            )
+    
     elif mode == "atlas-mongo":
         mongo_db = MongoClient(connection_string).get_database()
         mong_collection = mongo_db[collection_name]

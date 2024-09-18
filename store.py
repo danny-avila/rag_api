@@ -4,6 +4,11 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
+from langchain_community.vectorstores import Qdrant
+import qdrant_client as client
+from qdrant_client.http import models
+
+
 
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
@@ -16,6 +21,7 @@ import copy
 
 
 class ExtendedPgVector(PGVector):
+    
 
     def get_all_ids(self) -> list[str]:
         with Session(self._bind) as session:
@@ -71,10 +77,53 @@ class AsyncPgVector(ExtendedPgVector):
         return await run_in_executor(None, super().get_documents_by_ids, ids)
 
     async def delete(
-        self, ids: Optional[list[str]] = None, collection_only: bool = False
-    ) -> None:
-        await run_in_executor(None, self._delete_multiple, ids, collection_only)
+            self,
+            ids: Optional[list[str]] = None,
+            collection_only: bool = False
+        ) -> None:
+            await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
+class ExtendedQdrant(Qdrant):
+    def delete_vectors_by_source_document(self, source_document_ids: list[str]) -> None:
+        points_selector = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=source_document_ids),
+                ),
+            ],
+        )
+        response = self.client.delete(collection_name=self.collection_name, points_selector=points_selector)
+        status = response.status.name
+        return status
+      
+    
+    def get_all_ids(self) -> list[str]:
+            results = self.client.scroll(
+                collection_name="{collection_name}",
+                scroll_filter=models.Filter(
+                    must_not=[
+                    models.FieldCondition(
+                        key="metadata.file_id",
+                        match=models.MatchAny(any="source_document_ids"),
+                    ),
+                ],
+                ),
+            )
+            return [result[0] for result in results if result[0] is not None]            
+class AsyncQdrant(ExtendedQdrant):
+    async def get_all_ids(self) -> list[str]:
+        return await run_in_executor(None, super().get_all_ids)
+
+    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+        return await run_in_executor(None, super().get_all_ids, ids)
+
+    async def delete_vectors(
+        self,
+        ids: Optional[list[str]] = None
+    ) -> None:
+        # Garantir que o argumento correto está sendo passado
+        await run_in_executor(None, self.delete_vectors_by_source_document, ids)
 
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
