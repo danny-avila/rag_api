@@ -14,7 +14,7 @@ def get_vector_store(
     qdrant_host: str = None,
     qdrant_api_key: str = None,
     qdrant_embeddings_dimension: int = None,
-):
+) -> ExtendedPgVector | AsyncPgVector | AtlasMongoVector | AsyncQdrant:
         
     if mode == "sync":
         return ExtendedPgVector(
