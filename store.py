@@ -1,4 +1,5 @@
 from typing import Any, Optional
+from aiohttp import Payload
 from sqlalchemy import delete
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
@@ -98,21 +99,32 @@ class ExtendedQdrant(Qdrant):
       
     
     def get_all_ids(self) -> list[str]:
-            results = self.client.scroll(
-                collection_name="{collection_name}",
-                scroll_filter=models.Filter(
-                    must_not=[
-                    models.FieldCondition(
-                        key="metadata.file_id",
-                        match=models.MatchAny(any="source_document_ids"),
-                    ),
-                ],
-                ),
+        collection_info = self.client.get_collection(self.collection_name)
+        total_points = collection_info.points_count
+
+        # Scroll through all points in the collection
+        unique_values = set()
+        pointsRec = 0
+        limit = 500  #How much to load each time
+        next_offset = None
+        while pointsRec < total_points:
+            points, next_offset = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=limit,
+                with_payload=True,
+                offset=next_offset,
             )
-            return [result[0] for result in results if result[0] is not None]            
+            for point in points:
+                unique_values.add(point.payload['metadata']['file_id'])
+
+            pointsRec += limit
+
+        return list(unique_values)         
 class AsyncQdrant(ExtendedQdrant):
     async def get_all_ids(self) -> list[str]:
-        return await run_in_executor(None, super().get_all_ids)
+        a = super().get_all_ids()
+        return a 
+        #return await run_in_executor(None, super().get_all_ids)
 
     async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         return await run_in_executor(None, super().get_all_ids, ids)
@@ -192,4 +204,4 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             self._collection.delete_many({"file_id": {"$in": ids}})
 
 
-async_DB = [AsyncPgVector, AsyncQdrant] #Add if async database implementation 
+async_DB = (AsyncPgVector, AsyncQdrant) #Add if async database implementation 

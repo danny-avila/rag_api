@@ -262,9 +262,9 @@ async def store_data_in_vector_db(
     
 
     try:
-        uuids = ["12345678-1234-5678-1234-" + ((11*"0")+str(i))[-12:] for i in range(0,len(docs))]
+        uuids = [str(uuid1()) for _ in docs]
         if isinstance(vector_store, async_DB):
-            ids = store_documents(docs, ids=uuids)
+            ids = await store_documents(docs, ids=uuids)
         else:
             ids = vector_store.add_documents(docs, ids=uuids)
 
