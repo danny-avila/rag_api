@@ -264,11 +264,9 @@ async def store_data_in_vector_db(
     
 
     try:
-        uuids = [f'{(8  * '0')}-{(4*'0')}-{(4*'0')}-{(4*'0')}-{(((11*'0')+str(i))[-12:])}' for i in range(0,len(docs))]
+        uuids = ["12345678-1234-5678-1234-" + ((11*"0")+str(i))[-12:] for i in range(0,len(docs))]
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=uuids
-            )
+            ids = store_documents(docs, ids=uuids)
         else:
             ids = vector_store.add_documents(docs, ids=uuids)
 
