@@ -181,7 +181,7 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
     authorized_documents = []
 
     try:
-        if isinstance(vector_store, async_DB = async_DB):
+        if isinstance(vector_store, async_DB):
             embedding = vector_store.embedding_function.embed_query(body.query)
             documents = await run_in_executor(
                 None,

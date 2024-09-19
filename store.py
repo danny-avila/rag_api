@@ -84,6 +84,10 @@ class AsyncPgVector(ExtendedPgVector):
             await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
 class ExtendedQdrant(Qdrant):
+    @property
+    def embedding_function(self) -> Embeddings:
+        return self.embeddings
+    
     def delete_vectors_by_source_document(self, source_document_ids: list[str]) -> None:
         points_selector = models.Filter(
             must=[
@@ -153,6 +157,7 @@ class ExtendedQdrant(Qdrant):
 
         
 class AsyncQdrant(ExtendedQdrant):
+
     async def get_all_ids(self) -> list[str]:
         return await run_in_executor(None, super().get_all_ids)
 
@@ -161,7 +166,7 @@ class AsyncQdrant(ExtendedQdrant):
 
     async def delete(
         self,
-        ids: Optional[list[str]] = None
+        ids: list[str]
     ) -> None:
         # Garantir que o argumento correto está sendo passado
         await run_in_executor(None, self.delete_vectors_by_source_document, ids)
