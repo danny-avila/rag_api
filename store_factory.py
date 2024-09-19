@@ -14,18 +14,18 @@ def get_vector_store(
     connection_string: str,
     embeddings: OpenAIEmbeddings,
     collection_name: str,
-    mode: str = "sync",
+    mode: str = "sync-PGVector",
     *,
     additional_kwargs: Optional[QdrantConfig]  = None 
 ):
     
-    if mode == "sync":
+    if mode == "sync-PGVector":
         return ExtendedPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
         )
-    elif mode == "async":
+    elif mode == "async-PGVector":
         return AsyncPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,

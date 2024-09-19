@@ -249,7 +249,7 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
-        mode="async",
+        mode="async-PGVector",
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     logger.warning("Using Atlas MongoDB as vector store is not fully supported yet.")
@@ -273,6 +273,7 @@ elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
 )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
+
 
 retriever = vector_store.as_retriever()
 

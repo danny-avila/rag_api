@@ -19,7 +19,6 @@ from typing import (
 )
 import copy
 
-
 class ExtendedPgVector(PGVector):
     
 
@@ -118,7 +117,7 @@ class AsyncQdrant(ExtendedQdrant):
     async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         return await run_in_executor(None, super().get_all_ids, ids)
 
-    async def delete_vectors(
+    async def delete(
         self,
         ids: Optional[list[str]] = None
     ) -> None:
@@ -191,3 +190,6 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         # implement the deletion of documents by file_id in self._collection
         if ids is not None:
             self._collection.delete_many({"file_id": {"$in": ids}})
+
+
+async_DB = [AsyncPgVector, AsyncQdrant] #Add if async database implementation 

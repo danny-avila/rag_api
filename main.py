@@ -51,7 +51,7 @@ from parsers import process_documents, clean_text
 from middleware import security_middleware
 from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
-from store import AsyncPgVector, AsyncQdrant
+from store import AsyncPgVector, AsyncQdrant, async_DB 
 from process_docs import store_documents
 
 load_dotenv(find_dotenv())
@@ -112,7 +112,7 @@ app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 @app.get("/ids")
 async def get_all_ids():
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB):
             ids = await vector_store.get_all_ids()
         else:
             ids = vector_store.get_all_ids()
@@ -137,7 +137,7 @@ async def health_check():
 @app.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
-        if isinstance(vector_store, (AsyncPgVector, AsyncQdrant)):
+        if isinstance(vector_store, async_DB):
             existing_ids = await vector_store.get_all_ids()
             documents = await vector_store.get_documents_by_ids(ids)
         else:
@@ -157,13 +157,11 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 @app.delete("/documents")
 async def delete_documents(ids: list[str]):
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB):
             existing_ids = await vector_store.get_all_ids()
             await vector_store.delete(ids=ids)
             if not all(id in existing_ids for id in ids):
                 raise HTTPException(status_code=404, detail="One or more IDs not found")
-        elif isinstance(vector_store, AsyncQdrant):
-            await vector_store.delete_vectors(ids=ids)
         else:
             existing_ids = vector_store.get_all_ids()
             vector_store.delete(ids=ids)
@@ -183,7 +181,7 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
     authorized_documents = []
 
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB = async_DB):
             embedding = vector_store.embedding_function.embed_query(body.query)
             documents = await run_in_executor(
                 None,
@@ -265,7 +263,7 @@ async def store_data_in_vector_db(
 
     try:
         uuids = ["12345678-1234-5678-1234-" + ((11*"0")+str(i))[-12:] for i in range(0,len(docs))]
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB):
             ids = store_documents(docs, ids=uuids)
         else:
             ids = vector_store.add_documents(docs, ids=uuids)
@@ -443,7 +441,7 @@ async def embed_file(
 async def load_document_context(id: str):
     ids = [id]
     try:
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB):
             existing_ids = await vector_store.get_all_ids()
             documents = await vector_store.get_documents_by_ids(ids)
         else:
@@ -528,7 +526,7 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         embedding = vector_store.embedding_function.embed_query(body.query)
 
         # Perform similarity search with the query embedding and filter by the file_ids in metadata
-        if isinstance(vector_store, AsyncPgVector):
+        if isinstance(vector_store, async_DB):
             documents = await run_in_executor(
                 None,
                 vector_store.asimilarity_search_with_score_by_vector,
