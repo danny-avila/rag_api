@@ -116,18 +116,48 @@ class ExtendedQdrant(Qdrant):
             )
             for point in points:
                 unique_values.add(point.payload['metadata']['file_id'])
-
             pointsRec += limit
+        return list(unique_values)     
 
-        return list(unique_values)         
+    def get_documents_by_ids(self, ids: list[str]):
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=ids)
+                )
+            ]
+        )
+        limit = 500
+        next_offset = None
+        docList = []
+        while True:
+            results = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=filter,
+                limit=limit,
+                offset=next_offset
+            )
+            points, next_offset = results
+            if points:
+                docList.extend([Document(page_content=point.payload['page_content'],
+                         metadata=point.payload['metadata']
+                        ) 
+                           for point in points 
+                           ])
+            if not next_offset:
+                break
+        return docList
+            
+        
+
+        
 class AsyncQdrant(ExtendedQdrant):
     async def get_all_ids(self) -> list[str]:
-        a = super().get_all_ids()
-        return a 
-        #return await run_in_executor(None, super().get_all_ids)
+        return await run_in_executor(None, super().get_all_ids)
 
     async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        return await run_in_executor(None, super().get_all_ids, ids)
+        return await run_in_executor(None, super().get_documents_by_ids, ids)
 
     async def delete(
         self,
