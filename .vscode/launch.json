@@ -3,7 +3,7 @@
   "configurations": [
       {
           "name": "Debug FastAPI",
-          "type": "debugpy",
+          "type": "python",
           "request": "launch",
           "module": "uvicorn",
           "args": [
@@ -13,6 +13,19 @@
               "--reload"
           ],
           "jinja": true
-      }
+      },
+      {
+        "name": "Debug FastAPI (debugpy)",
+        "type": "debugpy",
+        "request": "launch",
+        "module": "uvicorn",
+        "args": [
+            "main:app",
+            "--port",
+            "8000",
+            "--reload"
+        ],
+        "jinja": true
+    }
   ]
 }
