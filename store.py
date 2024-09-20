@@ -171,6 +171,17 @@ class AsyncQdrant(ExtendedQdrant):
         # Garantir que o argumento correto está sendo passado
         await run_in_executor(None, self.delete_vectors_by_source_document, ids)
 
+    async def similarity_search_many(self, embedding, k:int, ids:list[str])-> List[Tuple[Document, float]]:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=ids)
+                )
+            ]
+        )
+        results =  await self.asimilarity_search_with_score_by_vector(embedding=embedding, k=k, filter=filter)
+        return results
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
     def embedding_function(self) -> Embeddings:

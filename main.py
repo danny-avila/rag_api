@@ -190,8 +190,6 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
                 k=body.k,
                 filter={"file_id": body.file_id},
             )
-        elif isinstance(vector_store, AsyncQdrant):
-             documents = await vector_store.asimilarity_search_with_score(body.query, k=body.k, filter={"file_id": body.file_id})
         else:
             embedding = vector_store.embedding_function.embed_query(body.query)
             documents = vector_store.similarity_search_with_score_by_vector(
@@ -526,7 +524,7 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         embedding = vector_store.embedding_function.embed_query(body.query)
 
         # Perform similarity search with the query embedding and filter by the file_ids in metadata
-        if isinstance(vector_store, async_DB):
+        if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
                 None,
                 vector_store.asimilarity_search_with_score_by_vector,
@@ -535,9 +533,12 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
                 filter={"custom_id": {"$in": body.file_ids}},
             )
         elif isinstance(vector_store, AsyncQdrant):
-            documents = await vector_store.asimilarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
-            )
+            documents = await vector_store.similarity_search_many(
+                embedding=embedding,
+                k=body.k,
+                ids=body.file_ids)
+
+            
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"custom_id": {"$in": body.file_ids}}
