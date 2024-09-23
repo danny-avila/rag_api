@@ -1,6 +1,6 @@
 from typing import Any, Optional
 from aiohttp import Payload
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
@@ -25,20 +25,19 @@ class ExtendedPgVector(PGVector):
 
     def get_all_ids(self) -> list[str]:
         with Session(self._bind) as session:
-            results = session.query(self.EmbeddingStore.custom_id).all()
-            return [result[0] for result in results if result[0] is not None]
+            results = session.query(
+                func.json_extract_path_text(self.EmbeddingStore.cmetadata,'file_id').label('file_id')
+                ).distinct().all()
+            return [id.file_id for id in results]
 
     def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         with Session(self._bind) as session:
-            results = (
-                session.query(self.EmbeddingStore)
-                .filter(self.EmbeddingStore.custom_id.in_(ids))
-                .all()
-            )
-            return [
-                Document(page_content=result.document, metadata=result.cmetadata or {})
-                for result in results
-                if result.custom_id in ids
+         results = session.query(self.EmbeddingStore).filter(
+            func.json_extract_path_text(self.EmbeddingStore.cmetadata, 'file_id').in_(ids)
+        ).all()
+        return [
+            Document(page_content=result.document, metadata=result.cmetadata or {})
+            for result in results
             ]
 
     def _delete_multiple(
@@ -48,7 +47,7 @@ class ExtendedPgVector(PGVector):
             if ids is not None:
                 self.logger.debug(
                     "Trying to delete vectors by ids (represented by the model "
-                    "using the custom ids field)"
+                    "using the custom file_id field in cmetadata)"
                 )
 
                 stmt = delete(self.EmbeddingStore)
@@ -62,8 +61,8 @@ class ExtendedPgVector(PGVector):
                     stmt = stmt.where(
                         self.EmbeddingStore.collection_id == collection.uuid
                     )
-
-                stmt = stmt.where(self.EmbeddingStore.custom_id.in_(ids))
+                
+                stmt = stmt.where(func.json_extract_path_text(self.EmbeddingStore.cmetadata, 'file_id').in_(ids))
                 session.execute(stmt)
             session.commit()
 
@@ -153,9 +152,7 @@ class ExtendedQdrant(Qdrant):
                 break
         return docList
             
-        
-
-        
+  
 class AsyncQdrant(ExtendedQdrant):
 
     async def get_all_ids(self) -> list[str]:
