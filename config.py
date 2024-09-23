@@ -5,11 +5,8 @@ import logging
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
-from langchain_community.embeddings import (
-    HuggingFaceEmbeddings,
-    HuggingFaceHubEmbeddings,
-    OllamaEmbeddings,
-)
+from langchain_ollama import OllamaEmbeddings 
+from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpointEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
 from store_factory import get_vector_store
@@ -195,7 +192,7 @@ def init_embeddings(provider, model):
             model_name=model, encode_kwargs={"normalize_embeddings": True}
         )
     elif provider == EmbeddingsProvider.HUGGINGFACETEI:
-        return HuggingFaceHubEmbeddings(model=model)
+        return HuggingFaceEndpointEmbeddings(model=model)
     elif provider == EmbeddingsProvider.OLLAMA:
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
     else:

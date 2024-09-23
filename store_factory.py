@@ -1,12 +1,11 @@
-from langchain_community.embeddings import OpenAIEmbeddings
-
+from langchain_core.embeddings import Embeddings
 from store import AsyncPgVector, ExtendedPgVector
 from store import AtlasMongoVector
 from pymongo import MongoClient
 
 def get_vector_store(
     connection_string: str,
-    embeddings: OpenAIEmbeddings,
+    embeddings: Embeddings,
     collection_name: str,
     mode: str = "sync",
 ):
