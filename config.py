@@ -171,6 +171,8 @@ RAG_AZURE_OPENAI_ENDPOINT = get_env_variable(
 ).rstrip("/")
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
+AWS_ACCESS_KEY = get_env_variable("AWS_ACCESS_KEY", "")
+AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 
 ## Embeddings
 
@@ -199,7 +201,7 @@ def init_embeddings(provider, model):
     elif provider == EmbeddingsProvider.OLLAMA:
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
     elif provider == EmbeddingsProvider.BEDROCK:
-        return BedrockEmbeddings(model_id=model, region_name=AWS_REGION) 
+        return BedrockEmbeddings(model_id=model, region_name=AWS_REGION, ) 
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
