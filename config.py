@@ -237,8 +237,9 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     vector_store = get_vector_store(
         connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,
-        collection_name=MONGO_VECTOR_COLLECTION,
+        collection_name=COLLECTION_NAME,
         mode="atlas-mongo",
+        vector_collection=MONGO_VECTOR_COLLECTION,
     )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
