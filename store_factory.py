@@ -1,5 +1,7 @@
+from langchain_core.embeddings import Embeddings
 from typing import Optional, TypedDict
-from langchain_community.embeddings import OpenAIEmbeddings
+from store import AsyncPgVector, ExtendedPgVector
+from store import AtlasMongoVector
 from pymongo import MongoClient
 import qdrant_client
 from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant, AtlasMongoVector
@@ -12,7 +14,7 @@ class QdrantConfig(TypedDict, total=False):
 
 def get_vector_store(
     connection_string: str,
-    embeddings: OpenAIEmbeddings,
+    embeddings: Embeddings,
     collection_name: str,
     mode: str = "sync-PGVector",
     *,
