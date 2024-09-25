@@ -5,7 +5,7 @@ import logging
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
-from langchain_ollama import OllamaEmbeddings 
+from langchain_ollama import OllamaEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpointEmbeddings
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -57,10 +57,10 @@ COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
 )
-ATLAS_SEARCH_INDEX = get_env_variable(
-    "ATLAS_SEARCH_INDEX", 'vector_index'
-)
-
+ATLAS_SEARCH_INDEX = get_env_variable("ATLAS_SEARCH_INDEX", "vector_index")
+MONGO_VECTOR_COLLECTION = get_env_variable(
+    "MONGO_VECTOR_COLLECTION", None
+)  # Deprecated, backwards compatability
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
@@ -233,6 +233,11 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         mode="async",
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+    # Backward compatability check
+    if MONGO_VECTOR_COLLECTION:
+        logger.info(f"DEPRECATED: Please remove env var MONGO_VECTOR_COLLECTION and instead use COLLECTION_NAME and ATLAS_SEARCH_INDEX. You can set both as same, but not neccessary. See README for more information.")
+        ATLAS_SEARCH_INDEX = MONGO_VECTOR_COLLECTION
+        COLLECTION_NAME = MONGO_VECTOR_COLLECTION
     vector_store = get_vector_store(
         connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,

@@ -78,7 +78,7 @@ The following environment variables are required to run the application:
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 - `ATLAS_SEARCH_INDEX`: (Optional) the name of the vector search index if using Atlas MongoDB, defaults to `vector_index`
-- `MONGO_VECTOR_COLLECTION`: Deprecated, no longer works with MongoDB
+- `MONGO_VECTOR_COLLECTION`: Deprecated for MongoDB, please use `ATLAS_SEARCH_INDEX` and `COLLECTION_NAME`
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
