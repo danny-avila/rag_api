@@ -80,6 +80,9 @@ The following environment variables are required to run the application:
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 - `ATLAS_SEARCH_INDEX`: (Optional) the name of the vector search index if using Atlas MongoDB, defaults to `vector_index`
 - `MONGO_VECTOR_COLLECTION`: Deprecated for MongoDB, please use `ATLAS_SEARCH_INDEX` and `COLLECTION_NAME`
+- `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
+- `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
+- `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
