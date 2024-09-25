@@ -92,7 +92,7 @@ COLLECTION_NAME=<vector collection>
 ATLAS_SEARCH_INDEX=<vector search index>
 ```
 
-The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In additional,  create a vector search index for `$ATLAS_SEARCH_INDEX` with the following json:
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition,  create a vector search index for collection above, remember to assign `$ATLAS_SEARCH_INDEX`, with the following json:
 
 ```json
 {
