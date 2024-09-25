@@ -6,9 +6,8 @@ from store import AsyncPgVector, ExtendedPgVector, AsyncQdrant, AtlasMongoVector
 
 
 class QdrantConfig(TypedDict, total=False):
-    qdrant_host: Optional[str]
     qdrant_api_key:  Optional[str]
-    qdrant_embeddings_dimension: Optional[int]
+    embeddings_dimension: Optional[int]
 
 def get_vector_store(
     connection_string: str,
@@ -39,11 +38,10 @@ def get_vector_store(
     elif mode == "qdrant":
         if additional_kwargs is None:
             additional_kwargs = {}
-        qdrant_host = additional_kwargs['qdrant_host']
         qdrant_api_key = additional_kwargs['qdrant_api_key']
-        qdrant_embeddings_dimension = additional_kwargs['qdrant_embeddings_dimension']
+        qdrant_embeddings_dimension = additional_kwargs['embeddings_dimension']
         client = qdrant_client.QdrantClient(
-        qdrant_host,
+        url=connection_string,
         api_key=qdrant_api_key
         )
         collection_config = qdrant_client.http.models.VectorParams(

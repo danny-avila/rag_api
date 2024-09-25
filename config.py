@@ -66,10 +66,10 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", "vector_collection"
 )
 QDRANT_HOST= get_env_variable("QDRANT_HOST", "127.0.0.1:6333")
-QDRANT_VECTOR_COLLECTION = get_env_variable(
-    "QDRANT_VECTOR_COLLECTION", "vector_collection"
+COLLECTION_NAME = get_env_variable(
+    "COLLECTION_NAME", "vector_collection"
 )
-QDRANT_EMBEDDINGS_DIMENSION = get_env_variable("QDRANT_EMBEDDINGS_DIMENSION", "768")
+EMBEDDINGS_DIMENSION = get_env_variable("EMBEDDINGS_DIMENSION", "768")
 QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY")
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
@@ -263,12 +263,11 @@ elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
     vector_store = get_vector_store(
         connection_string=QDRANT_HOST,
         embeddings=embeddings,
-        collection_name=QDRANT_VECTOR_COLLECTION,
+        collection_name=COLLECTION_NAME,
         mode="qdrant",
         additional_kwargs = QdrantConfig(
-            qdrant_host=QDRANT_HOST,
             qdrant_api_key=QDRANT_API_KEY,
-            qdrant_embeddings_dimension=QDRANT_EMBEDDINGS_DIMENSION
+            embeddings_dimension=EMBEDDINGS_DIMENSION
         )
 )
 else:
