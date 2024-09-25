@@ -58,7 +58,7 @@ ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
 )
 ATLAS_SEARCH_INDEX = get_env_variable(
-    "ATLAS_SEARCH_INDEX", "vector_collection"
+    "ATLAS_SEARCH_INDEX", 'vector_index'
 )
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
@@ -233,7 +233,6 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         mode="async",
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
-    logger.warning("Using Atlas MongoDB as vector store is not fully supported yet.")
     vector_store = get_vector_store(
         connection_string=ATLAS_MONGO_DB_URI,
         embeddings=embeddings,
