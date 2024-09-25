@@ -238,7 +238,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable(
-        "BEDROCK_AWS_DEFAULT_REGION", "us-east-1"
+        "AWS_DEFAULT_REGION", "us-east-1"
     )
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
