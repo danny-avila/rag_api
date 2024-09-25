@@ -57,8 +57,8 @@ COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
 )
-MONGO_VECTOR_COLLECTION = get_env_variable(
-    "MONGO_VECTOR_COLLECTION", "vector_collection"
+ATLAS_SEARCH_INDEX = get_env_variable(
+    "ATLAS_SEARCH_INDEX", "vector_collection"
 )
 
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
@@ -239,7 +239,7 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
         mode="atlas-mongo",
-        vector_collection=MONGO_VECTOR_COLLECTION,
+        search_index=ATLAS_SEARCH_INDEX,
     )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")

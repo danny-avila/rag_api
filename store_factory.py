@@ -10,7 +10,7 @@ def get_vector_store(
     embeddings: Embeddings,
     collection_name: str,
     mode: str = "sync",
-    vector_collection: Optional[str] = None 
+    search_index: Optional[str] = None 
 ):
     if mode == "sync":
         return ExtendedPgVector(
@@ -28,7 +28,7 @@ def get_vector_store(
         mongo_db = MongoClient(connection_string).get_database()
         mong_collection = mongo_db[collection_name]
         return AtlasMongoVector(
-            collection=mong_collection, embedding=embeddings, index_name=vector_collection
+            collection=mong_collection, embedding=embeddings, index_name=search_index
         )
 
     else:
