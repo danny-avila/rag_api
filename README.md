@@ -77,6 +77,8 @@ The following environment variables are required to run the application:
     - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
+- `ATLAS_SEARCH_INDEX`: (Optional) the name of the vector search index if using Atlas MongoDB, defaults to `vector_index`
+- `MONGO_VECTOR_COLLECTION`: Deprecated for MongoDB, please use `ATLAS_SEARCH_INDEX` and `COLLECTION_NAME`
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
@@ -87,10 +89,11 @@ Instead of using the default pgvector, we could use [Atlas MongoDB](https://www.
 ```env
 VECTOR_DB_TYPE=atlas-mongo
 ATLAS_MONGO_DB_URI=<mongodb+srv://...>
-MONGO_VECTOR_COLLECTION=<collection name>
+COLLECTION_NAME=<vector collection>
+ATLAS_SEARCH_INDEX=<vector search index>
 ```
 
-The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$MONGO_VECTOR_COLLECTION` collection needs to be a completely new one, separate from all collections used by LibreChat. In additional,  create a vector search index for  `$MONGO_VECTOR_COLLECTION`  with the following json:
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition,  create a vector search index for collection above (remember to assign `$ATLAS_SEARCH_INDEX`) with the following json:
 
 ```json
 {
