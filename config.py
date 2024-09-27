@@ -1,15 +1,11 @@
 # config.py
 import os
 import json
-import logging
 import boto3
+import logging
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
-from langchain_ollama import OllamaEmbeddings
-from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceEndpointEmbeddings
-from langchain_aws import BedrockEmbeddings
-from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from starlette.middleware.base import BaseHTTPMiddleware
 from store_factory import get_vector_store
 
@@ -179,6 +175,8 @@ AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 
 def init_embeddings(provider, model):
     if provider == EmbeddingsProvider.OPENAI:
+        from langchain_openai import OpenAIEmbeddings
+
         return OpenAIEmbeddings(
             model=model,
             api_key=RAG_OPENAI_API_KEY,
@@ -186,6 +184,8 @@ def init_embeddings(provider, model):
             openai_proxy=RAG_OPENAI_PROXY,
         )
     elif provider == EmbeddingsProvider.AZURE:
+        from langchain_openai import AzureOpenAIEmbeddings
+
         return AzureOpenAIEmbeddings(
             azure_deployment=model,
             api_key=RAG_AZURE_OPENAI_API_KEY,
@@ -193,14 +193,22 @@ def init_embeddings(provider, model):
             api_version=RAG_AZURE_OPENAI_API_VERSION,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
         return HuggingFaceEmbeddings(
             model_name=model, encode_kwargs={"normalize_embeddings": True}
         )
     elif provider == EmbeddingsProvider.HUGGINGFACETEI:
+        from langchain_huggingface import HuggingFaceEndpointEmbeddings
+
         return HuggingFaceEndpointEmbeddings(model=model)
     elif provider == EmbeddingsProvider.OLLAMA:
+        from langchain_ollama import OllamaEmbeddings
+
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
     elif provider == EmbeddingsProvider.BEDROCK:
+        from langchain_aws import BedrockEmbeddings
+
         session = boto3.Session(
             aws_access_key_id=AWS_ACCESS_KEY_ID,
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
@@ -237,9 +245,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
-    AWS_DEFAULT_REGION = get_env_variable(
-        "AWS_DEFAULT_REGION", "us-east-1"
-    )
+    AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
@@ -258,7 +264,9 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     # Backward compatability check
     if MONGO_VECTOR_COLLECTION:
-        logger.info(f"DEPRECATED: Please remove env var MONGO_VECTOR_COLLECTION and instead use COLLECTION_NAME and ATLAS_SEARCH_INDEX. You can set both as same, but not neccessary. See README for more information.")
+        logger.info(
+            f"DEPRECATED: Please remove env var MONGO_VECTOR_COLLECTION and instead use COLLECTION_NAME and ATLAS_SEARCH_INDEX. You can set both as same, but not neccessary. See README for more information."
+        )
         ATLAS_SEARCH_INDEX = MONGO_VECTOR_COLLECTION
         COLLECTION_NAME = MONGO_VECTOR_COLLECTION
     vector_store = get_vector_store(
