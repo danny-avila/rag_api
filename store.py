@@ -80,6 +80,14 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
     def embedding_function(self) -> Embeddings:
         return self.embeddings
+    
+    def add_documents(self, docs: list[Document], ids: list[str]):
+        #{file_id}_{idx}
+        new_ids = [id for id in range(len(ids))]
+        file_id = docs[0].metadata['file_id']
+        f_ids = [f'{file_id}_{id}' for id in new_ids]
+        return super().add_documents(docs, f_ids)
+
 
     def similarity_search_with_score_by_vector(
         self,
