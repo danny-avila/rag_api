@@ -57,6 +57,11 @@ The following environment variables are required to run the application:
 - `COLLECTION_NAME`: (Optional) The name of the collection in the vector store. Default value is "testcollection".
 - `CHUNK_SIZE`: (Optional) The size of the chunks for text processing. Default value is "1500".
 - `CHUNK_OVERLAP`: (Optional) The overlap between chunks during text processing. Default value is "100".
+- `MAX_CHUNKS`: (Optional) The max number of chunks to process in one file. Default is unlimited.
+- `EMBEDDING_TIMEOUT`: (Optional) The time limit for processsing (embedding) chunks. Default value is "100000" (100s)
+- `BATCH_SIZE`: (Optional) The number of chunks to embed and add to vector storage in each api call. Default value is "75"
+  - Note: Ideal (fastest total embedding time) `BATCH_SIZE` will depend on embeddings provider, model, and file size
+- `CONCURRENT_LIMIT`: The max number of async embedding api calls allowed concurrently. Default value is 20
 - `RAG_UPLOAD_DIR`: (Optional) The directory where uploaded files are stored. Default value is "./uploads/".
 - `PDF_EXTRACT_IMAGES`: (Optional) A boolean value indicating whether to extract images from PDF files. Default value is "False".
 - `DEBUG_RAG_API`: (Optional) Set to "True" to show more verbose logging output in the server console, and to enable postgresql database routes
