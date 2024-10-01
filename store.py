@@ -1,9 +1,13 @@
 from typing import Any, Optional
-from sqlalchemy import delete
+from sqlalchemy import delete, func
 from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
+import qdrant_client as client
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client.http import models
+from uuid import uuid1
 
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
@@ -13,6 +17,7 @@ from typing import (
     Tuple,
 )
 import copy
+
 
 
 class ExtendedPgVector(PGVector):
@@ -75,6 +80,107 @@ class AsyncPgVector(ExtendedPgVector):
     ) -> None:
         await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
+            
+class ExtendedQdrant(QdrantVectorStore):
+    @property
+    def embedding_function(self) -> Embeddings:
+        return self.embeddings
+    
+    def delete_vectors_by_source_document(self, source_document_ids: list[str]) -> None:
+        points_selector = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=source_document_ids),
+                ),
+            ],
+        )
+        response = self.client.delete(collection_name=self.collection_name, points_selector=points_selector)
+        status = response.status.name
+        return status
+      
+    
+    def get_all_ids(self) -> list[str]:
+        collection_info = self.client.get_collection(self.collection_name)
+        total_points = collection_info.points_count
+
+        # Scroll through all points in the collection
+        unique_values = set()
+        pointsRec = 0
+        limit = 500  #How much to load each time
+        next_offset = None
+        while pointsRec < total_points:
+            points, next_offset = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=limit,
+                with_payload=True,
+                offset=next_offset,
+            )
+            for point in points:
+                unique_values.add(point.payload['metadata']['file_id'])
+            pointsRec += limit
+        return list(unique_values)     
+
+    def get_documents_by_ids(self, ids: list[str]):
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=ids)
+                )
+            ]
+        )
+        limit = 500
+        next_offset = None
+        docList = []
+        while True:
+            results = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=filter,
+                limit=limit,
+                offset=next_offset
+            )
+            points, next_offset = results
+            if points:
+                docList.extend([Document(page_content=point.payload['page_content'],
+                         metadata=point.payload['metadata']
+                        ) 
+                           for point in points 
+                           ])
+            if not next_offset:
+                break
+        return docList
+            
+  
+class AsyncQdrant(ExtendedQdrant):
+
+    async def get_all_ids(self) -> list[str]:
+        return await run_in_executor(None, super().get_all_ids)
+
+    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+        return await run_in_executor(None, super().get_documents_by_ids, ids)
+
+    async def delete(
+        self,
+        ids: list[str]
+    ) -> None:
+        # Garantir que o argumento correto está sendo passado
+        await run_in_executor(None, self.delete_vectors_by_source_document, ids)
+
+    async def similarity_search_many(self, query:str, k:int, ids:list[str])-> List[Tuple[Document, float]]:
+        filter = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="metadata.file_id",
+                    match=models.MatchAny(any=ids)
+                )
+            ]
+        )
+        results =  await self.asimilarity_search_with_score(query=query, k=k, filter=filter)
+        return results
+    
+    async def aadd_documents(self, docs: list[Document], ids: list[str]):
+        return await super().aadd_documents(docs)
 
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
@@ -150,3 +256,4 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         # implement the deletion of documents by file_id in self._collection
         if ids is not None:
             self._collection.delete_many({"file_id": {"$in": ids}})
+

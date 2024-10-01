@@ -15,6 +15,7 @@ load_dotenv(find_dotenv())
 class VectorDBType(Enum):
     PGVECTOR = "pgvector"
     ATLAS_MONGO = "atlas-mongo"
+    QDRANT="qdrant"
 
 
 class EmbeddingsProvider(Enum):
@@ -60,13 +61,16 @@ ATLAS_SEARCH_INDEX = get_env_variable("ATLAS_SEARCH_INDEX", "vector_index")
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", None
 )  # Deprecated, backwards compatability
+COLLECTION_NAME = get_env_variable(
+    "COLLECTION_NAME", "vector_collection"
+)
+QDRANT_API_KEY = get_env_variable("QDRANT_API_KEY")
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
-CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
 
 ## Logging
@@ -255,11 +259,12 @@ logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # Vector store
 if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+    CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
     vector_store = get_vector_store(
         connection_string=CONNECTION_STRING,
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
-        mode="async",
+        mode="async-PGVector",
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     # Backward compatability check
@@ -276,6 +281,16 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         mode="atlas-mongo",
         search_index=ATLAS_SEARCH_INDEX,
     )
+elif VECTOR_DB_TYPE == VectorDBType.QDRANT:
+    CONNECTION_STRING = f"{DB_HOST}:{DB_PORT}"
+    vector_store = get_vector_store(
+        connection_string=CONNECTION_STRING,
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="qdrant",
+        api_key=QDRANT_API_KEY
+        
+)
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
 
