@@ -83,6 +83,7 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
+- `QDRANT_API_KEY`: (Optional) api key, not needed for docker container
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
@@ -118,6 +119,19 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
+### Use Qdrant as Vector Database
+
+Additionally, we can use [Qdrant](https://qdrant.tech/documentation/) as the vector database. To do so, set the following environment variables
+
+```env
+VECTOR_DB_TYPE=qdrant
+DB_HOST=<host address>
+DB_PORT=<port number>
+COLLECTION_NAME=<vector collection>
+QDRANT_API_KEY=<api key>
+```
+
+To download qdrant docker image: `docker pull qdrant/qdrant` and start container on port 6333: `docker run -p 6333:6333 qdrant/qdrant`. Set `DB_HOST=localhost` and `DB_PORT=6333`. Will automatically create a collection of name `COLLECTION_NAME` if not already exists. `QDRANT_API_KEY` not neccesary to use. 
 
 ### Cloud Installation Settings:
 
