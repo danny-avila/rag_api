@@ -55,6 +55,11 @@ def get_vector_store(
             collection_name=collection_name,
             vectors_config=collection_config
             )
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name="metadata.file_id",
+                field_schema="keyword",
+            )
         return AsyncQdrant(
             client=client,
             collection_name=collection_name,
