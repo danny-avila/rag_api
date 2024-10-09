@@ -1,16 +1,19 @@
 from typing import Optional
 from langchain_core.embeddings import Embeddings
-from store import AsyncPgVector, ExtendedPgVector
+from store import AsyncPgVector, ExtendedPCVector, ExtendedPgVector
 from store import AtlasMongoVector
 from pymongo import MongoClient
-
+from pinecone import Pinecone 
+from pinecone import ServerlessSpec
+import time
 
 def get_vector_store(
     connection_string: str,
     embeddings: Embeddings,
     collection_name: str,
     mode: str = "sync",
-    search_index: Optional[str] = None 
+    search_index: Optional[str] = None,
+    api_key: Optional[str]  = None
 ):
     if mode == "sync":
         return ExtendedPgVector(
@@ -30,7 +33,24 @@ def get_vector_store(
         return AtlasMongoVector(
             collection=mong_collection, embedding=embeddings, index_name=search_index
         )
-
+    elif mode == "pinecone":
+        region = connection_string
+        index_name = collection_name
+        pc = Pinecone(api_key)
+        spec = ServerlessSpec(cloud="aws", region=region)
+        existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
+        if index_name not in existing_indexes:
+            pc.create_index(
+            name=index_name,
+            dimension=get_dimension_size(embeddings),
+            metric="cosine",
+            spec=spec,
+    )
+            while not pc.describe_index(index_name).status["ready"]:
+                time.sleep(1)
+        host = pc.describe_index(index_name).host
+        index = pc.Index(host=host)
+        return ExtendedPCVector(index=index, embedding=embeddings)
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
 
@@ -61,3 +81,6 @@ async def create_index_if_not_exists(conn, table_name: str, column_name: str):
         print(f"Index {index_name} created on {table_name}.{column_name}")
     else:
         print(f"Index {index_name} already exists on {table_name}.{column_name}")
+
+def get_dimension_size(embeddings:Embeddings):
+    return len(embeddings.embed_query("Dimensions"))

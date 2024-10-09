@@ -83,6 +83,7 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
+- `PINECONE_API_KEY`: (Optional) needed for pinecone vector database
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
@@ -97,7 +98,7 @@ COLLECTION_NAME=<vector collection>
 ATLAS_SEARCH_INDEX=<vector search index>
 ```
 
-The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition,  create a vector search index for collection above (remember to assign `$ATLAS_SEARCH_INDEX`) with the following json:
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition, create a vector search index for collection above (remember to assign `$ATLAS_SEARCH_INDEX`) with the following json:
 
 ```json
 {
@@ -118,6 +119,18 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
+### Use Pinecone as Vector Database
+
+Another option for a vector database, we could use [Pinecone](https://www.pinecone.io/). To do so, set the following environment variables along with creating a pinecone account to get api key.
+
+```env
+VECTOR_DB_TYPE=pinecone
+COLLECTION_NAME=<index name>
+PINECOIN_API_KEY=<api key>
+AWS_DEFAULT_REGION=<defaults 'us-east-1'>
+```
+
+A new index with name `COLLECTION_NAME` will be created automatically if one does not already exist in your Pinecone vector database.
 
 ### Cloud Installation Settings:
 

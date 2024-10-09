@@ -4,7 +4,7 @@ from langchain_community.vectorstores.pgvector import PGVector
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
 from sqlalchemy.orm import Session
-
+from langchain_pinecone import PineconeVectorStore
 from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
 from typing import (
@@ -150,3 +150,87 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         # implement the deletion of documents by file_id in self._collection
         if ids is not None:
             self._collection.delete_many({"file_id": {"$in": ids}})
+
+
+class ExtendedPCVector(PineconeVectorStore):
+    @property
+    def embedding_function(self) -> Embeddings:
+        return self.embeddings
+
+    def add_documents(self, docs: list[Document], ids: list[str]):
+        # {file_id}_{idx}
+        new_ids = [id for id in range(len(ids))]
+        file_id = docs[0].metadata["file_id"]
+        f_ids = [f"{file_id}_{id}" for id in new_ids]
+        return super().add_documents(docs, ids=f_ids)
+
+    def get_ids_prefix(self, file_id: str) -> list[str]:
+        prefix = file_id + "_"
+        ids = []
+        for results in self._index.list(prefix=prefix, namespace=self._namespace):
+            ids.extend(results)
+        return ids
+
+    def get_all_ids(self) -> List[str]:
+        baseIDs = set()
+        for ids in self._index.list(namespace=self._namespace):
+            for id in ids:
+                splitIndex = id.rfind('_')
+                base = id[:splitIndex]
+                baseIDs.add(base)
+        return list(baseIDs)
+
+    def get_documents_by_ids(self, ids: List[str]) -> List[Document]:
+        idList = []
+        for id in ids:
+            result = self.get_ids_prefix(id)
+            idList.extend(result)
+        results = self._index.fetch(idList)
+        documents = []
+        for vector in results["vectors"]:
+            metadata = results["vectors"][vector]["metadata"]
+            metadataF = {
+                "file_id": metadata["file_id"],
+                "digest": metadata["digest"],
+                "source": metadata["source"],
+                "user_id": metadata["user_id"],
+            }
+            doc = Document(page_content=metadata["text"], metadata=metadataF)
+            documents.append(doc)
+        return documents
+
+    def delete(self, ids: Optional[List[str]] = None) -> None:
+        for id in ids:
+            idList = self.get_ids_prefix(id)
+            self._index.delete(ids=idList, namespace=self._namespace)
+            # Deletes based on prefix, more efficient but delete more if names overlap, implement for all?
+
+    def similarity_search_with_score_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        filter: Optional[dict] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        """
+        Perform a similarity search with scores using an embedding vector.
+        """
+        query_results = self._index.query(
+            vector=embedding,
+            top_k=k,
+            include_metadata=True,
+            filter=filter,
+            namespace=self._namespace,
+            **kwargs,
+        )
+        docs = query_results["matches"]
+        processed_documents = []
+        for match in docs:
+            metadata = match["metadata"]
+            if "metadata" in metadata and "_id" in metadata["metadata"]:
+                del metadata["metadata"]["_id"]
+            text = metadata["text"]
+            del metadata["text"]
+            doc = Document(page_content=text, metadata=metadata)
+            processed_documents.append((doc, match["score"]))
+        return processed_documents
