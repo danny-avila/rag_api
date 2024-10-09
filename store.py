@@ -175,7 +175,8 @@ class ExtendedPCVector(PineconeVectorStore):
         baseIDs = set()
         for ids in self._index.list(namespace=self._namespace):
             for id in ids:
-                base = id.split('_')[0]
+                splitIndex = id.rfind('_')
+                base = id[:splitIndex]
                 baseIDs.add(base)
         return list(baseIDs)
 
@@ -218,6 +219,7 @@ class ExtendedPCVector(PineconeVectorStore):
             vector=embedding,
             top_k=k,
             include_metadata=True,
+            filter=filter,
             namespace=self._namespace,
             **kwargs,
         )
