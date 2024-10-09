@@ -6,6 +6,8 @@ import logging
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
+from langchain_pinecone import Pinecone
+from openai import api_key
 from starlette.middleware.base import BaseHTTPMiddleware
 from store_factory import get_vector_store
 
@@ -15,6 +17,7 @@ load_dotenv(find_dotenv())
 class VectorDBType(Enum):
     PGVECTOR = "pgvector"
     ATLAS_MONGO = "atlas-mongo"
+    PINECONE = "pinecone"
 
 
 class EmbeddingsProvider(Enum):
@@ -169,6 +172,7 @@ HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
+PINECONE_API_KEY = get_env_variable("PINECONE_API_KEY", "")
 
 ## Embeddings
 
@@ -275,6 +279,15 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         collection_name=COLLECTION_NAME,
         mode="atlas-mongo",
         search_index=ATLAS_SEARCH_INDEX,
+    )
+elif VECTOR_DB_TYPE == VectorDBType.PINECONE:
+    AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+    vector_store = get_vector_store(
+        connection_string=AWS_DEFAULT_REGION,
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="pinecone",
+        api_key=PINECONE_API_KEY,
     )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
