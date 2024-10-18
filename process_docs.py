@@ -20,14 +20,14 @@ async def store_documents(
     start_time = time.perf_counter()
     for i in range(0, len(docs), BATCH_SIZE):
         batch = docs[i : min(i + BATCH_SIZE, len(docs))]
-        #logger.info(f"Sending batch {i} to {i+len(batch)} / {len(docs)}")
+        logger.debug(f"Sending batch {i} to {i+len(batch)} / {len(docs)}")
         task = asyncio.create_task(process_batch(batch, ids, semaphore))
         tasks.append(task)
     try:
         idList = await asyncio.wait_for(asyncio.gather(*tasks), timeout=(EMBEDDING_TIMEOUT/1000)) 
         end_time = time.perf_counter()
         elapsed = end_time - start_time
-        logger.info(f"SUCCESS: processed {len(docs)} documents in time: {elapsed}")
+        logger.debug(f"SUCCESS: processed {len(docs)} documents in time: {elapsed}")
     except asyncio.TimeoutError:
         raise Exception(f"TIMEOUT: embedding process took over the time limit of {EMBEDDING_TIMEOUT}ms. Partially added to database")
     return [id for sublist in idList for id in sublist]

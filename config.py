@@ -248,6 +248,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
+    BATCH_SIZE = int(get_env_variable("BATCH_SIZE","20"))
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
