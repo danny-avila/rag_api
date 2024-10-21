@@ -57,6 +57,7 @@ The following environment variables are required to run the application:
 - `COLLECTION_NAME`: (Optional) The name of the collection in the vector store. Default value is "testcollection".
 - `CHUNK_SIZE`: (Optional) The size of the chunks for text processing. Default value is "1500".
 - `CHUNK_OVERLAP`: (Optional) The overlap between chunks during text processing. Default value is "100".
+- `RAG_USE_FULL_CONTEXT`: (Optional) Set to "True" to fetch entire context of the file(s) uploaded/referenced into the conversation. Default value is "false" which means it fetches only the top 4 results (top_k=4) of the file based on the user's message.
 - `RAG_UPLOAD_DIR`: (Optional) The directory where uploaded files are stored. Default value is "./uploads/".
 - `PDF_EXTRACT_IMAGES`: (Optional) A boolean value indicating whether to extract images from PDF files. Default value is "False".
 - `DEBUG_RAG_API`: (Optional) Set to "True" to show more verbose logging output in the server console, and to enable postgresql database routes
