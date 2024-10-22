@@ -30,3 +30,4 @@ python-pptx==0.6.23
 xlrd==2.0.1
 langchain-aws==0.2.1
 boto3==1.34.144
+pytest==8.3.3
