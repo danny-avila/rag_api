@@ -102,10 +102,5 @@ def test_queryMultiple():
     assert "superbowl" == response[0][0]["metadata"]["file_id"]
     assert "superbowl" == response[1][0]["metadata"]["file_id"]
 
-if __name__=="__main__":
-    embed(
-        filepath="test/testFiles/superbowl.txt",
-        file_name="superbowl.txt",
-        file_id="superbowl",
-    )
+
     
