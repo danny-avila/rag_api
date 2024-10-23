@@ -1,9 +1,15 @@
-from main import app
 from fastapi.testclient import TestClient
 import json
 import time
 import pytest
+import sys
+import os
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.append(parent_dir)
+
+from main import app
 client = TestClient(app)
 
 
@@ -55,12 +61,12 @@ def queryMultiple(file_ids: list[str], query, k):
 @pytest.fixture(scope="session", autouse=True)
 def setup_and_teardown():
     embed(
-        filepath="testFiles/superbowl.txt",
+        filepath="test/testFiles/superbowl.txt",
         file_name="superbowl.txt",
         file_id="superbowl",
     )
     embed(
-        filepath="testFiles/short.txt",
+        filepath="test/testFiles/short.txt",
         file_name="short.txt",
         file_id="short",
     )
@@ -92,8 +98,14 @@ def test_queryMultiple():
     response = queryMultiple(["short", "superbowl"], "What is LibreChat?", 2)
     assert "short" == response[0][0]["metadata"]["file_id"]
     assert "superbowl" == response[1][0]["metadata"]["file_id"]
-    response = queryMultiple(["superbowl"], "What is Librechat", 2)
+    response = queryMultiple(["superbowl"], "What is LibreChat", 2)
     assert "superbowl" == response[0][0]["metadata"]["file_id"]
     assert "superbowl" == response[1][0]["metadata"]["file_id"]
 
-
+if __name__=="__main__":
+    embed(
+        filepath="test/testFiles/superbowl.txt",
+        file_name="superbowl.txt",
+        file_id="superbowl",
+    )
+    
