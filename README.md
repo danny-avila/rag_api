@@ -76,6 +76,8 @@ The following environment variables are required to run the application:
 - `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
     - Example: `https://YOUR_RESOURCE_NAME.openai.azure.com`.
     - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
+- `RAG_AZURE_OPENAI_BASEURL`: (Optional) The base URL for your Azure OpenAI API Embeddings
+- `RAG_AZURE_OPENAI_PROXY`: (Optional) Proxy for Azure OpenAI API Embeddings
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 - `ATLAS_SEARCH_INDEX`: (Optional) the name of the vector search index if using Atlas MongoDB, defaults to `vector_index`
