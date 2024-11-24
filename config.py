@@ -324,4 +324,11 @@ known_source_ext = [
     "swift",
     "vue",
     "svelte",
+    "ex",
+    "exs",
+    "erl",
+    "tsx",
+    "jsx",
+    "hs",
+    "lhs",
 ]
