@@ -62,6 +62,12 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 )  # Deprecated, backwards compatability
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
+maxChunks = get_env_variable("MAX_CHUNKS")
+MAX_CHUNKS = int(maxChunks) if maxChunks else None 
+EMBEDDING_TIMEOUT = int(get_env_variable("EMBEDDING_TIMEOUT",100000))#default 100 second timeout
+
+BATCH_SIZE = int(get_env_variable("BATCH_SIZE","75"))
+CONCURRENT_LIMIT = int(get_env_variable("CONCURRENT_LIMIT","20"))
 
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
@@ -242,6 +248,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
+    BATCH_SIZE = int(get_env_variable("BATCH_SIZE","20"))
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
