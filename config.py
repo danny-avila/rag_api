@@ -165,6 +165,8 @@ AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 RAG_AZURE_OPENAI_ENDPOINT = get_env_variable(
     "RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT
 ).rstrip("/")
+RAG_AZURE_OPENAI_BASEURL = get_env_variable("RAG_AZURE_OPENAI_BASEURL", None)
+RAG_AZURE_OPENAI_PROXY = get_env_variable("RAG_AZURE_OPENAI_PROXY", None)
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
@@ -191,6 +193,8 @@ def init_embeddings(provider, model):
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
+            openai_api_base=RAG_AZURE_OPENAI_BASEURL,
+            openai_proxy=RAG_AZURE_OPENAI_PROXY,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
