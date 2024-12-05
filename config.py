@@ -24,6 +24,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
+    VERTEXAI = "vertexai"
 
 
 def get_env_variable(
@@ -206,6 +207,10 @@ def init_embeddings(provider, model):
         from langchain_ollama import OllamaEmbeddings
 
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
+    elif provider == EmbeddingsProvider.VERTEXAI:
+        from langchain_google_vertexai import VertexAIEmbeddings
+
+        return VertexAIEmbeddings(model_name=model)
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 
@@ -241,6 +246,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.VERTEXAI:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
