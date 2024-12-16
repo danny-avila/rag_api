@@ -4,6 +4,7 @@ import aiofiles
 import aiofiles.os
 from typing import Iterable, List
 from shutil import copyfileobj
+import traceback
 
 import uvicorn
 from langchain.schema import Document
@@ -112,6 +113,11 @@ async def get_all_ids():
 
         return list(set(ids))
     except Exception as e:
+        logger.error(
+            "Failed to get all IDs | Error: %s | Traceback: %s",
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -126,10 +132,19 @@ def isHealthOK():
 
 @app.get("/health")
 async def health_check():
-    if await isHealthOK():
-        return {"status": "UP"}
-    else:
-        return {"status": "DOWN"}, 503
+    try:
+        if await isHealthOK():
+            return {"status": "UP"}
+        else:
+            logger.error("Health check failed")
+            return {"status": "DOWN"}, 503
+    except Exception as e:
+        logger.error(
+            "Error during health check | Error: %s | Traceback: %s",
+            str(e),
+            traceback.format_exc(),
+        )
+        return {"status": "DOWN", "error": str(e)}, 503
 
 
 @app.get("/documents", response_model=list[DocumentResponse])
@@ -154,8 +169,19 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
         return documents
     except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in get_documents_by_ids | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
         raise http_exc
     except Exception as e:
+        logger.error(
+            "Error getting documents by IDs | IDs: %s | Error: %s | Traceback: %s",
+            ids,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -177,6 +203,12 @@ async def delete_documents(document_ids: List[str] = Body(...)):
             "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
         }
     except Exception as e:
+        logger.error(
+            "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
+            document_ids,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -220,7 +252,13 @@ async def query_embeddings_by_file_id(body: QueryRequestBody, request: Request):
         return authorized_documents
 
     except Exception as e:
-        logger.error(e)
+        logger.error(
+            "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
+            body.file_id,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -270,7 +308,13 @@ async def store_data_in_vector_db(
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
-        logger.error(e)
+        logger.error(
+            "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
+            file_id,
+            user_id,
+            str(e),
+            traceback.format_exc(),
+        )
         return {"message": "An error occurred while adding documents.", "error": str(e)}
 
 
@@ -386,6 +430,12 @@ async def embed_file(
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
     except Exception as e:
+        logger.error(
+            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+            temp_file_path,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save the uploaded file. Error: {str(e)}",
@@ -420,6 +470,11 @@ async def embed_file(
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
+        logger.error(
+            "Error during file processing: %s\nTraceback: %s",
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",
@@ -428,7 +483,12 @@ async def embed_file(
         try:
             await aiofiles.os.remove(temp_file_path)
         except Exception as e:
-            logger.info(f"Failed to remove temporary file: {str(e)}")
+            logger.error(
+                "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
+                temp_file_path,
+                str(e),
+                traceback.format_exc(),
+            )
 
     return {
         "status": response_status,
@@ -464,7 +524,12 @@ async def load_document_context(id: str):
 
         return process_documents(documents)
     except Exception as e:
-        logger.error(e)
+        logger.error(
+            "Error loading document context | Document ID: %s | Error: %s | Traceback: %s",
+            id,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT(e),
@@ -549,6 +614,13 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
 
         return documents
     except Exception as e:
+        logger.error(
+            "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
+            body.file_ids,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
