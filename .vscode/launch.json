@@ -12,7 +12,8 @@
               "8000",
               "--reload"
           ],
-          "jinja": true
+          "jinja": true,
+          "envFile": "${workspaceFolder}/.env"
       }
   ]
 }
