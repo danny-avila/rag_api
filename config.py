@@ -76,7 +76,13 @@ HTTP_REQ = "http_req"
 
 logger = logging.getLogger()
 
-debug_mode = get_env_variable("DEBUG_RAG_API", "False").lower() == "true"
+debug_mode = os.getenv("DEBUG_RAG_API", "False").lower() in (
+    "true",
+    "1",
+    "yes",
+    "y",
+    "t",
+)
 console_json = get_env_variable("CONSOLE_JSON", "False").lower() == "true"
 
 if debug_mode:
