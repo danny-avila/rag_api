@@ -62,6 +62,7 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 )  # Deprecated, backwards compatability
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
+SIMILARITY_THRESHOLD = float(get_env_variable("SIMILARITY_THRESHOLD", "1"))
 
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
