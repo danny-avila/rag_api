@@ -68,6 +68,7 @@ from config import (
     LogMiddleware,
     RAG_HOST,
     RAG_PORT,
+    SIMILARITY_THRESHOLD,
     VectorDBType,
     # RAG_EMBEDDING_MODEL,
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
@@ -243,6 +244,9 @@ async def query_embeddings_by_file_id(
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": body.file_id}
             )
+
+        # Remove documents exceeding similarity threshold
+        documents[:] = [doc for doc in documents if doc[1] <= SIMILARITY_THRESHOLD]
 
         if not documents:
             return authorized_documents
@@ -636,6 +640,9 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
+
+        # Remove documents exceeding similarity threshold
+        documents[:] = [doc for doc in documents if doc[1] <= SIMILARITY_THRESHOLD]
 
         # Ensure documents list is not empty
         if not documents:
