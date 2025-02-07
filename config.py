@@ -177,6 +177,8 @@ OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 
+UNSTRUCTURED_API_KEY = get_env_variable("UNSTRUCTURED_API_KEY")
+
 ## Embeddings
 
 
