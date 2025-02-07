@@ -39,6 +39,7 @@ from langchain_community.document_loaders import (
     UnstructuredExcelLoader,
     UnstructuredPowerPointLoader,
 )
+from langchain_unstructured import UnstructuredLoader
 
 from models import (
     StoreDocument,
@@ -74,6 +75,7 @@ from config import (
     # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
     # RAG_TEMPLATE,
     VECTOR_DB_TYPE,
+    UNSTRUCTURED_API_KEY
 )
 
 
@@ -351,7 +353,11 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
     known_type = True
 
     if file_ext == "pdf":
-        loader = PyPDFLoader(filepath, extract_images=app.state.PDF_EXTRACT_IMAGES)
+        if UNSTRUCTURED_API_KEY:
+            loader = UnstructuredLoader(filepath, api_key=UNSTRUCTURED_API_KEY, strategy="auto", partition_via_api=True,
+                                        chunking_strategy="by_title", include_orig_elements=False, languages=["eng"])
+        else:
+            loader = PyPDFLoader(filepath, extract_images=app.state.PDF_EXTRACT_IMAGES)
     elif file_ext == "csv":
         loader = CSVLoader(filepath)
     elif file_ext == "rst":
