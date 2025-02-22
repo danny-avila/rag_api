@@ -24,6 +24,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
+    JINAAI = "jinaai"
 
 
 def get_env_variable(
@@ -162,6 +163,7 @@ OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 RAG_OPENAI_API_KEY = get_env_variable("RAG_OPENAI_API_KEY", OPENAI_API_KEY)
 RAG_OPENAI_BASEURL = get_env_variable("RAG_OPENAI_BASEURL", None)
 RAG_OPENAI_PROXY = get_env_variable("RAG_OPENAI_PROXY", None)
+RAG_JINAAI_API_KEY = get_env_variable("RAG_JINAAI_API_KEY", None)
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
 RAG_AZURE_OPENAI_API_VERSION = get_env_variable("RAG_AZURE_OPENAI_API_VERSION", None)
 RAG_AZURE_OPENAI_API_KEY = get_env_variable(
@@ -178,6 +180,10 @@ AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 
 ## Embeddings
 
+EMBEDDINGS_DIMENSIONS = get_env_variable("EMBEDDINGS_DIMENSIONS")
+if EMBEDDINGS_DIMENSIONS and EMBEDDINGS_DIMENSIONS.isdigit():
+    EMBEDDINGS_DIMENSIONS = int(EMBEDDINGS_DIMENSIONS)
+
 
 def init_embeddings(provider, model):
     if provider == EmbeddingsProvider.OPENAI:
@@ -188,6 +194,16 @@ def init_embeddings(provider, model):
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
+            dimensions=EMBEDDINGS_DIMENSIONS,
+        )
+    elif provider == EmbeddingsProvider.JINAAI:
+        from embeddings import JinaEmbeddings
+
+        return JinaEmbeddings(
+            model=model,
+            jina_api_key=RAG_JINAAI_API_KEY,
+            task="retrieval.passage",
+            dimensions=EMBEDDINGS_DIMENSIONS,
         )
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
@@ -197,6 +213,7 @@ def init_embeddings(provider, model):
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
+            dimensions=EMBEDDINGS_DIMENSIONS,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -235,6 +252,8 @@ EMBEDDINGS_PROVIDER = EmbeddingsProvider(
 
 if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.JINAAI:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "jina-embeddings-v3")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.AZURE:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACE:

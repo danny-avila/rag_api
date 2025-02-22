@@ -1,0 +1,1 @@
+from .jinaai import JinaEmbeddings

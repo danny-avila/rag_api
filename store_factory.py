@@ -17,12 +17,14 @@ def get_vector_store(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
+            use_jsonb=True,
         )
     elif mode == "async":
         return AsyncPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
+            use_jsonb=True,
         )
     elif mode == "atlas-mongo":
         mongo_db = MongoClient(connection_string).get_database()
