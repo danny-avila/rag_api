@@ -28,6 +28,7 @@ if not os.path.exists(RAG_UPLOAD_DIR):
 class VectorDBType(Enum):
     PGVECTOR = "pgvector"
     ATLAS_MONGO = "atlas-mongo"
+    DUMMY = "dummy"
 
 VECTOR_DB_TYPE = VectorDBType(get_env_variable("VECTOR_DB_TYPE", "pgvector"))
 
@@ -156,7 +157,17 @@ embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
 # --- Vector Store Initialization ---
-if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+# Use dummy mode if VECTOR_STORE_MODE is set to "dummy", otherwise proceed as usual.
+VECTOR_STORE_MODE = get_env_variable("VECTOR_STORE_MODE", None)
+
+if VECTOR_DB_TYPE == VectorDBType.DUMMY:
+    vector_store = get_vector_store(
+        connection_string="dummy_conn",
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="dummy",
+    )
+elif VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
     vector_store = get_vector_store(
         connection_string=POSTGRES_CONN_STRING,
         embeddings=embeddings,

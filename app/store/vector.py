@@ -132,5 +132,18 @@ def get_vector_store(
             embedding=embeddings,
             index_name=search_index
         )
+    elif mode == "dummy":
+        # Return a fake vector store that does nothing.
+        class DummyVectorStore:
+            def get_all_ids(self) -> list[str]:
+                return []  # Or return dummy IDs if needed.
+
+            def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+                return []  # Return an empty list of documents.
+
+            def delete(self, ids: Optional[list[str]] = None, collection_only: bool = False) -> None:
+                pass  # No-op.
+
+        return DummyVectorStore()
     else:
-        raise ValueError("Invalid mode specified. Choose 'sync', 'async', or 'atlas-mongo'.")
+        raise ValueError("Invalid mode specified. Choose 'sync', 'async', 'atlas-mongo', or 'dummy'.")
