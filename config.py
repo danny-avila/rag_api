@@ -330,4 +330,7 @@ known_source_ext = [
     "swift",
     "vue",
     "svelte",
+    "yml",
+    "yaml",
+    "eml",
 ]
