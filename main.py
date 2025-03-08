@@ -53,6 +53,7 @@ from middleware import security_middleware
 from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
+from functools import lru_cache
 
 load_dotenv(find_dotenv())
 
@@ -213,6 +214,10 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         )
         raise HTTPException(status_code=500, detail=str(e))
 
+# Cache the embedding function with LRU cache
+@lru_cache(maxsize=128)
+def get_cached_query_embedding(query: str):
+    return vector_store.embedding_function.embed_query(query)
 
 @app.post("/query")
 async def query_embeddings_by_file_id(
@@ -229,7 +234,7 @@ async def query_embeddings_by_file_id(
     authorized_documents = []
 
     try:
-        embedding = vector_store.embedding_function.embed_query(body.query)
+        embedding = get_cached_query_embedding(body.query)
 
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
