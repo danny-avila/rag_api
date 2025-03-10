@@ -1,4 +1,5 @@
 import os
+import time
 import hashlib
 import aiofiles
 import aiofiles.os
@@ -53,6 +54,8 @@ from middleware import security_middleware
 from mongo import mongo_health_check
 from constants import ERROR_MESSAGES
 from store import AsyncPgVector
+from process_docs import store_documents
+
 
 load_dotenv(find_dotenv())
 
@@ -61,6 +64,7 @@ from config import (
     debug_mode,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
+    MAX_CHUNKS,
     vector_store,
     RAG_UPLOAD_DIR,
     known_source_ext,
@@ -301,7 +305,11 @@ async def store_data_in_vector_db(
         chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
-
+    if MAX_CHUNKS and len(documents) > MAX_CHUNKS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Too big file, Attempted to process {len(documents)} chunks, but MAX_CHUNKS is set to {MAX_CHUNKS} chunks",
+        )
     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
@@ -323,9 +331,7 @@ async def store_data_in_vector_db(
 
     try:
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
-            )
+            ids = await store_documents(docs, ids=[file_id]*len(documents))
         else:
             ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
