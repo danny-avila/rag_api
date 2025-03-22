@@ -15,6 +15,7 @@ load_dotenv(find_dotenv())
 class VectorDBType(Enum):
     PGVECTOR = "pgvector"
     ATLAS_MONGO = "atlas-mongo"
+    DUMMY = "dummy"
 
 
 class EmbeddingsProvider(Enum):
@@ -281,6 +282,13 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         collection_name=COLLECTION_NAME,
         mode="atlas-mongo",
         search_index=ATLAS_SEARCH_INDEX,
+    )
+elif VECTOR_DB_TYPE == VectorDBType.DUMMY:
+    vector_store = get_vector_store(
+        connection_string="dummy_conn",
+        embeddings=embeddings,
+        collection_name=COLLECTION_NAME,
+        mode="dummy",
     )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
