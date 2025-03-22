@@ -9,8 +9,6 @@ from dotenv import find_dotenv, load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
 from store_factory import get_vector_store
 
-from app.store.vector import get_vector_store
-
 load_dotenv(find_dotenv())
 
 
