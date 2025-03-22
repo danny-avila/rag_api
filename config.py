@@ -24,6 +24,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
+    VOYAGEAI = "voyageai"
 
 
 def get_env_variable(
@@ -175,6 +176,7 @@ HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
+VOYAGEAI_API_KEY = get_env_variable("VOYAGEAI_API_KEY", "")
 
 ## Embeddings
 
@@ -225,6 +227,13 @@ def init_embeddings(provider, model):
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
         )
+    elif provider == EmbeddingsProvider.VOYAGEAI:
+        from langchain_voyageai import VoyageAIEmbeddings
+
+        return VoyageAIEmbeddings(
+            voyage_api_key=VOYAGEAI_API_KEY,
+            model=model
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -252,6 +261,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.VOYAGEAI:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "voyage-3")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
