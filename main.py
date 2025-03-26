@@ -114,6 +114,13 @@ async def get_all_ids():
             ids = vector_store.get_all_ids()
 
         return list(set(ids))
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in get_all_ids | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Failed to get all IDs | Error: %s | Traceback: %s",
@@ -204,6 +211,13 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         return {
             "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
         }
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in delete_documents | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
@@ -275,6 +289,13 @@ async def query_embeddings_by_file_id(
 
         return authorized_documents
 
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_file_id | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
@@ -419,6 +440,13 @@ async def embed_local_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=ERROR_MESSAGES.DEFAULT(),
             )
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in embed_local_file | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(e)
         if "No pandoc was found" in str(e):
@@ -495,6 +523,15 @@ async def embed_file(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unspecified error occurred.",
                 )
+    except HTTPException as http_exc:
+        response_status = False
+        response_message = f"HTTP Exception: {http_exc.detail}"
+        logger.error(
+            "HTTP Exception in embed_file | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
@@ -551,6 +588,13 @@ async def load_document_context(id: str):
             )
 
         return process_documents(documents)
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in load_document_context | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error loading document context | Document ID: %s | Error: %s | Traceback: %s",
@@ -600,7 +644,20 @@ async def embed_file_upload(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in embed_file_upload | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
+        logger.error(
+            "Error during file processing | File: %s | Error: %s | Traceback: %s",
+            uploaded_file.filename,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",
@@ -644,6 +701,13 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             )
 
         return documents
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_file_ids | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
