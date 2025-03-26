@@ -1,24 +1,30 @@
-from typing import Optional
+from typing import Optional, TypedDict
 from langchain_core.embeddings import Embeddings
 from store import AsyncPgVector, ExtendedPgVector
 from store import AtlasMongoVector
+from store import AsyncQdrant
+import qdrant_client
 from pymongo import MongoClient
+
+
+async_DB = (AsyncPgVector, AsyncQdrant) #Add if async database implementation 
 
 
 def get_vector_store(
     connection_string: str,
     embeddings: Embeddings,
     collection_name: str,
-    mode: str = "sync",
-    search_index: Optional[str] = None 
+    mode: str = "sync-PGVector",
+    search_index: Optional[str] = None,
+    api_key: Optional[str]  = None 
 ):
-    if mode == "sync":
+    if mode == "sync-PGVector":
         return ExtendedPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
         )
-    elif mode == "async":
+    elif mode == "async-PGVector":
         return AsyncPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
@@ -30,6 +36,35 @@ def get_vector_store(
         return AtlasMongoVector(
             collection=mong_collection, embedding=embeddings, index_name=search_index
         )
+    elif mode == "qdrant":
+        embeddings_dimension = len(embeddings.embed_query("Dimension"))
+        client = qdrant_client.QdrantClient(
+        url=connection_string,
+        api_key=api_key
+        )
+        collection_config = qdrant_client.http.models.VectorParams(
+            size=embeddings_dimension,
+            distance=qdrant_client.http.models.Distance.COSINE
+        )
+        if not client.collection_exists(collection_name):
+            collection_config = qdrant_client.http.models.VectorParams(
+                size=embeddings_dimension,
+                distance=qdrant_client.http.models.Distance.COSINE
+            )
+            client.create_collection(
+            collection_name=collection_name,
+            vectors_config=collection_config
+            )
+            client.create_payload_index(
+                collection_name=collection_name,
+                field_name="metadata.file_id",
+                field_schema="keyword",
+            )
+        return AsyncQdrant(
+            client=client,
+            collection_name=collection_name,
+            embedding=embeddings      
+            )
 
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
