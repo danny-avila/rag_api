@@ -30,6 +30,7 @@ def get_vector_store(
         return AtlasMongoVector(
             collection=mong_collection, embedding=embeddings, index_name=search_index
         )
+
     else:
         raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")
 
