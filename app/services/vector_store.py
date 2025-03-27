@@ -3,7 +3,7 @@ from typing import Any, List, Optional, Tuple
 import copy
 
 from pymongo import MongoClient
-from sqlalchemy import delete, false as sa_false
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor

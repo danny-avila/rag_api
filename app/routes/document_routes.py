@@ -7,19 +7,16 @@ import aiofiles.os
 from shutil import copyfileobj
 from typing import List, Iterable
 from fastapi import APIRouter, Request, UploadFile, HTTPException, File, Form, Body, Query, status
-from fastapi.exceptions import RequestValidationError
 from langchain_core.documents import Document
 from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from starlette.responses import JSONResponse
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, VECTOR_DB_TYPE, VectorDBType
+from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 from app.constants import ERROR_MESSAGES
 from app.models import StoreDocument, QueryRequestBody, DocumentResponse, QueryMultipleBody
-from app.services.database import pg_health_check
-from app.services.mongo_client import mongo_health_check
 from app.utils.document_loader import get_loader, clean_text, process_documents
 from app.services.vector_store import AsyncPgVector
+from app.utils.health import is_health_ok
 
 router = APIRouter()
 
@@ -47,15 +44,6 @@ async def get_all_ids():
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
-
-
-def is_health_ok():
-    if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
-        return pg_health_check()
-    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
-        return mongo_health_check()
-    else:
-        return True
 
 
 @router.get("/health")
@@ -116,42 +104,41 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 @router.delete("/documents")
 async def delete_documents(document_ids: List[str] = Body(...)):
     try:
-        # First, fetch the list of existing IDs from the vector store
         if isinstance(vector_store, AsyncPgVector):
-            existing_ids = set(await vector_store.get_all_ids())
+            existing_ids = await vector_store.get_all_ids()
+            await vector_store.delete(ids=document_ids)
         else:
-            existing_ids = set(vector_store.get_all_ids())
+            existing_ids = vector_store.get_all_ids()
+            vector_store.delete(ids=document_ids)
 
-        # Compute which requested IDs exist and which don't
-        to_delete = [doc_id for doc_id in document_ids if doc_id in existing_ids]
-        not_found = [doc_id for doc_id in document_ids if doc_id not in existing_ids]
+        if not all(id in existing_ids for id in document_ids):
+            raise HTTPException(status_code=404, detail="One or more IDs not found")
 
-        if not to_delete:
-            # Log a warning if no vector IDs were found but do not raise an error.
-            logger.warning("None of the provided vector IDs were found. Skipping deletion in vector store.")
-        else:
-            # Proceed to delete only the IDs that exist in the vector store
-            if isinstance(vector_store, AsyncPgVector):
-                await vector_store.delete(ids=to_delete)
-            else:
-                vector_store.delete(ids=to_delete)
-
-        response = {
-            "message": f"Deletion attempted. {len(to_delete)} vector(s) deleted."
+        file_count = len(document_ids)
+        return {
+            "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
         }
-        if not_found:
-            response["not_found"] = not_found
-
-        return response
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in delete_documents | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
-        logger.error("Failed to delete documents: %s", traceback.format_exc())
+        logger.error(
+            "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
+            document_ids,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/query")
 async def query_embeddings_by_file_id(
-        body: QueryRequestBody,
-        request: Request,
+    body: QueryRequestBody,
+    request: Request,
 ):
     if not hasattr(request.state, "user"):
         user_authorized = body.entity_id if body.entity_id else "public"
@@ -233,10 +220,10 @@ def generate_digest(page_content: str):
 
 
 async def store_data_in_vector_db(
-        data: Iterable[Document],
-        file_id: str,
-        user_id: str = "",
-        clean_content: bool = False,
+    data: Iterable[Document],
+    file_id: str,
+    user_id: str = "",
+    clean_content: bool = False,
 ) -> bool:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
@@ -285,7 +272,7 @@ async def store_data_in_vector_db(
 
 @router.post("/local/embed")
 async def embed_local_file(
-        document: StoreDocument, request: Request, entity_id: str = None
+    document: StoreDocument, request: Request, entity_id: str = None
 ):
     # Check if the file exists
     if not os.path.exists(document.filepath):
@@ -341,10 +328,10 @@ async def embed_local_file(
 
 @router.post("/embed")
 async def embed_file(
-        request: Request,
-        file_id: str = Form(...),
-        file: UploadFile = File(...),
-        entity_id: str = Form(None),
+    request: Request,
+    file_id: str = Form(...),
+    file: UploadFile = File(...),
+    entity_id: str = Form(None),
 ):
     response_status = True
     response_message = "File processed successfully."
@@ -488,10 +475,10 @@ async def load_document_context(id: str):
 
 @router.post("/embed-upload")
 async def embed_file_upload(
-        request: Request,
-        file_id: str = Form(...),
-        uploaded_file: UploadFile = File(...),
-        entity_id: str = Form(None),
+    request: Request,
+    file_id: str = Form(...),
+    uploaded_file: UploadFile = File(...),
+    entity_id: str = Form(None),
 ):
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
