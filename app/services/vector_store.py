@@ -1,18 +1,15 @@
-from typing import Any, Optional
-from sqlalchemy import delete
-from langchain_community.vectorstores.pgvector import PGVector
+# app/services/vector_store.py
+from typing import Any, List, Optional, Tuple
+import copy
+
+from pymongo import MongoClient
+from sqlalchemy import delete, false as sa_false
+from sqlalchemy.orm import Session
 from langchain_core.documents import Document
 from langchain_core.runnables.config import run_in_executor
-from sqlalchemy.orm import Session
-
-from langchain_mongodb import MongoDBAtlasVectorSearch
 from langchain_core.embeddings import Embeddings
-from typing import (
-    List,
-    Optional,
-    Tuple,
-)
-import copy
+from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_community.vectorstores.pgvector import PGVector
 
 
 class ExtendedPgVector(PGVector):
@@ -36,7 +33,7 @@ class ExtendedPgVector(PGVector):
             ]
 
     def _delete_multiple(
-        self, ids: Optional[list[str]] = None, collection_only: bool = False
+            self, ids: Optional[list[str]] = None, collection_only: bool = False
     ) -> None:
         with Session(self._bind) as session:
             if ids is not None:
@@ -71,7 +68,7 @@ class AsyncPgVector(ExtendedPgVector):
         return await run_in_executor(None, super().get_documents_by_ids, ids)
 
     async def delete(
-        self, ids: Optional[list[str]] = None, collection_only: bool = False
+            self, ids: Optional[list[str]] = None, collection_only: bool = False
     ) -> None:
         await run_in_executor(None, self._delete_multiple, ids, collection_only)
 
@@ -80,21 +77,20 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
     @property
     def embedding_function(self) -> Embeddings:
         return self.embeddings
-    
+
     def add_documents(self, docs: list[Document], ids: list[str]):
-        #{file_id}_{idx}
+        # {file_id}_{idx}
         new_ids = [id for id in range(len(ids))]
         file_id = docs[0].metadata['file_id']
         f_ids = [f'{file_id}_{id}' for id in new_ids]
         return super().add_documents(docs, f_ids)
 
-
     def similarity_search_with_score_by_vector(
-        self,
-        embedding: List[float],
-        k: int = 4,
-        filter: Optional[dict] = None,
-        **kwargs: Any,
+            self,
+            embedding: List[float],
+            k: int = 4,
+            filter: Optional[dict] = None,
+            **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         docs = self._similarity_search_with_score(
             embedding,
@@ -150,3 +146,33 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         # implement the deletion of documents by file_id in self._collection
         if ids is not None:
             self._collection.delete_many({"file_id": {"$in": ids}})
+
+# --- Factory to get a vector store instance ---
+def get_vector_store(
+    connection_string: str,
+    embeddings: Embeddings,
+    collection_name: str,
+    mode: str = "sync",
+    search_index: Optional[str] = None
+):
+    if mode == "sync":
+        return ExtendedPgVector(
+            connection_string=connection_string,
+            embedding_function=embeddings,
+            collection_name=collection_name,
+        )
+    elif mode == "async":
+        return AsyncPgVector(
+            connection_string=connection_string,
+            embedding_function=embeddings,
+            collection_name=collection_name,
+        )
+    elif mode == "atlas-mongo":
+        mongo_db = MongoClient(connection_string).get_database()
+        mong_collection = mongo_db[collection_name]
+        return AtlasMongoVector(
+            collection=mong_collection, embedding=embeddings, index_name=search_index
+        )
+
+    else:
+        raise ValueError("Invalid mode specified. Choose 'sync' or 'async'.")

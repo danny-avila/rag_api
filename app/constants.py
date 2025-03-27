@@ -1,3 +1,4 @@
+# app/constants.py
 from enum import Enum
 
 

@@ -1,111 +1,27 @@
+# app/routes/document_routes.py
 import os
 import hashlib
+import traceback
 import aiofiles
 import aiofiles.os
-from typing import Iterable, List
 from shutil import copyfileobj
-import traceback
+from typing import List, Iterable
+from fastapi import APIRouter, Request, UploadFile, HTTPException, File, Form, Body, Query, status
+from langchain_core.documents import Document
+from langchain_core.runnables import run_in_executor
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-import uvicorn
-from langchain.schema import Document
-from contextlib import asynccontextmanager
-from dotenv import find_dotenv, load_dotenv
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.exceptions import RequestValidationError
-from langchain_core.runnables.config import run_in_executor
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from fastapi import (
-    File,
-    Form,
-    Body,
-    Query,
-    status,
-    FastAPI,
-    Request,
-    UploadFile,
-    HTTPException,
-)
-from langchain_community.document_loaders import (
-    WebBaseLoader,
-    TextLoader,
-    PyPDFLoader,
-    CSVLoader,
-    Docx2txtLoader,
-    UnstructuredEPubLoader,
-    UnstructuredMarkdownLoader,
-    UnstructuredXMLLoader,
-    UnstructuredRSTLoader,
-    UnstructuredExcelLoader,
-    UnstructuredPowerPointLoader,
-)
+from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, VECTOR_DB_TYPE, VectorDBType
+from app.constants import ERROR_MESSAGES
+from app.models import StoreDocument, QueryRequestBody, DocumentResponse, QueryMultipleBody
+from app.services.database import pg_health_check
+from app.services.mongo_client import mongo_health_check
+from app.utils.document_loader import get_loader, clean_text, process_documents
+from app.services.vector_store import AsyncPgVector
 
-from models import (
-    StoreDocument,
-    QueryRequestBody,
-    DocumentResponse,
-    QueryMultipleBody,
-)
-from psql import PSQLDatabase, ensure_custom_id_index_on_embedding, pg_health_check
-from pgvector_routes import router as pgvector_router
-from parsers import process_documents, clean_text
-from middleware import security_middleware
-from mongo import mongo_health_check
-from constants import ERROR_MESSAGES
-from store import AsyncPgVector
+router = APIRouter()
 
-load_dotenv(find_dotenv())
-
-from config import (
-    logger,
-    debug_mode,
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
-    vector_store,
-    RAG_UPLOAD_DIR,
-    known_source_ext,
-    PDF_EXTRACT_IMAGES,
-    LogMiddleware,
-    RAG_HOST,
-    RAG_PORT,
-    VectorDBType,
-    # RAG_EMBEDDING_MODEL,
-    # RAG_EMBEDDING_MODEL_DEVICE_TYPE,
-    # RAG_TEMPLATE,
-    VECTOR_DB_TYPE,
-)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup logic goes here
-    if VECTOR_DB_TYPE == "pgvector":
-        await PSQLDatabase.get_pool()  # Initialize the pool
-        await ensure_custom_id_index_on_embedding()
-
-    yield
-
-
-app = FastAPI(lifespan=lifespan, debug=debug_mode)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.add_middleware(LogMiddleware)
-
-app.middleware("http")(security_middleware)
-
-app.state.CHUNK_SIZE = CHUNK_SIZE
-app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
-app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
-
-
-@app.get("/ids")
+@router.get("/ids")
 async def get_all_ids():
     try:
         if isinstance(vector_store, AsyncPgVector):
@@ -114,6 +30,13 @@ async def get_all_ids():
             ids = vector_store.get_all_ids()
 
         return list(set(ids))
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in get_all_ids | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Failed to get all IDs | Error: %s | Traceback: %s",
@@ -123,7 +46,7 @@ async def get_all_ids():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def isHealthOK():
+def is_health_ok():
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         return pg_health_check()
     if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
@@ -131,11 +54,10 @@ def isHealthOK():
     else:
         return True
 
-
-@app.get("/health")
+@router.get("/health")
 async def health_check():
     try:
-        if await isHealthOK():
+        if await is_health_ok():
             return {"status": "UP"}
         else:
             logger.error("Health check failed")
@@ -148,8 +70,7 @@ async def health_check():
         )
         return {"status": "DOWN", "error": str(e)}, 503
 
-
-@app.get("/documents", response_model=list[DocumentResponse])
+@router.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
@@ -187,34 +108,41 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/documents")
+@router.delete("/documents")
 async def delete_documents(document_ids: List[str] = Body(...)):
     try:
+        # First, fetch the list of existing IDs from the vector store
         if isinstance(vector_store, AsyncPgVector):
-            existing_ids = await vector_store.get_all_ids()
-            await vector_store.delete(ids=document_ids)
+            existing_ids = set(await vector_store.get_all_ids())
         else:
-            existing_ids = vector_store.get_all_ids()
-            vector_store.delete(ids=document_ids)
+            existing_ids = set(vector_store.get_all_ids())
 
-        if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
+        # Compute which requested IDs exist and which don't
+        to_delete = [doc_id for doc_id in document_ids if doc_id in existing_ids]
+        not_found = [doc_id for doc_id in document_ids if doc_id not in existing_ids]
 
-        file_count = len(document_ids)
-        return {
-            "message": f"Documents for {file_count} file{'s' if file_count > 1 else ''} deleted successfully"
+        if not to_delete:
+            # Log a warning if no vector IDs were found but do not raise an error.
+            logger.warning("None of the provided vector IDs were found. Skipping deletion in vector store.")
+        else:
+            # Proceed to delete only the IDs that exist in the vector store
+            if isinstance(vector_store, AsyncPgVector):
+                await vector_store.delete(ids=to_delete)
+            else:
+                vector_store.delete(ids=to_delete)
+
+        response = {
+            "message": f"Deletion attempted. {len(to_delete)} vector(s) deleted."
         }
+        if not_found:
+            response["not_found"] = not_found
+
+        return response
     except Exception as e:
-        logger.error(
-            "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
-            document_ids,
-            str(e),
-            traceback.format_exc(),
-        )
+        logger.error("Failed to delete documents: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/query")
+@router.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
@@ -275,6 +203,13 @@ async def query_embeddings_by_file_id(
 
         return authorized_documents
 
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_file_id | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
@@ -290,7 +225,6 @@ def generate_digest(page_content: str):
     hash_obj = hashlib.md5(page_content.encode())
     return hash_obj.hexdigest()
 
-
 async def store_data_in_vector_db(
     data: Iterable[Document],
     file_id: str,
@@ -298,7 +232,7 @@ async def store_data_in_vector_db(
     clean_content: bool = False,
 ) -> bool:
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=app.state.CHUNK_SIZE, chunk_overlap=app.state.CHUNK_OVERLAP
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
 
@@ -342,49 +276,7 @@ async def store_data_in_vector_db(
         return {"message": "An error occurred while adding documents.", "error": str(e)}
 
 
-def get_loader(filename: str, file_content_type: str, filepath: str):
-    file_ext = filename.split(".")[-1].lower()
-    known_type = True
-
-    if file_ext == "pdf":
-        loader = PyPDFLoader(filepath, extract_images=app.state.PDF_EXTRACT_IMAGES)
-    elif file_ext == "csv":
-        loader = CSVLoader(filepath)
-    elif file_ext == "rst":
-        loader = UnstructuredRSTLoader(filepath, mode="elements")
-    elif file_ext == "xml":
-        loader = UnstructuredXMLLoader(filepath)
-    elif file_ext == "pptx":
-        loader = UnstructuredPowerPointLoader(filepath)
-    elif file_ext == "md":
-        loader = UnstructuredMarkdownLoader(filepath)
-    elif file_content_type == "application/epub+zip":
-        loader = UnstructuredEPubLoader(filepath)
-    elif (
-        file_content_type
-        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        or file_ext in ["doc", "docx"]
-    ):
-        loader = Docx2txtLoader(filepath)
-    elif file_content_type in [
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ] or file_ext in ["xls", "xlsx"]:
-        loader = UnstructuredExcelLoader(filepath)
-    elif file_content_type == "application/json" or file_ext == "json":
-        loader = TextLoader(filepath, autodetect_encoding=True)
-    elif file_ext in known_source_ext or (
-        file_content_type and file_content_type.find("text/") >= 0
-    ):
-        loader = TextLoader(filepath, autodetect_encoding=True)
-    else:
-        loader = TextLoader(filepath, autodetect_encoding=True)
-        known_type = False
-
-    return loader, known_type, file_ext
-
-
-@app.post("/local/embed")
+@router.post("/local/embed")
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
@@ -419,6 +311,13 @@ async def embed_local_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=ERROR_MESSAGES.DEFAULT(),
             )
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in embed_local_file | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(e)
         if "No pandoc was found" in str(e):
@@ -433,7 +332,7 @@ async def embed_local_file(
             )
 
 
-@app.post("/embed")
+@router.post("/embed")
 async def embed_file(
     request: Request,
     file_id: str = Form(...),
@@ -495,6 +394,15 @@ async def embed_file(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unspecified error occurred.",
                 )
+    except HTTPException as http_exc:
+        response_status = False
+        response_message = f"HTTP Exception: {http_exc.detail}"
+        logger.error(
+            "HTTP Exception in embed_file | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
@@ -526,8 +434,7 @@ async def embed_file(
         "known_type": known_type,
     }
 
-
-@app.get("/documents/{id}/context")
+@router.get("/documents/{id}/context")
 async def load_document_context(id: str):
     ids = [id]
     try:
@@ -551,6 +458,13 @@ async def load_document_context(id: str):
             )
 
         return process_documents(documents)
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in load_document_context | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error loading document context | Document ID: %s | Error: %s | Traceback: %s",
@@ -564,7 +478,7 @@ async def load_document_context(id: str):
         )
 
 
-@app.post("/embed-upload")
+@router.post("/embed-upload")
 async def embed_file_upload(
     request: Request,
     file_id: str = Form(...),
@@ -600,7 +514,20 @@ async def embed_file_upload(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in embed_file_upload | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
+        logger.error(
+            "Error during file processing | File: %s | Error: %s | Traceback: %s",
+            uploaded_file.filename,
+            str(e),
+            traceback.format_exc(),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",
@@ -616,8 +543,7 @@ async def embed_file_upload(
         "known_type": known_type,
     }
 
-
-@app.post("/query_multiple")
+@router.post("/query_multiple")
 async def query_embeddings_by_file_ids(body: QueryMultipleBody):
     try:
         # Get the embedding of the query text
@@ -644,6 +570,13 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             )
 
         return documents
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_file_ids | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
     except Exception as e:
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
@@ -653,26 +586,3 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    body = await request.body()
-    logger.debug(f"Validation error occurred")
-    logger.debug(f"Raw request body: {body.decode()}")
-    logger.debug(f"Validation errors: {exc.errors()}")
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": exc.errors(),
-            "body": body.decode(),
-            "message": "Request validation failed",
-        },
-    )
-
-
-if debug_mode:
-    app.include_router(router=pgvector_router)
-
-if __name__ == "__main__":
-    uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, log_config=None)

@@ -1,7 +1,6 @@
-# db.py
+# app/services/database.py
 import asyncpg
-from config import DSN, logger
-
+from app.config import DSN, logger
 
 class PSQLDatabase:
     pool = None
@@ -17,7 +16,6 @@ class PSQLDatabase:
         if cls.pool is not None:
             await cls.pool.close()
             cls.pool = None
-
 
 async def ensure_custom_id_index_on_embedding():
     table_name = "langchain_pg_embedding"
