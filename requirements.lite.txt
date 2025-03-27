@@ -4,7 +4,7 @@ langchain-openai==0.2.11
 langchain-core==0.3.25 
 sqlalchemy==2.0.28
 python-dotenv==1.0.1
-fastapi==0.110.0
+fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
 uvicorn==0.28.0
