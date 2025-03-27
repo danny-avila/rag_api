@@ -1,3 +1,4 @@
+# app/models.py
 import hashlib
 from enum import Enum
 from pydantic import BaseModel
