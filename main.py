@@ -1,4 +1,4 @@
-# app/main.py
+# main.py
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
