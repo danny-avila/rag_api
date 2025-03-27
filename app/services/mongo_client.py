@@ -1,10 +1,10 @@
+# app/services/mongo_client.py
 import logging
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
-from config import ATLAS_MONGO_DB_URI
+from app.config import ATLAS_MONGO_DB_URI
 
 logger = logging.getLogger(__name__)
-
 
 async def mongo_health_check() -> bool:
     try:
