@@ -6,14 +6,30 @@ import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
 from typing import List, Iterable
-from fastapi import APIRouter, Request, UploadFile, HTTPException, File, Form, Body, Query, status
+from fastapi import (
+    APIRouter,
+    Request,
+    UploadFile,
+    HTTPException,
+    File,
+    Form,
+    Body,
+    Query,
+    status,
+)
 from langchain_core.documents import Document
 from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from functools import lru_cache
 
 from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 from app.constants import ERROR_MESSAGES
-from app.models import StoreDocument, QueryRequestBody, DocumentResponse, QueryMultipleBody
+from app.models import (
+    StoreDocument,
+    QueryRequestBody,
+    DocumentResponse,
+    QueryMultipleBody,
+)
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import get_loader, clean_text, process_documents
 from app.utils.health import is_health_ok
@@ -135,6 +151,12 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Cache the embedding function with LRU cache
+@lru_cache(maxsize=128)
+def get_cached_query_embedding(query: str):
+    return vector_store.embedding_function.embed_query(query)
+
+
 @router.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -150,7 +172,7 @@ async def query_embeddings_by_file_id(
     authorized_documents = []
 
     try:
-        embedding = vector_store.embedding_function.embed_query(body.query)
+        embedding = get_cached_query_embedding(body.query)
 
         if isinstance(vector_store, AsyncPgVector):
             documents = await run_in_executor(
@@ -543,7 +565,7 @@ async def embed_file_upload(
 async def query_embeddings_by_file_ids(body: QueryMultipleBody):
     try:
         # Get the embedding of the query text
-        embedding = vector_store.embedding_function.embed_query(body.query)
+        embedding = get_cached_query_embedding(body.query)
 
         # Perform similarity search with the query embedding and filter by the file_ids in metadata
         if isinstance(vector_store, AsyncPgVector):
@@ -582,4 +604,3 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
-
