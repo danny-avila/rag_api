@@ -3,7 +3,6 @@ import jwt
 import datetime
 from fastapi.testclient import TestClient
 from langchain.schema import Document
-
 from config import get_env_variable
 from main import app
 
@@ -27,14 +26,12 @@ class DummyVectorStore:
 
     @staticmethod
     def similarity_search_with_score_by_vector(embedding, k, filter):
-        # Handle filter {"file_id": "test"}
         if filter.get("file_id") == "test":
             doc = Document(
                 page_content="dummy content",
                 metadata={"file_id": "test", "user_id": "public"}
             )
             return [(doc, 0.9)]
-        # Handle filter {"file_id": {"$in": ["test"]}}
         file_id_filter = filter.get("file_id")
         if isinstance(file_id_filter, dict) and "$in" in file_id_filter:
             if "test" in file_id_filter["$in"]:
@@ -48,8 +45,8 @@ class DummyVectorStore:
 @pytest.fixture(autouse=True)
 def override_vector_store(monkeypatch):
     dummy = DummyVectorStore()
-    monkeypatch.setattr("app.config.vector_store", dummy)
-    monkeypatch.setattr("app.routes.query.vector_store", dummy)
+    # Override the vector_store in config.
+    monkeypatch.setattr("config.vector_store", dummy)
 
 client = TestClient(app)
 
@@ -64,7 +61,6 @@ def test_query_with_auth():
 def test_query_multiple_with_auth():
     payload = {"query": "dummy query", "file_ids": ["test"], "k": 4}
     response = client.post("/query_multiple", json=payload, headers=get_auth_header())
-    # Expect a 200 response and non-empty list since our dummy returns a document.
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)

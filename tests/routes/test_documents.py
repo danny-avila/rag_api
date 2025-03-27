@@ -27,16 +27,13 @@ class DummyVectorStore:
         return []
 
     def delete(self, ids):
-        # Dummy delete does nothing.
         pass
 
 @pytest.fixture(autouse=True)
 def override_vector_store(monkeypatch):
     dummy = DummyVectorStore()
-    # Override where the vector store is imported.
-    monkeypatch.setattr("app.config.vector_store", dummy)
-    # Also override in the documents route module.
-    monkeypatch.setattr("app.routes.documents.vector_store", dummy)
+    # Override the vector_store defined in config.
+    monkeypatch.setattr("config.vector_store", dummy)
 
 client = TestClient(app)
 

@@ -26,18 +26,22 @@ def override_get_loader(monkeypatch):
             from langchain.schema import Document
             return [Document(page_content="dummy content", metadata={"page": 1, "source": "dummy.txt"})]
 
-    # Override get_loader in app.routes.embed.
+    # Patch get_loader in the main module.
     monkeypatch.setattr(
-        "app.routes.embed.get_loader",
+        "main.get_loader",
         lambda filename, content_type, filepath: (DummyLoader(), True, "txt")
     )
 
-    # Check if the embed_local module exists; if so, override its get_loader as well.
-    if importlib.util.find_spec("app.routes.embed_local") is not None:
-        monkeypatch.setattr(
-            "app.routes.embed_local.get_loader",
-            lambda filename, content_type, filepath: (DummyLoader(), True, "txt")
-        )
+    # Try to patch the embed_local loader if that module exists.
+    try:
+        spec = importlib.util.find_spec("main.embed_local")
+        if spec is not None:
+            monkeypatch.setattr(
+                "main.embed_local.get_loader",
+                lambda filename, content_type, filepath: (DummyLoader(), True, "txt")
+            )
+    except ModuleNotFoundError:
+        pass
 
 
 client = TestClient(app)
