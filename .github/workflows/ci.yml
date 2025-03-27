@@ -33,6 +33,8 @@ jobs:
           pip install -r test_requirements.txt
 
       - name: Run tests and generate report
+        env:
+          OPENAI_API_KEY: test_key
         run: |
           pytest --maxfail=1 --disable-warnings --junitxml=test-results.xml
 
