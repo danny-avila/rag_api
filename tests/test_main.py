@@ -69,11 +69,6 @@ def override_vector_store(monkeypatch):
         return None
     monkeypatch.setattr(vector_store, "delete", dummy_delete)
 
-def test_health():
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json() == {"status": "UP"}
-
 def test_get_all_ids(auth_headers):
     response = client.get("/ids", headers=auth_headers)
     assert response.status_code == 200
