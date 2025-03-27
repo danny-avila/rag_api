@@ -23,6 +23,7 @@ from app.services.vector_store import AsyncPgVector
 
 router = APIRouter()
 
+
 @router.get("/ids")
 async def get_all_ids():
     try:
@@ -56,6 +57,7 @@ def is_health_ok():
     else:
         return True
 
+
 @router.get("/health")
 async def health_check():
     try:
@@ -71,6 +73,7 @@ async def health_check():
             traceback.format_exc(),
         )
         return {"status": "DOWN", "error": str(e)}, 503
+
 
 @router.get("/documents", response_model=list[DocumentResponse])
 async def get_documents_by_ids(ids: list[str] = Query(...)):
@@ -144,10 +147,11 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         logger.error("Failed to delete documents: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/query")
 async def query_embeddings_by_file_id(
-    body: QueryRequestBody,
-    request: Request,
+        body: QueryRequestBody,
+        request: Request,
 ):
     if not hasattr(request.state, "user"):
         user_authorized = body.entity_id if body.entity_id else "public"
@@ -227,11 +231,12 @@ def generate_digest(page_content: str):
     hash_obj = hashlib.md5(page_content.encode())
     return hash_obj.hexdigest()
 
+
 async def store_data_in_vector_db(
-    data: Iterable[Document],
-    file_id: str,
-    user_id: str = "",
-    clean_content: bool = False,
+        data: Iterable[Document],
+        file_id: str,
+        user_id: str = "",
+        clean_content: bool = False,
 ) -> bool:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
@@ -280,7 +285,7 @@ async def store_data_in_vector_db(
 
 @router.post("/local/embed")
 async def embed_local_file(
-    document: StoreDocument, request: Request, entity_id: str = None
+        document: StoreDocument, request: Request, entity_id: str = None
 ):
     # Check if the file exists
     if not os.path.exists(document.filepath):
@@ -336,10 +341,10 @@ async def embed_local_file(
 
 @router.post("/embed")
 async def embed_file(
-    request: Request,
-    file_id: str = Form(...),
-    file: UploadFile = File(...),
-    entity_id: str = Form(None),
+        request: Request,
+        file_id: str = Form(...),
+        file: UploadFile = File(...),
+        entity_id: str = Form(None),
 ):
     response_status = True
     response_message = "File processed successfully."
@@ -436,6 +441,7 @@ async def embed_file(
         "known_type": known_type,
     }
 
+
 @router.get("/documents/{id}/context")
 async def load_document_context(id: str):
     ids = [id]
@@ -482,10 +488,10 @@ async def load_document_context(id: str):
 
 @router.post("/embed-upload")
 async def embed_file_upload(
-    request: Request,
-    file_id: str = Form(...),
-    uploaded_file: UploadFile = File(...),
-    entity_id: str = Form(None),
+        request: Request,
+        file_id: str = Form(...),
+        uploaded_file: UploadFile = File(...),
+        entity_id: str = Form(None),
 ):
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
@@ -545,6 +551,7 @@ async def embed_file_upload(
         "known_type": known_type,
     }
 
+
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(body: QueryMultipleBody):
     try:
@@ -589,17 +596,3 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
         )
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    body = await request.body()
-    logger.debug(f"Validation error occurred")
-    logger.debug(f"Raw request body: {body.decode()}")
-    logger.debug(f"Validation errors: {exc.errors()}")
-    return JSONResponse(
-        status_code=422,
-        content={
-            "detail": exc.errors(),
-            "body": body.decode(),
-            "message": "Request validation failed",
-        },
-    )
