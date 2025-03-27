@@ -7,7 +7,8 @@ from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
-from app.services.vector_store import get_vector_store
+
+from app.services.vector_store.factory import get_vector_store
 
 load_dotenv(find_dotenv())
 

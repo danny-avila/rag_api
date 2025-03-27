@@ -1,4 +1,4 @@
-from app.services.vector_store import ExtendedPgVector
+from app.services.vector_store.extended_pg_vector import ExtendedPgVector
 
 # Create a dummy subclass that simulates DB responses.
 class DummyPgVector(ExtendedPgVector):

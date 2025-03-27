@@ -14,8 +14,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
 from app.constants import ERROR_MESSAGES
 from app.models import StoreDocument, QueryRequestBody, DocumentResponse, QueryMultipleBody
+from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import get_loader, clean_text, process_documents
-from app.services.vector_store import AsyncPgVector
 from app.utils.health import is_health_ok
 
 router = APIRouter()

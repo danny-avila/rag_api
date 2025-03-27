@@ -1,7 +1,7 @@
 # tests/conftest.py
 import os
 
-from app.services.vector_store import AsyncPgVector
+from app.services.vector_store.async_pg_vector import AsyncPgVector
 
 # Set environment variables early so config picks up test settings.
 os.environ["TESTING"] = "1"
