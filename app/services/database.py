@@ -28,7 +28,7 @@ async def ensure_custom_id_index_on_embedding():
         await conn.execute(f"""
                 CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name});
             """)
-        logger.debug(f"Created index '{index_name}' on '{table_name}({column_name})'")
+        logger.debug(f"Checking if index '{index_name}' on '{table_name}({column_name}) exists, if not found then index is created.'")
 
 
 async def pg_health_check() -> bool:
