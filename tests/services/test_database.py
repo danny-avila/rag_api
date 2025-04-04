@@ -34,9 +34,6 @@ def dummy_pool(monkeypatch):
 import asyncio
 @pytest.mark.asyncio
 async def test_ensure_custom_id_index_on_embedding(monkeypatch, dummy_pool):
-    async def dummy_check_index_exists(conn, index_name: str) -> bool:
-        return False
-    monkeypatch.setattr("app.services.database.check_index_exists", dummy_check_index_exists)
     result = await ensure_custom_id_index_on_embedding()
     # If no exceptions are raised, the function worked as expected.
     assert result is None
