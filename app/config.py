@@ -172,7 +172,6 @@ AZURE_OPENAI_ENDPOINT = get_env_variable("AZURE_OPENAI_ENDPOINT", "")
 RAG_AZURE_OPENAI_ENDPOINT = get_env_variable(
     "RAG_AZURE_OPENAI_ENDPOINT", AZURE_OPENAI_ENDPOINT
 ).rstrip("/")
-RAG_AZURE_CHUNK_SIZE = int(get_env_variable("RAG_AZURE_CHUNK_SIZE", "1"))
 HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
