@@ -26,6 +26,10 @@ from langchain_core.documents import Document
 class DummyVectorStore:
     def get_all_ids(self) -> list[str]:
         return ["testid1", "testid2"]
+    
+    def get_filtered_ids(self, ids) -> list[str]:
+        dummy_ids = ["testid1", "testid2"]
+        return [id for id in dummy_ids if id in ids]
 
     async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         return [

@@ -44,6 +44,10 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
     def get_all_ids(self) -> list[str]:
         # Return unique file_id fields in self._collection
         return self._collection.distinct("file_id")
+    
+    def get_filtered_ids(self, ids: list[str]) -> list[str]:
+        # Return unique file_id fields filtered by the provided ids
+        return self._collection.distinct("file_id", {"file_id": {"$in": ids}})
 
     def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         # Return documents filtered by file_id

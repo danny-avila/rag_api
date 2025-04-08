@@ -83,10 +83,10 @@ async def health_check():
 async def get_documents_by_ids(ids: list[str] = Query(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
-            existing_ids = await vector_store.get_all_ids()
+            existing_ids = await vector_store.get_filtered_ids(ids)
             documents = await vector_store.get_documents_by_ids(ids)
         else:
-            existing_ids = vector_store.get_all_ids()
+            existing_ids = vector_store.get_filtered_ids(ids)
             documents = vector_store.get_documents_by_ids(ids)
 
         # Ensure all requested ids exist
@@ -121,10 +121,10 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 async def delete_documents(document_ids: List[str] = Body(...)):
     try:
         if isinstance(vector_store, AsyncPgVector):
-            existing_ids = await vector_store.get_all_ids()
+            existing_ids = await vector_store.get_filtered_ids(document_ids)
             await vector_store.delete(ids=document_ids)
         else:
-            existing_ids = vector_store.get_all_ids()
+            existing_ids = vector_store.get_filtered_ids(document_ids)
             vector_store.delete(ids=document_ids)
 
         if not all(id in existing_ids for id in document_ids):
@@ -456,10 +456,10 @@ async def load_document_context(id: str):
     ids = [id]
     try:
         if isinstance(vector_store, AsyncPgVector):
-            existing_ids = await vector_store.get_all_ids()
+            existing_ids = await vector_store.get_filtered_ids(ids)
             documents = await vector_store.get_documents_by_ids(ids)
         else:
-            existing_ids = vector_store.get_all_ids()
+            existing_ids = vector_store.get_filtered_ids(ids)
             documents = vector_store.get_documents_by_ids(ids)
 
         # Ensure the requested id exists

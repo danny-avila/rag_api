@@ -29,6 +29,12 @@ def override_vector_store(monkeypatch):
         return ["testid1", "testid2"]
     monkeypatch.setattr(vector_store, "get_all_ids", dummy_get_all_ids)
 
+    # Override get_filtered_ids as an async function.
+    async def dummy_get_filtered_ids(ids):
+        dummy_ids = ["testid1", "testid2"]
+        return [id for id in dummy_ids if id in ids]
+    monkeypatch.setattr(vector_store, "get_filtered_ids", dummy_get_filtered_ids)
+
     # Override get_documents_by_ids as an async function.
     async def dummy_get_documents_by_ids(ids):
         return [
