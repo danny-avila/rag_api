@@ -10,6 +10,12 @@ class ExtendedPgVector(PGVector):
         with Session(self._bind) as session:
             results = session.query(self.EmbeddingStore.custom_id).all()
             return [result[0] for result in results if result[0] is not None]
+        
+    def get_filtered_ids(self, ids: list[str]) -> list[str]:
+        with Session(self._bind) as session:
+            query = session.query(self.EmbeddingStore.custom_id).filter(self.EmbeddingStore.custom_id.in_(ids))
+            results = query.all()
+            return [result[0] for result in results if result[0] is not None]
 
     def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
         with Session(self._bind) as session:
