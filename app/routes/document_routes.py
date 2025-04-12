@@ -34,8 +34,23 @@ from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import get_loader, clean_text, process_documents
 from app.utils.health import is_health_ok
 
+import zipfile
+import re
+import pikepdf
+from lxml import etree
+from xml.etree import ElementTree as ET
+from typing import Optional
+
 router = APIRouter()
 
+CONFIDENTIAL_LABELS = [
+    "confidential",
+    "highly confidential",
+    "restricted",
+    "top secret",
+    "internal",
+    "privileged"
+]
 
 @router.get("/ids")
 async def get_all_ids():
@@ -372,6 +387,18 @@ async def embed_file(
             chunk_size = 64 * 1024  # 64 KB
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
+
+        # 🔐 Run Sensitivity Check BEFORE processing
+        sensitivity_label = await detect_sensitivity_label(temp_file_path, file.filename)
+
+        logger.debug("File sensitivity label: %s", sensitivity_label)
+
+        if sensitivity_label and any(label.lower() in sensitivity_label.lower() for label in CONFIDENTIAL_LABELS):
+          raise HTTPException(
+              status_code=400,
+              detail=f"File not processed due to sensitivity level: {sensitivity_label}."
+          )
+
     except Exception as e:
         logger.error(
             "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
@@ -604,3 +631,74 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -------------------------------------------------------
+# 📁 Sensitivity Label Extractor
+# -------------------------------------------------------
+
+async def detect_sensitivity_label(file_path: str, filename: str) -> Optional[str]:
+    if filename.endswith(".docx") or filename.endswith(".xlsx") or filename.endswith(".pptx"):
+        return extract_office_sensitivity_label(file_path)
+    elif filename.endswith(".pdf"):
+        return extract_pdf_sensitivity_label(file_path)
+    return None
+
+def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
+    try:
+        with zipfile.ZipFile(file_path, "r") as zipf:
+            if "docProps/custom.xml" in zipf.namelist():
+                with zipf.open("docProps/custom.xml") as custom_file:
+                    xml_content = custom_file.read().decode("utf-8")
+                    tree = ET.fromstring(xml_content)
+
+                    # Define namespaces
+                    ns = {
+                        'cp': 'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties',
+                        'vt': 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes'
+                    }
+
+                    # Loop through all property elements
+                    for prop in tree.findall("cp:property", ns):
+                        name = prop.attrib.get("name", "")
+                        if name.endswith("_Name") or "ClassificationWatermarkText" in name:
+                            value_elem = prop.find("vt:lpwstr", ns)
+                            if value_elem is not None:
+                                return value_elem.text.strip().lower()
+    except Exception as e:
+        logger.warning("Failed to extract Office label: %s", str(e))
+
+    return None
+
+
+def extract_pdf_sensitivity_label(file_path: str) -> Optional[str]:
+    try:
+        with pikepdf.open(file_path) as pdf:
+            xmp = pdf.open_metadata()
+            xml_content = str(xmp)
+
+            tree = ET.fromstring(xml_content)
+
+            # Define namespace for pdfx (used in your metadata)
+            ns = {
+                'pdfx': 'http://ns.adobe.com/pdfx/1.3/',
+                'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+            }
+
+            # Search all rdf:Description elements under rdf:RDF
+            for description in tree.findall('.//rdf:Description', ns):
+                for key, value in description.attrib.items():
+                  for elem in description:
+                      tag = elem.tag
+                      if tag.startswith('{%s}' % ns['pdfx']) and tag.endswith('_Name') and elem.text:
+                          label = elem.text.strip()
+                          logger.info(f"Found sensitivity label: {label}")
+                          for known in CONFIDENTIAL_LABELS:
+                              if label.lower() == known.lower():
+                                  return known
+                          return label  # Return even if not in known list
+
+    except Exception as e:
+        logger.warning("Failed to extract PDF label: %s", str(e))
+
+    return None
