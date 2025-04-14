@@ -4,11 +4,9 @@ from fastapi import HTTPException
 from dotenv import load_dotenv
 from app.config import logger
 import zipfile
-import re
 import pikepdf
 from lxml import etree
 from xml.etree import ElementTree as ET
-from typing import Optional
 
 # Load .env
 load_dotenv()
@@ -19,7 +17,12 @@ def get_env_list(key: str) -> list[str]:
         return [item.strip().lower() for item in raw_value.split(",") if item.strip()]
     return []  # Return an empty list if the key is not found
 
+# Configuration for allowed document types and labels
 ALLOWED_LABELS = get_env_list("ALLOWED_LABELS")
+CHECKED_DOC_TYPES = get_env_list("CHECKED_DOC_TYPES")
+
+# Define the supported document types for checking (by default, all these are checked if no CHECKED_DOC_TYPES is defined)
+SUPPORTED_DOC_TYPES = ["pdf", "docx", "xlsx", "pptx"]
 
 def normalize_label(label: Optional[str]) -> str:
     return label.strip().lower() if label else ""
@@ -35,6 +38,19 @@ def is_label_allowed(label: Optional[str]) -> bool:
     normalized = normalize_label(label)
     return any(allowed in normalized for allowed in ALLOWED_LABELS)
 
+def is_doc_type_allowed(filename: str) -> bool:
+    """
+    Check if the document type (based on its file extension) is allowed according to the config.
+    """
+    file_ext = filename.split('.')[-1].lower()
+    
+    # If CHECKED_DOC_TYPES is defined, check if the file type is in the allowed list
+    if CHECKED_DOC_TYPES:
+        return file_ext in CHECKED_DOC_TYPES
+    
+    # If CHECKED_DOC_TYPES is not defined, allow all document types by default
+    return file_ext in SUPPORTED_DOC_TYPES
+
 def assert_sensitivity_allowed(sensitivity_label: str):
     if is_label_allowed(sensitivity_label):
         return
@@ -49,11 +65,18 @@ def assert_sensitivity_allowed(sensitivity_label: str):
 # -------------------------------------------------------
 
 async def detect_sensitivity_label(file_path: str, filename: str) -> Optional[str]:
+    # First, check if the file type is allowed
+    if not is_doc_type_allowed(filename):
+        logger.warning(f"Document type {filename.split('.')[-1]} is not allowed for sensitivity check.")
+        return None
+
+    # Proceed with the sensitivity label extraction if the type is allowed
     if filename.endswith(".docx") or filename.endswith(".xlsx") or filename.endswith(".pptx"):
         return extract_office_sensitivity_label(file_path)
     elif filename.endswith(".pdf"):
         return extract_pdf_sensitivity_label(file_path)
-    return None
+    
+    return None  # Return None if the file type is not supported
 
 def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
     try:
@@ -98,12 +121,12 @@ def extract_pdf_sensitivity_label(file_path: str) -> Optional[str]:
             # Search all rdf:Description elements under rdf:RDF
             for description in tree.findall('.//rdf:Description', ns):
                 for key, value in description.attrib.items():
-                  for elem in description:
-                      tag = elem.tag
-                      if tag.startswith('{%s}' % ns['pdfx']) and tag.endswith('_Name') and elem.text:
-                          label = elem.text.strip()
-                          logger.info(f"Found sensitivity label: {label}")
-                          return label
+                    for elem in description:
+                        tag = elem.tag
+                        if tag.startswith('{%s}' % ns['pdfx']) and tag.endswith('_Name') and elem.text:
+                            label = elem.text.strip()
+                            logger.info(f"Found sensitivity label: {label}")
+                            return label
 
     except Exception as e:
         logger.warning("Failed to extract PDF label: %s", str(e))
