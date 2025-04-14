@@ -87,8 +87,8 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
-- `ALLOWED_LABELS`: (Optional) A comma-separated list of sensitivity labels that are permitted for file processing.
-  - Default: public,personal,none
+- `ALLOWED_LABELS`: (Optional) A comma-separated list of sensitivity labels that are permitted for processing of `.docx`, `.pptx`, `.xlsx`, and `.pdf` files.
+  - Omit to allow all files to be processed regardless of sensitivity labels.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
