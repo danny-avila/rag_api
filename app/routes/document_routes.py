@@ -40,17 +40,9 @@ import pikepdf
 from lxml import etree
 from xml.etree import ElementTree as ET
 from typing import Optional
+from app.utils.sensitivity import assert_sensitivity_allowed
 
 router = APIRouter()
-
-CONFIDENTIAL_LABELS = [
-    "confidential",
-    "highly confidential",
-    "restricted",
-    "top secret",
-    "internal",
-    "privileged"
-]
 
 @router.get("/ids")
 async def get_all_ids():
@@ -390,14 +382,9 @@ async def embed_file(
 
         # 🔐 Run Sensitivity Check BEFORE processing
         sensitivity_label = await detect_sensitivity_label(temp_file_path, file.filename)
+        assert_sensitivity_allowed(sensitivity_label)
 
         logger.debug("File sensitivity label: %s", sensitivity_label)
-
-        if sensitivity_label and any(label.lower() in sensitivity_label.lower() for label in CONFIDENTIAL_LABELS):
-          raise HTTPException(
-              status_code=400,
-              detail=f"File not processed due to sensitivity level: {sensitivity_label}."
-          )
 
     except Exception as e:
         logger.error(
@@ -663,8 +650,7 @@ def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
                         name = prop.attrib.get("name", "")
                         if name.endswith("_Name") or "ClassificationWatermarkText" in name:
                             value_elem = prop.find("vt:lpwstr", ns)
-                            if value_elem is not None:
-                                return value_elem.text.strip().lower()
+                            return value_elem.text.strip().lower()
     except Exception as e:
         logger.warning("Failed to extract Office label: %s", str(e))
 
@@ -693,10 +679,7 @@ def extract_pdf_sensitivity_label(file_path: str) -> Optional[str]:
                       if tag.startswith('{%s}' % ns['pdfx']) and tag.endswith('_Name') and elem.text:
                           label = elem.text.strip()
                           logger.info(f"Found sensitivity label: {label}")
-                          for known in CONFIDENTIAL_LABELS:
-                              if label.lower() == known.lower():
-                                  return known
-                          return label  # Return even if not in known list
+                          return label
 
     except Exception as e:
         logger.warning("Failed to extract PDF label: %s", str(e))
