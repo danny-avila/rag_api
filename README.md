@@ -87,18 +87,22 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
-- `ALLOWED_LABELS`: (Optional) A comma-separated list of sensitivity labels that are allowed for processing. If no labels are specified, all labels will be allowed by default.
 
-  - Example: ALLOWED_LABELS=personal,none
-  - Default: If not defined, all labels are allowed.
-
-- `CHECKED_DOC_TYPES`: (Optional) A comma-separated list of document types (by file extension) to be checked for sensitivity labels. If no types are specified, all supported document types (pdf, docx, xlsx, pptx) will be checked by default.
-  - Example: CHECKED_DOC_TYPES=pdf,docx,pptx
-  - Default: If not defined, all supported types (pdf, docx, xlsx, pptx) are checked.
-
-Example: ALLOWED_LABELS=personal,none
-
-Default: If not defined, all labels are allowed.
+- `DOC_FLTR_ENABLED`: Enables or disables sensitivity label filtering.
+  - Type: boolean
+  - Accepted values: true, 1, yes (case-insensitive)
+  - Default: false if not set
+- `DOC_FLTR_ALLOWED_LABELS`: A JSON array of allowed sensitivity labels. If a document's label is not included in this list, it will be rejected when filtering is enabled.
+  - Type: JSON list of strings
+  - Format: Must be a valid JSON array (e.g., ["public", "confidential"])
+  - Note: Labels are normalized (trimmed and lowercased). Special characters and spaces are allowed.
+  - Default: If unset or an empty array, all labels are allowed
+  - Example: `DOC_FLTR_ALLOWED_LABELS=["public", "personal", "confidential", "company name - confidential"]`
+- `DOC_FLTR_FILE_TYPES`: A JSON array of allowed file extensions (e.g., "pdf", "docx"). Only these types will be checked for labels.
+  - Type: JSON list of strings
+  - Note: File extensions should be lowercase and without dots.
+  - Default: If unset, defaults to ["pdf", "docx", "xlsx", "pptx"]
+  - Example: `DOC_FLTR_FILE_TYPES=["pdf", "docx"]`
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
