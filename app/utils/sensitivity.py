@@ -7,49 +7,51 @@ import zipfile
 import pikepdf
 from lxml import etree
 from xml.etree import ElementTree as ET
+import json
 
 # Load .env
 load_dotenv()
 
-def get_env_list(key: str) -> list[str]:
+def get_env_json_list(key: str) -> list[str]:
     raw_value = os.getenv(key)
-    if raw_value:
-        return [item.strip().lower() for item in raw_value.split(",") if item.strip()]
-    return []  # Return an empty list if the key is not found
+    try:
+        return [item.strip().lower() for item in json.loads(raw_value)] if raw_value else []
+    except json.JSONDecodeError:
+        logger.warning(f"Failed to parse {key} as JSON list.")
+        return []
 
-# Configuration for allowed document types and labels
-ALLOWED_LABELS = get_env_list("ALLOWED_LABELS")
-CHECKED_DOC_TYPES = get_env_list("CHECKED_DOC_TYPES")
+def get_env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key)
+    return val.lower() in ("1", "true", "yes") if val is not None else default
 
-# Define the supported document types for checking (by default, all these are checked if no CHECKED_DOC_TYPES is defined)
-SUPPORTED_DOC_TYPES = ["pdf", "docx", "xlsx", "pptx"]
+# Configuration
+DOC_FLTR_ENABLED = get_env_bool("DOC_FLTR_ENABLED")
+DOC_FLTR_ALLOWED_LABELS = get_env_json_list("DOC_FLTR_ALLOWED_LABELS")
+DOC_FLTR_FILE_TYPES = get_env_json_list("DOC_FLTR_FILE_TYPES")
+
+SUPPORTED_FILE_TYPES = ["pdf", "docx", "xlsx", "pptx"]
 
 def normalize_label(label: Optional[str]) -> str:
     return label.strip().lower() if label else ""
 
 def is_label_allowed(label: Optional[str]) -> bool:
-    # If no allowed labels are defined, allow all labels
-    if not ALLOWED_LABELS:
+    if label is None:
+        return True  # Always allow files with no label
+
+    if not DOC_FLTR_ENABLED:
         return True
 
-    if label is None:
-        return "none" in ALLOWED_LABELS
+    if not DOC_FLTR_ALLOWED_LABELS:
+        return True  # If filtering is on but no labels are defined, allow all
 
     normalized = normalize_label(label)
-    return any(allowed in normalized for allowed in ALLOWED_LABELS)
+    return normalized in DOC_FLTR_ALLOWED_LABELS
 
 def is_doc_type_allowed(filename: str) -> bool:
-    """
-    Check if the document type (based on its file extension) is allowed according to the config.
-    """
     file_ext = filename.split('.')[-1].lower()
-    
-    # If CHECKED_DOC_TYPES is defined, check if the file type is in the allowed list
-    if CHECKED_DOC_TYPES:
-        return file_ext in CHECKED_DOC_TYPES
-    
-    # If CHECKED_DOC_TYPES is not defined, allow all document types by default
-    return file_ext in SUPPORTED_DOC_TYPES
+    if DOC_FLTR_FILE_TYPES:
+        return file_ext in DOC_FLTR_FILE_TYPES
+    return file_ext in SUPPORTED_FILE_TYPES
 
 def assert_sensitivity_allowed(sensitivity_label: str):
     if is_label_allowed(sensitivity_label):
@@ -65,18 +67,19 @@ def assert_sensitivity_allowed(sensitivity_label: str):
 # -------------------------------------------------------
 
 async def detect_sensitivity_label(file_path: str, filename: str) -> Optional[str]:
-    # First, check if the file type is allowed
+    if not DOC_FLTR_ENABLED:
+        return None
+
     if not is_doc_type_allowed(filename):
         logger.warning(f"Document type {filename.split('.')[-1]} is not allowed for sensitivity check.")
         return None
 
-    # Proceed with the sensitivity label extraction if the type is allowed
     if filename.endswith(".docx") or filename.endswith(".xlsx") or filename.endswith(".pptx"):
         return extract_office_sensitivity_label(file_path)
     elif filename.endswith(".pdf"):
         return extract_pdf_sensitivity_label(file_path)
-    
-    return None  # Return None if the file type is not supported
+
+    return None
 
 def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
     try:
@@ -86,13 +89,11 @@ def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
                     xml_content = custom_file.read().decode("utf-8")
                     tree = ET.fromstring(xml_content)
 
-                    # Define namespaces
                     ns = {
                         'cp': 'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties',
                         'vt': 'http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes'
                     }
 
-                    # Loop through all property elements
                     for prop in tree.findall("cp:property", ns):
                         name = prop.attrib.get("name", "")
                         if name.endswith("_Name") or "ClassificationWatermarkText" in name:
@@ -103,7 +104,6 @@ def extract_office_sensitivity_label(file_path: str) -> Optional[str]:
 
     return None
 
-
 def extract_pdf_sensitivity_label(file_path: str) -> Optional[str]:
     try:
         with pikepdf.open(file_path) as pdf:
@@ -112,13 +112,11 @@ def extract_pdf_sensitivity_label(file_path: str) -> Optional[str]:
 
             tree = ET.fromstring(xml_content)
 
-            # Define namespace for pdfx (used in your metadata)
             ns = {
                 'pdfx': 'http://ns.adobe.com/pdfx/1.3/',
                 'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
             }
 
-            # Search all rdf:Description elements under rdf:RDF
             for description in tree.findall('.//rdf:Description', ns):
                 for key, value in description.attrib.items():
                     for elem in description:
