@@ -33,7 +33,6 @@ from app.models import (
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import get_loader, clean_text, process_documents
 from app.utils.health import is_health_ok
-from app.utils.sensitivity import assert_sensitivity_allowed, detect_sensitivity_label
 
 router = APIRouter()
 
@@ -373,11 +372,15 @@ async def embed_file(
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
 
-        # 🔐 Run Sensitivity Check BEFORE processing
-        sensitivity_label = await detect_sensitivity_label(temp_file_path, file.filename)
-        assert_sensitivity_allowed(sensitivity_label)
+        # Run Sensitivity Check BEFORE processing
+        if os.getenv("DOC_FLTR_ENABLED"):
+            # Lazy import: only load sensitivity functions when filtering is enabled
+            from app.utils.sensitivity import detect_sensitivity_label, assert_sensitivity_allowed
 
-        logger.debug("File sensitivity label: %s", sensitivity_label)
+            sensitivity_label = await detect_sensitivity_label(temp_file_path, file.filename)
+            assert_sensitivity_allowed(sensitivity_label)
+
+            logger.debug("File sensitivity label: %s", sensitivity_label)
 
     except Exception as e:
         logger.error(
