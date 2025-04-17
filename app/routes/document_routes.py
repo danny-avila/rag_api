@@ -36,7 +36,6 @@ from app.utils.health import is_health_ok
 
 router = APIRouter()
 
-
 @router.get("/ids")
 async def get_all_ids():
     try:
@@ -372,6 +371,17 @@ async def embed_file(
             chunk_size = 64 * 1024  # 64 KB
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
+
+        # Run Sensitivity Check BEFORE processing
+        if os.getenv("DOC_FLTR_ENABLED"):
+            # Lazy import: only load sensitivity functions when filtering is enabled
+            from app.utils.sensitivity import detect_sensitivity_label, assert_sensitivity_allowed
+
+            sensitivity_label = await detect_sensitivity_label(temp_file_path, file.filename)
+            assert_sensitivity_allowed(sensitivity_label)
+
+            logger.debug("File sensitivity label: %s", sensitivity_label)
+
     except Exception as e:
         logger.error(
             "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",

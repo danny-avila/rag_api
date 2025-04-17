@@ -1,6 +1,7 @@
 ﻿# ID-based RAG FastAPI
 
 ## Overview
+
 This project integrates Langchain with FastAPI in an Asynchronous, Scalable manner, providing a framework for document indexing and retrieval, using PostgreSQL/pgvector.
 
 Files are organized into embeddings by `file_id`. The primary use case is for integration with [LibreChat](https://librechat.ai), but this simple API can be used for any ID-based use case.
@@ -10,6 +11,7 @@ The main reason to use the ID approach is to work with embeddings on a file-leve
 The API will evolve over time to employ different querying/re-ranking methods, embedding models, and vector stores.
 
 ## Features
+
 - **Document Management**: Methods for adding, retrieving, and deleting documents.
 - **Vector Store**: Utilizes Langchain's vector store for efficient document retrieval.
 - **Asynchronous Support**: Offers async operations for enhanced performance.
@@ -29,6 +31,7 @@ The API will evolve over time to employ different querying/re-ranking methods, e
   - Local:
     - Make sure to setup `DB_HOST` to the correct database hostname
     - Run the following commands (preferably in a [virtual environment](https://realpython.com/python-virtual-environments-a-primer/))
+
 ```bash
 pip install -r requirements.txt
 uvicorn main:app
@@ -39,7 +42,7 @@ uvicorn main:app
 The following environment variables are required to run the application:
 
 - `RAG_OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
-    - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
+  - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
 - `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
 - `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
@@ -51,6 +54,7 @@ The following environment variables are required to run the application:
 - `RAG_HOST`: (Optional) The hostname or IP address where the API server will run. Defaults to "0.0.0.0"
 - `RAG_PORT`: (Optional) The port number where the API server will run. Defaults to port 8000.
 - `JWT_SECRET`: (Optional) The secret key used for verifying JWT tokens for requests.
+
   - The secret is only used for verification. This basic approach assumes a signed JWT from elsewhere.
   - Omit to run API without requiring authentication
 
@@ -63,19 +67,19 @@ The following environment variables are required to run the application:
 - `CONSOLE_JSON`: (Optional) Set to "True" to log as json for Cloud Logging aggregations
 - `EMBEDDINGS_PROVIDER`: (Optional) either "openai", "bedrock", "azure", "huggingface", "huggingfacetei" or "ollama", where "huggingface" uses sentence_transformers; defaults to "openai"
 - `EMBEDDINGS_MODEL`: (Optional) Set a valid embeddings model to use from the configured provider.
-    - **Defaults**
-    - openai: "text-embedding-3-small"
-    - azure: "text-embedding-3-small" (will be used as your Azure Deployment)
-    - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
-    - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
-    - ollama: "nomic-embed-text"
-    - bedrock: "amazon.titan-embed-text-v1"
+  - **Defaults**
+  - openai: "text-embedding-3-small"
+  - azure: "text-embedding-3-small" (will be used as your Azure Deployment)
+  - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
+  - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
+  - ollama: "nomic-embed-text"
+  - bedrock: "amazon.titan-embed-text-v1"
 - `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
-    - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
+  - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_AZURE_OPENAI_ENDPOINT`: (Optional) The endpoint URL for Azure OpenAI service, including the resource.
-    - Example: `https://YOUR_RESOURCE_NAME.openai.azure.com`.
-    - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
+  - Example: `https://YOUR_RESOURCE_NAME.openai.azure.com`.
+  - Note: `AZURE_OPENAI_ENDPOINT` will work but `RAG_AZURE_OPENAI_ENDPOINT` will override it in order to not conflict with LibreChat setting.
 - `HF_TOKEN`: (Optional) if needed for `huggingface` option.
 - `OLLAMA_BASE_URL`: (Optional) defaults to `http://ollama:11434`.
 - `ATLAS_SEARCH_INDEX`: (Optional) the name of the vector search index if using Atlas MongoDB, defaults to `vector_index`
@@ -83,6 +87,22 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
+
+- `DOC_FLTR_ENABLED`: Enables or disables sensitivity label filtering.
+  - Type: boolean
+  - Accepted values: true, 1, yes (case-insensitive)
+  - Default: false if not set
+- `DOC_FLTR_ALLOWED_LABELS`: A JSON array of allowed sensitivity labels. If a document's label is not included in this list, it will be rejected when filtering is enabled.
+  - Type: JSON list of strings
+  - Format: Must be a valid JSON array (e.g., ["public", "confidential"])
+  - Note: Labels are normalized (trimmed and lowercased). Special characters and spaces are allowed.
+  - Default: If unset or an empty array, all labels are allowed
+  - Example: `DOC_FLTR_ALLOWED_LABELS=["public", "personal", "confidential", "company name - confidential"]`
+- `DOC_FLTR_FILE_TYPES`: A JSON array of allowed file extensions (e.g., "pdf", "docx"). Only these types will be checked for labels.
+  - Type: JSON list of strings
+  - Note: File extensions should be lowercase and without dots.
+  - Default: If unset, defaults to ["pdf", "docx", "xlsx", "pptx"]
+  - Example: `DOC_FLTR_FILE_TYPES=["pdf", "docx"]`
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
@@ -97,7 +117,7 @@ COLLECTION_NAME=<vector collection>
 ATLAS_SEARCH_INDEX=<vector search index>
 ```
 
-The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition,  create a vector search index for collection above (remember to assign `$ATLAS_SEARCH_INDEX`) with the following json:
+The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by LibreChat. Even if it is the same, the `$COLLECTION_NAME` collection needs to be a completely new one, separate from all collections used by LibreChat. In addition, create a vector search index for collection above (remember to assign `$ATLAS_SEARCH_INDEX`) with the following json:
 
 ```json
 {
@@ -118,31 +138,32 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
-
 ### Cloud Installation Settings:
 
 #### AWS:
+
 Make sure your RDS Postgres instance adheres to this requirement:
 
 `The pgvector extension version 0.5.0 is available on database instances in Amazon RDS running PostgreSQL 15.4-R2 and higher, 14.9-R2 and higher, 13.12-R2 and higher, and 12.16-R2 and higher in all applicable AWS Regions, including the AWS GovCloud (US) Regions.`
 
 In order to setup RDS Postgres with RAG API, you can follow these steps:
 
-* Create a RDS Instance/Cluster using the provided [AWS Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CreateDBInstance.html).
-* Login to the RDS Cluster using the Endpoint connection string from the RDS Console or from your IaC Solution output.
-* The login is via the *Master User*.
-* Create a dedicated database for rag_api:
-``` create database rag_api;```.
-* Create a dedicated user\role for that database:
-``` create role rag;```
+- Create a RDS Instance/Cluster using the provided [AWS Documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_CreateDBInstance.html).
+- Login to the RDS Cluster using the Endpoint connection string from the RDS Console or from your IaC Solution output.
+- The login is via the _Master User_.
+- Create a dedicated database for rag_api:
+  ` create database rag_api;`.
+- Create a dedicated user\role for that database:
+  ` create role rag;`
 
-* Switch to the database you just created: ```\c rag_api```
-* Enable the Vector extension: ```create extension vector;```
-* Use the documentation provided above to set up the connection string to the RDS Postgres Instance\Cluster.
+- Switch to the database you just created: `\c rag_api`
+- Enable the Vector extension: `create extension vector;`
+- Use the documentation provided above to set up the connection string to the RDS Postgres Instance\Cluster.
 
 Notes:
-  * Even though you're logging with a Master user, it doesn't have all the super user privileges, that's why we cannot use the command: ```create role x with superuser;```
-  * If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
+
+- Even though you're logging with a Master user, it doesn't have all the super user privileges, that's why we cannot use the command: `create role x with superuser;`
+- If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
 
 ### Dev notes:
 
