@@ -3,6 +3,7 @@ import os
 import json
 import boto3
 import logging
+import urllib.parse
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
@@ -67,8 +68,8 @@ CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
-CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
-DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+CONNECTION_STRING = f"postgresql+psycopg2://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
+DSN = f"postgresql://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
 
 ## Logging
 
