@@ -26,7 +26,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
-
+    MISTRAL = "mistral"
 
 def get_env_variable(
     var_name: str, default_value: str = None, required: bool = False
@@ -177,6 +177,7 @@ HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
+MISTRAL_API_KEY = get_env_variable("MISTRAL_API_KEY", "")
 
 ## Embeddings
 
@@ -227,6 +228,13 @@ def init_embeddings(provider, model):
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
         )
+    elif provider == EmbeddingsProvider.MISTRAL:
+        from langchain_mistralai import MistralAIEmbeddings
+
+        return MistralAIEmbeddings(
+            model=model,
+            api_key=MISTRAL_API_KEY,
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -254,6 +262,10 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.MISTRAL:
+    EMBEDDINGS_MODEL = get_env_variable(
+        "EMBEDDINGS_MODEL", "mistral-embed"
+    )
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 

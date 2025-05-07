@@ -30,6 +30,7 @@ pymongo==4.6.3
 langchain-mongodb==0.2.0
 langchain-ollama==0.2.0
 langchain-huggingface==0.1.0
+langchain-mistralai==0.2.1
 cryptography==44.0.1
 python-magic==0.4.27
 python-pptx==0.6.23
