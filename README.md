@@ -42,6 +42,7 @@ The following environment variables are required to run the application:
     - Note: `OPENAI_API_KEY` will work but `RAG_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
 - `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
 - `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
+- `RAG_OPENAI_CHUNK_SIZE`: (Optional) The chunk size for OpenAI API Embeddings, default is 200.
 - `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
 - `POSTGRES_DB`: (Optional) The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.

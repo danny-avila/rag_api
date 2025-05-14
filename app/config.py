@@ -164,6 +164,7 @@ OPENAI_API_KEY = get_env_variable("OPENAI_API_KEY", "")
 RAG_OPENAI_API_KEY = get_env_variable("RAG_OPENAI_API_KEY", OPENAI_API_KEY)
 RAG_OPENAI_BASEURL = get_env_variable("RAG_OPENAI_BASEURL", None)
 RAG_OPENAI_PROXY = get_env_variable("RAG_OPENAI_PROXY", None)
+RAG_OPENAI_CHUNK_SIZE = get_env_variable("RAG_OPENAI_CHUNK_SIZE", '200')
 AZURE_OPENAI_API_KEY = get_env_variable("AZURE_OPENAI_API_KEY", "")
 RAG_AZURE_OPENAI_API_VERSION = get_env_variable("RAG_AZURE_OPENAI_API_VERSION", None)
 RAG_AZURE_OPENAI_API_KEY = get_env_variable(
@@ -190,7 +191,7 @@ def init_embeddings(provider, model):
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
-            chunk_size=200
+            chunk_size=int(RAG_OPENAI_CHUNK_SIZE),
         )
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
