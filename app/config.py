@@ -190,6 +190,7 @@ def init_embeddings(provider, model):
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
+            chunk_size=EMBEDDINGS_CHUNK_SIZE,
         )
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
@@ -199,6 +200,7 @@ def init_embeddings(provider, model):
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
+            chunk_size=EMBEDDINGS_CHUNK_SIZE,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -237,8 +239,12 @@ EMBEDDINGS_PROVIDER = EmbeddingsProvider(
 
 if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    # 1000 is the default chunk size for OpenAI, but this causes API rate limits to be hit
+    EMBEDDINGS_CHUNK_SIZE = get_env_variable("EMBEDDINGS_CHUNK_SIZE", 200)
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.AZURE:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    # 2048 is the default (and maximum) chunk size for Azure, but this often causes unexpected 429 errors
+    EMBEDDINGS_CHUNK_SIZE = get_env_variable("EMBEDDINGS_CHUNK_SIZE", 200)
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACE:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
