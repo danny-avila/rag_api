@@ -43,6 +43,7 @@ The following environment variables are required to run the application:
 - `RAG_OPENAI_BASEURL`: (Optional) The base URL for your OpenAI API Embeddings
 - `RAG_OPENAI_PROXY`: (Optional) Proxy for OpenAI API Embeddings
 - `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
+- `POSTGRES_USE_UNIX_SOCKET`: (Optional) Set to "True" when connecting to the PostgreSQL database server with Unix Socket.
 - `POSTGRES_DB`: (Optional) The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`.
 - `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
