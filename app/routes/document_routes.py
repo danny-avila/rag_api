@@ -29,7 +29,6 @@ from app.config import (
     RAG_UPLOAD_DIR,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
-    PARALLEL_EXECUTION,
     file_storage_service,
 )
 from app.constants import ERROR_MESSAGES
@@ -362,6 +361,28 @@ async def store_data_in_vector_db(
     logger.info(f"Memory usage3: {mem_mb} MB")
 
     # Preparing documents with page content and metadata for insertion.
+    storage_meta_to_add = (
+        {
+            "source": storage_metadata["path"],
+            "storage_type": "local",
+            "storage_key": storage_metadata["key"],
+            "storage_folder": storage_metadata["folder"],
+            "original_filename": storage_metadata.get("original_filename"),
+        }
+        if storage_metadata
+        and storage_metadata.get("storage_type") == "local"
+        else (
+            {
+                "source": f"s3://{storage_metadata['bucket']}/{storage_metadata['key']}",
+                "storage_type": "s3",
+                "s3_bucket": storage_metadata["bucket"],
+                "s3_key": storage_metadata["key"],
+                "original_filename": storage_metadata.get("original_filename"),
+            }
+            if storage_metadata
+            else {}
+        )
+    )
     docs = [
         Document(
             page_content=doc.page_content,
@@ -371,26 +392,7 @@ async def store_data_in_vector_db(
                 "digest": generate_digest(doc.page_content),
                 **(doc.metadata or {}),
                 # Add storage metadata if available
-                **(
-                    {
-                        "source": storage_metadata["path"],
-                        "storage_type": "local",
-                        "storage_key": storage_metadata["key"],
-                        "storage_folder": storage_metadata["folder"],
-                    }
-                    if storage_metadata
-                    and storage_metadata.get("storage_type") == "local"
-                    else (
-                        {
-                            "source": f"s3://{storage_metadata['bucket']}/{storage_metadata['key']}",
-                            "storage_type": "s3",
-                            "s3_bucket": storage_metadata["bucket"],
-                            "s3_key": storage_metadata["key"],
-                        }
-                        if storage_metadata
-                        else {}
-                    )
-                ),
+                **storage_meta_to_add,
             },
         )
         for doc in documents
@@ -400,10 +402,8 @@ async def store_data_in_vector_db(
     logger.info(f"Memory usage4: {mem_mb} MB")
 
     batches = []
-    if PARALLEL_EXECUTION == 1:
-        batches.append(docs)
-    else:
-        batches = create_batches(docs, PARALLEL_EXECUTION)
+    # Use single batch for simplicity
+    batches.append(docs)
 
     mem_mb = process.memory_info().rss / 1024 / 1024
     logger.info(f"Memory usage5: {mem_mb} MB")
@@ -584,7 +584,7 @@ async def embed_file(
                     folder_name, file.filename, file_id
                 )
                 storage_metadata = await file_storage_service.store_file(
-                    temp_file_path, storage_key, file.content_type
+                    temp_file_path, storage_key, file.content_type, file.filename
                 )
                 storage_type = "S3" if file_storage_service.use_s3 else "local"
                 logger.info(f"File stored in {storage_type}: {storage_key}")

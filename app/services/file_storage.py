@@ -91,7 +91,7 @@ class FileStorageService:
         return component
 
     async def store_file(
-        self, local_file_path: str, storage_key: str, content_type: str = None
+        self, local_file_path: str, storage_key: str, content_type: str = None, original_filename: str = None
     ) -> Dict[str, Any]:
         """
         Store file in S3 or local storage and return metadata
@@ -100,12 +100,13 @@ class FileStorageService:
             local_file_path: Path to the temporary file to store
             storage_key: Storage path (e.g., "agent123/document.pdf")
             content_type: MIME type of the file
+            original_filename: Original filename before transformation
 
         Returns:
             Dictionary with storage metadata
 
         Example:
-            metadata = await store_file("/tmp/file.pdf", "agent123/doc.pdf", "application/pdf")
+            metadata = await store_file("/tmp/file.pdf", "agent123/doc.pdf", "application/pdf", "document.pdf")
         """
         # Check circuit breaker for S3
         if self.s3_circuit_open and self.use_s3:
@@ -115,20 +116,20 @@ class FileStorageService:
             else:
                 logger.warning("S3 circuit breaker open, falling back to local storage")
                 return await self._save_locally(
-                    local_file_path, storage_key, content_type
+                    local_file_path, storage_key, content_type, original_filename
                 )
 
         try:
             if self.use_s3:
                 result = await self._upload_to_s3(
-                    local_file_path, storage_key, content_type
+                    local_file_path, storage_key, content_type, original_filename
                 )
                 # Reset failure count on success
                 self.s3_failure_count = 0
                 return result
             else:
                 return await self._save_locally(
-                    local_file_path, storage_key, content_type
+                    local_file_path, storage_key, content_type, original_filename
                 )
         except Exception as e:
             if self.use_s3:
@@ -143,14 +144,14 @@ class FileStorageService:
                 # Fallback to local storage
                 logger.warning(f"S3 upload failed, falling back to local: {e}")
                 return await self._save_locally(
-                    local_file_path, storage_key, content_type
+                    local_file_path, storage_key, content_type, original_filename
                 )
             else:
                 logger.error(f"Storage operation failed: {e}")
                 return None
 
     async def _upload_to_s3(
-        self, local_file_path: str, s3_key: str, content_type: str = None
+        self, local_file_path: str, s3_key: str, content_type: str = None, original_filename: str = None
     ) -> Dict[str, Any]:
         """
         Upload file to S3 and return metadata
@@ -182,7 +183,7 @@ class FileStorageService:
                 "bucket": self.bucket_name,
                 "key": s3_key,
                 "folder": s3_key.split("/")[0],
-                "original_filename": os.path.basename(s3_key),
+                "original_filename": original_filename or os.path.basename(s3_key),
                 "content_type": content_type or "application/octet-stream",
                 "size_bytes": file_stats.st_size,
                 "upload_timestamp": datetime.now().isoformat(),
@@ -197,7 +198,7 @@ class FileStorageService:
                 upload_params["Body"].close()
 
     async def _save_locally(
-        self, temp_file_path: str, storage_key: str, content_type: str = None
+        self, temp_file_path: str, storage_key: str, content_type: str = None, original_filename: str = None
     ) -> Dict[str, Any]:
         """
         Save file to local persistent storage and return metadata
@@ -221,7 +222,7 @@ class FileStorageService:
             "path": permanent_path,
             "key": storage_key,
             "folder": storage_key.split("/")[0],
-            "original_filename": os.path.basename(storage_key),
+            "original_filename": original_filename or os.path.basename(storage_key),
             "content_type": content_type or "application/octet-stream",
             "size_bytes": file_stats.st_size,
             "upload_timestamp": file_stats.st_mtime,
