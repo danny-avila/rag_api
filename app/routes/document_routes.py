@@ -147,7 +147,6 @@ async def delete_documents(document_ids: List[str] = Body(...)):
                 storage_key = doc.metadata.get("storage_key") or doc.metadata.get("s3_key")
                 if storage_key:
                     storage_keys.add(storage_key)
-            
             # Delete files from storage
             for storage_key in storage_keys:
                 try:
@@ -240,11 +239,13 @@ async def query_embeddings_by_file_id(
                 else:
                     if body.entity_id == doc_user_id:
                         logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+                            f"Entity ID {body.entity_id} matches document "
+                            f"user_id but user {user_authorized} is not authorized"
                         )
                     else:
                         logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+                            f"Access denied for both entity ID {body.entity_id} "
+                            f"and user {user_authorized} to document with user_id {doc_user_id}"
                         )
             else:
                 logger.warning(
@@ -546,7 +547,8 @@ async def embed_file(
         )
 
         logger.debug(
-            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
+            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - "
+            f"FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
         )
 
         data = loader.load()
