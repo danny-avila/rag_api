@@ -47,6 +47,15 @@ RAG_UPLOAD_DIR = get_env_variable("RAG_UPLOAD_DIR", "./uploads/")
 if not os.path.exists(RAG_UPLOAD_DIR):
     os.makedirs(RAG_UPLOAD_DIR, exist_ok=True)
 
+# File Storage Configuration
+S3_BUCKET_NAME = get_env_variable("S3_BUCKET_NAME", None)
+S3_REGION = get_env_variable("S3_REGION", None)
+if S3_BUCKET_NAME and not S3_REGION:
+    S3_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+RAG_PERSISTENT_STORAGE_DIR = get_env_variable("RAG_PERSISTENT_STORAGE_DIR", "./storage/")
+if not os.path.exists(RAG_PERSISTENT_STORAGE_DIR):
+    os.makedirs(RAG_PERSISTENT_STORAGE_DIR, exist_ok=True)
+
 VECTOR_DB_TYPE = VectorDBType(
     get_env_variable("VECTOR_DB_TYPE", VectorDBType.PGVECTOR.value)
 )
@@ -350,3 +359,22 @@ known_source_ext = [
     "yaml",
     "eml",
 ]
+
+# Initialize file storage service
+file_storage_service = None
+try:
+    from app.services.file_storage import FileStorageService
+    file_storage_service = FileStorageService(
+        bucket_name=S3_BUCKET_NAME,
+        region=S3_REGION,
+        local_storage_dir=RAG_PERSISTENT_STORAGE_DIR
+    )
+    if S3_BUCKET_NAME:
+        logger.info(f"File storage initialized with S3 bucket: {S3_BUCKET_NAME}")
+    else:
+        logger.info(f"File storage initialized with local directory: {RAG_PERSISTENT_STORAGE_DIR}")
+except Exception as e:
+    logger.error(f"File storage initialization failed: {e}")
+    import traceback
+    logger.error(f"Full traceback: {traceback.format_exc()}")
+    file_storage_service = None

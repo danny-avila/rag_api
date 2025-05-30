@@ -1,11 +1,12 @@
 # app/routes/document_routes.py
-import os
+import os, psutil
 import hashlib
 import traceback
 import aiofiles
 import aiofiles.os
+import asyncio
 from shutil import copyfileobj
-from typing import List, Iterable
+from typing import List, Iterable, Optional
 from fastapi import (
     APIRouter,
     Request,
@@ -22,7 +23,15 @@ from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+from app.config import (
+    logger,
+    vector_store,
+    RAG_UPLOAD_DIR,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    PARALLEL_EXECUTION,
+    file_storage_service,
+)
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -91,7 +100,9 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
         # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
+            raise HTTPException(
+                status_code=404, detail="One or more IDs not found"
+            )
 
         # Ensure documents list is not empty
         if not documents:
@@ -120,15 +131,52 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 @router.delete("/documents")
 async def delete_documents(document_ids: List[str] = Body(...)):
     try:
+        # Get documents first to extract storage metadata
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(document_ids)
-            await vector_store.delete(ids=document_ids)
+            documents = await vector_store.get_documents_by_ids(document_ids)
         else:
             existing_ids = vector_store.get_filtered_ids(document_ids)
-            vector_store.delete(ids=document_ids)
+            documents = vector_store.get_documents_by_ids(document_ids)
 
         if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
+            raise HTTPException(
+                status_code=404, detail="One or more IDs not found"
+            )
+
+        # Delete stored files if file_storage_service is available
+        if file_storage_service and documents:
+            storage_keys = set()  # Use set to avoid duplicate deletions
+            for doc in documents:
+                # Check for both local and S3 storage keys
+                storage_key = doc.metadata.get(
+                    "storage_key"
+                ) or doc.metadata.get("s3_key")
+                if storage_key:
+                    storage_keys.add(storage_key)
+
+            # Delete files from storage
+            for storage_key in storage_keys:
+                try:
+                    deleted = await file_storage_service.delete_file(
+                        storage_key
+                    )
+                    if deleted:
+                        logger.info(f"Deleted stored file: {storage_key}")
+                    else:
+                        logger.warning(
+                            f"Failed to delete stored file: {storage_key}"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error deleting stored file {storage_key}: {e}"
+                    )
+
+        # Delete vector embeddings
+        if isinstance(vector_store, AsyncPgVector):
+            await vector_store.delete(ids=document_ids)
+        else:
+            vector_store.delete(ids=document_ids)
 
         file_count = len(document_ids)
         return {
@@ -241,21 +289,77 @@ def generate_digest(page_content: str):
     return hash_obj.hexdigest()
 
 
+# create batches for parallel execution
+def create_batches(lst, n):
+    """
+    Splits the list `lst` into `n` parts.
+    The parts will be as evenly sized as possible.
+    """
+    length = len(lst)
+    # Base size of each sublist
+    base = length // n
+    # How many lists need an extra element
+    extra = length % n
+
+    sublists = []
+    start_index = 0
+
+    for i in range(n):
+        # Determine how many elements this sublist should have
+        # Give 1 extra element to the first `extra` sublists
+        size = base + (1 if i < extra else 0)
+        end_index = start_index + size
+        sublists.append(lst[start_index:end_index])
+        start_index = end_index
+
+    return sublists
+
+
+# Define an async function to add documents
+async def add_documents_async(pgvector_store, documents, docids):
+    if len(documents) > 0:
+        logger.info("Adding Documents...")
+        process = psutil.Process(os.getpid())
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        logger.info(f"Memory usage-a: {mem_mb} MB")
+
+        nroddocs = await pgvector_store.aadd_documents(documents, ids=docids)
+        logger.info(f"Adding Documents done: {len(nroddocs)}")
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        logger.info(f"Memory usage-b: {mem_mb} MB")
+        return len(nroddocs)
+    else:
+        logger.info("No Documents to add = 0...")
+        return 0
+
+
 async def store_data_in_vector_db(
     data: Iterable[Document],
     file_id: str,
     user_id: str = "",
     clean_content: bool = False,
+    storage_metadata: Optional[dict] = None,
 ) -> bool:
+
+    process = psutil.Process(os.getpid())
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage1: {mem_mb} MB")
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
 
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage2: {mem_mb} MB")
+
     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
+
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage3: {mem_mb} MB")
 
     # Preparing documents with page content and metadata for insertion.
     docs = [
@@ -266,18 +370,85 @@ async def store_data_in_vector_db(
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
                 **(doc.metadata or {}),
+                # Add storage metadata if available
+                **(
+                    {
+                        "source": storage_metadata["path"],
+                        "storage_type": "local",
+                        "storage_key": storage_metadata["key"],
+                        "storage_folder": storage_metadata["folder"],
+                    }
+                    if storage_metadata
+                    and storage_metadata.get("storage_type") == "local"
+                    else (
+                        {
+                            "source": f"s3://{storage_metadata['bucket']}/{storage_metadata['key']}",
+                            "storage_type": "s3",
+                            "s3_bucket": storage_metadata["bucket"],
+                            "s3_key": storage_metadata["key"],
+                        }
+                        if storage_metadata
+                        else {}
+                    )
+                ),
             },
         )
         for doc in documents
     ]
 
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage4: {mem_mb} MB")
+
+    batches = []
+    if PARALLEL_EXECUTION == 1:
+        batches.append(docs)
+    else:
+        batches = create_batches(docs, PARALLEL_EXECUTION)
+
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage5: {mem_mb} MB")
+
+    logger.info(
+        f"user: {user_id} with file {file_id} - chunked documents: {len(documents)}"
+    )
+
+    tasks = []
+    id = 0
+    for batch in batches:
+        tasks.append(
+            add_documents_async(vector_store, batch, [file_id] * len(batch))
+        )
+        logger.info(
+            f"user: {user_id} with file {file_id} - batch {id}: {len(batch)}"
+        )
+        id += 1
+
     try:
+        ids = 0
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
+
+            logger.info(
+                f"user: {user_id} with file {file_id} - Execute Getting Documents in Parallel"
+            )
+
+            results = await asyncio.gather(*tasks)
+
+            id = 0
+            for result in results:
+                logger.info(
+                    f"user: {user_id} with file {file_id} - Execute Parallel done batch {id} - {result} documents added"
+                )
+                ids = ids + result
+                id += 1
+
+            logger.info(
+                f"user: {user_id} with file {file_id} - Execute Parallel done total {ids} documents added"
+            )
+
+        else:
+            ids = vector_store.add_documents(
                 docs, ids=[file_id] * len(documents)
             )
-        else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
         return {"message": "Documents added successfully", "ids": ids}
 
@@ -289,7 +460,10 @@ async def store_data_in_vector_db(
             str(e),
             traceback.format_exc(),
         )
-        return {"message": "An error occurred while adding documents.", "error": str(e)}
+        return {
+            "message": "An error occurred while adding documents.",
+            "error": str(e),
+        }
 
 
 @router.post("/local/embed")
@@ -356,10 +530,13 @@ async def embed_file(
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
+    agentID: Optional[str] = Form(None),
 ):
     response_status = True
     response_message = "File processed successfully."
     known_type = None
+    storage_metadata = None
+
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
     else:
@@ -390,12 +567,51 @@ async def embed_file(
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
-        data = await run_in_executor(None, loader.load)
+
+        logger.debug(
+            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
+        )
+
+        data = loader.load()
+
+        # Store file in persistent storage if service is available
+        if file_storage_service:
+            try:
+                folder_name = file_storage_service.get_folder_name(
+                    user_id, agentID
+                )
+                storage_key = file_storage_service.generate_storage_key(
+                    folder_name, file.filename, file_id
+                )
+                storage_metadata = await file_storage_service.store_file(
+                    temp_file_path, storage_key, file.content_type
+                )
+                storage_type = "S3" if file_storage_service.use_s3 else "local"
+                logger.info(f"File stored in {storage_type}: {storage_key}")
+            except Exception as e:
+                logger.error(f"File storage failed: {e}")
+
         result = await store_data_in_vector_db(
-            data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+            data=data,
+            file_id=file_id,
+            user_id=user_id,
+            clean_content=file_ext == "pdf",
+            storage_metadata=storage_metadata,
         )
 
         if not result:
+            # Clean up stored file if database operation failed
+            if storage_metadata and file_storage_service:
+                try:
+                    await file_storage_service.delete_file(
+                        storage_metadata.get("key")
+                    )
+                    logger.info(
+                        f"Cleaned up stored file: {storage_metadata.get('key')}"
+                    )
+                except Exception:
+                    logger.error("Failed to cleanup stored file")
+
             response_status = False
             response_message = "Failed to process/store the file data."
             raise HTTPException(
@@ -403,6 +619,18 @@ async def embed_file(
                 detail="Failed to process/store the file data.",
             )
         elif "error" in result:
+            # Clean up stored file if database operation failed
+            if storage_metadata and file_storage_service:
+                try:
+                    await file_storage_service.delete_file(
+                        storage_metadata.get("key")
+                    )
+                    logger.info(
+                        f"Cleaned up stored file: {storage_metadata.get('key')}"
+                    )
+                except Exception:
+                    logger.error("Failed to cleanup stored file")
+
             response_status = False
             response_message = "Failed to process/store the file data."
             if isinstance(result["error"], str):
@@ -422,6 +650,18 @@ async def embed_file(
         )
         raise http_exc
     except Exception as e:
+        # Clean up stored file on processing failure
+        if storage_metadata and file_storage_service:
+            try:
+                await file_storage_service.delete_file(
+                    storage_metadata.get("key")
+                )
+                logger.info(
+                    f"Cleaned up stored file: {storage_metadata.get('key')}"
+                )
+            except Exception:
+                logger.error("Failed to cleanup stored file")
+
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
         logger.error(
