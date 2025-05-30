@@ -153,7 +153,6 @@ async def delete_documents(document_ids: List[str] = Body(...)):
                 ) or doc.metadata.get("s3_key")
                 if storage_key:
                     storage_keys.add(storage_key)
-
             # Delete files from storage
             for storage_key in storage_keys:
                 try:
@@ -252,11 +251,13 @@ async def query_embeddings_by_file_id(
                 else:
                     if body.entity_id == doc_user_id:
                         logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+                            f"Entity ID {body.entity_id} matches document "
+                            f"user_id but user {user_authorized} is not authorized"
                         )
                     else:
                         logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+                            f"Access denied for both entity ID {body.entity_id} "
+                            f"and user {user_authorized} to document with user_id {doc_user_id}"
                         )
             else:
                 logger.warning(
@@ -369,8 +370,7 @@ async def store_data_in_vector_db(
             "storage_folder": storage_metadata["folder"],
             "original_filename": storage_metadata.get("original_filename"),
         }
-        if storage_metadata
-        and storage_metadata.get("storage_type") == "local"
+        if storage_metadata and storage_metadata.get("storage_type") == "local"
         else (
             {
                 "source": f"s3://{storage_metadata['bucket']}/{storage_metadata['key']}",
@@ -569,7 +569,8 @@ async def embed_file(
         )
 
         logger.debug(
-            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
+            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - "
+            f"FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
         )
 
         data = loader.load()
@@ -584,7 +585,10 @@ async def embed_file(
                     folder_name, file.filename, file_id
                 )
                 storage_metadata = await file_storage_service.store_file(
-                    temp_file_path, storage_key, file.content_type, file.filename
+                    temp_file_path,
+                    storage_key,
+                    file.content_type,
+                    file.filename,
                 )
                 storage_type = "S3" if file_storage_service.use_s3 else "local"
                 logger.info(f"File stored in {storage_type}: {storage_key}")
