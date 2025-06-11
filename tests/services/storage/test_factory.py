@@ -16,10 +16,14 @@ class TestStorageFactory:
 
     def test_get_file_storage_creates_local_storage(self):
         """Test that get_file_storage creates LocalFileStorage correctly"""
-        storage = get_file_storage(StorageProvider.LOCAL, storage_dir="/custom/storage")
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            custom_dir = f"{temp_dir}/custom/storage"
+            storage = get_file_storage(StorageProvider.LOCAL, storage_dir=custom_dir)
 
-        assert isinstance(storage, LocalFileStorage)
-        assert storage.storage_dir == "/custom/storage"
+            assert isinstance(storage, LocalFileStorage)
+            assert storage.storage_dir == custom_dir + "/"
 
     def test_get_file_storage_creates_local_with_default_dir(self):
         """Test that get_file_storage uses default directory for local"""
@@ -72,56 +76,68 @@ class TestStorageFactory:
     @patch("boto3.client")
     def test_init_storage_with_fallback_s3_primary(self, mock_boto3_client):
         """Test init_storage_with_fallback with S3 as primary"""
+        import tempfile
         mock_boto3_client.return_value = Mock()
 
-        manager = init_storage_with_fallback(
-            s3_bucket_name="test-bucket",
-            s3_region="us-east-1",
-            local_storage_dir="/local/storage",
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = init_storage_with_fallback(
+                s3_bucket_name="test-bucket",
+                s3_region="us-east-1",
+                local_storage_dir=temp_dir,
+            )
 
-        assert isinstance(manager, StorageManager)
-        assert isinstance(manager.primary_storage, S3FileStorage)
-        assert isinstance(manager.fallback_storage, LocalFileStorage)
-        assert manager.primary_storage.bucket_name == "test-bucket"
-        assert manager.fallback_storage.storage_dir == "/local/storage"
+            assert isinstance(manager, StorageManager)
+            assert isinstance(manager.primary_storage, S3FileStorage)
+            assert isinstance(manager.fallback_storage, LocalFileStorage)
+            assert manager.primary_storage.bucket_name == "test-bucket"
+            assert manager.fallback_storage.storage_dir == temp_dir + "/"
 
     def test_init_storage_with_fallback_local_only(self):
         """Test init_storage_with_fallback with only local storage"""
-        manager = init_storage_with_fallback(local_storage_dir="/local/storage")
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = init_storage_with_fallback(local_storage_dir=temp_dir)
 
-        assert isinstance(manager, StorageManager)
-        assert isinstance(manager.primary_storage, LocalFileStorage)
-        assert manager.fallback_storage is None
-        assert manager.primary_storage.storage_dir == "/local/storage"
+            assert isinstance(manager, StorageManager)
+            assert isinstance(manager.primary_storage, LocalFileStorage)
+            assert manager.fallback_storage is None
+            assert manager.primary_storage.storage_dir == temp_dir + "/"
 
     def test_init_storage_with_fallback_missing_s3_region(self):
         """Test init_storage_with_fallback falls back when S3 region missing"""
-        manager = init_storage_with_fallback(
-            s3_bucket_name="test-bucket", local_storage_dir="/local/storage"
-        )
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = init_storage_with_fallback(
+                s3_bucket_name="test-bucket", local_storage_dir=temp_dir
+            )
 
-        # Should fall back to local storage
-        assert isinstance(manager, StorageManager)
-        assert isinstance(manager.primary_storage, LocalFileStorage)
-        assert manager.fallback_storage is None
+            # Should fall back to local storage
+            assert isinstance(manager, StorageManager)
+            assert isinstance(manager.primary_storage, LocalFileStorage)
+            assert manager.fallback_storage is None
+            assert manager.primary_storage.storage_dir == temp_dir + "/"
 
     @patch("boto3.client")
     def test_init_storage_with_fallback_s3_init_failure(self, mock_boto3_client):
         """Test init_storage_with_fallback handles S3 initialization failure"""
+        import tempfile
         # Mock S3 client creation failure
         mock_boto3_client.side_effect = Exception("AWS credentials not found")
 
-        manager = init_storage_with_fallback(
-            s3_bucket_name="test-bucket",
-            s3_region="us-east-1",
-            local_storage_dir="/local/storage",
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = init_storage_with_fallback(
+                s3_bucket_name="test-bucket",
+                s3_region="us-east-1",
+                local_storage_dir=temp_dir,
+            )
 
-        # Should fall back to local storage
-        assert isinstance(manager, StorageManager)
-        assert isinstance(manager.primary_storage, LocalFileStorage)
-        assert manager.fallback_storage is None
+            # Should fall back to local storage
+            assert isinstance(manager, StorageManager)
+            assert isinstance(manager.primary_storage, LocalFileStorage)
+            assert manager.fallback_storage is None
+            assert manager.primary_storage.storage_dir == temp_dir + "/"
 
     @patch("boto3.client")
     def test_init_storage_with_fallback_custom_circuit_breaker(self, mock_boto3_client):
