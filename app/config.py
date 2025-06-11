@@ -50,6 +50,9 @@ if not os.path.exists(RAG_UPLOAD_DIR):
 VECTOR_DB_TYPE = VectorDBType(
     get_env_variable("VECTOR_DB_TYPE", VectorDBType.PGVECTOR.value)
 )
+POSTGRES_USE_UNIX_SOCKET = (
+    get_env_variable("POSTGRES_USE_UNIX_SOCKET", "False").lower() == "true"
+)
 POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
 POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
@@ -69,8 +72,13 @@ CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
-CONNECTION_STRING = f"postgresql+psycopg2://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
-DSN = f"postgresql://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
+if POSTGRES_USE_UNIX_SOCKET:
+    connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"
+else:
+    connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
+
+CONNECTION_STRING = f"postgresql+psycopg2://{connection_suffix}"
+DSN = f"postgresql://{connection_suffix}"
 
 ## Logging
 
