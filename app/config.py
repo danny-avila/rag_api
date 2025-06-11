@@ -3,6 +3,7 @@ import os
 import json
 import boto3
 import logging
+import urllib.parse
 from enum import Enum
 from datetime import datetime
 from dotenv import find_dotenv, load_dotenv
@@ -26,6 +27,7 @@ class EmbeddingsProvider(Enum):
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
     GOOGLE_GENAI = "google_genai"
+    GOOGLE_VERTEXAI = "vertexai"
 
 
 def get_env_variable(
@@ -68,8 +70,8 @@ CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
-CONNECTION_STRING = f"postgresql+psycopg2://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
-DSN = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+CONNECTION_STRING = f"postgresql+psycopg2://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
+DSN = f"postgresql://{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
 
 ## Logging
 
@@ -178,6 +180,7 @@ OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 GOOGLE_API_KEY = get_env_variable("GOOGLE_API_KEY", "")
+GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIALS", "")
 
 ## Embeddings
 
@@ -191,6 +194,7 @@ def init_embeddings(provider, model):
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
+            chunk_size=EMBEDDINGS_CHUNK_SIZE,
         )
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
@@ -200,6 +204,7 @@ def init_embeddings(provider, model):
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
+            chunk_size=EMBEDDINGS_CHUNK_SIZE,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
@@ -219,6 +224,10 @@ def init_embeddings(provider, model):
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
         return GoogleGenerativeAIEmbeddings(model=model)
+    elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
+        from langchain_google_vertexai import VertexAIEmbeddings
+
+        return VertexAIEmbeddings(model=model)
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 
@@ -242,8 +251,12 @@ EMBEDDINGS_PROVIDER = EmbeddingsProvider(
 
 if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    # 1000 is the default chunk size for OpenAI, but this causes API rate limits to be hit
+    EMBEDDINGS_CHUNK_SIZE = get_env_variable("EMBEDDINGS_CHUNK_SIZE", 200)
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.AZURE:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    # 2048 is the default (and maximum) chunk size for Azure, but this often causes unexpected 429 errors
+    EMBEDDINGS_CHUNK_SIZE = get_env_variable("EMBEDDINGS_CHUNK_SIZE", 200)
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACE:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
@@ -252,6 +265,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "http://huggingfacetei:3000"
     )
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_VERTEXAI:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_GENAI:
