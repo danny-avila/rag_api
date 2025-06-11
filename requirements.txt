@@ -1,7 +1,7 @@
 langchain==0.3.12
 langchain-community==0.3.12
 langchain-openai==0.2.11
-langchain-core==0.3.25
+langchain-core==0.3.27
 langchain-aws==0.2.1
 langchain-google-vertexai==2.0.0
 langchain_text_splitters==0.3.3
