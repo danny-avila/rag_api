@@ -1,11 +1,14 @@
 # app/routes/document_routes.py
 import os
+import psutil
 import hashlib
 import traceback
+import logging
 import aiofiles
 import aiofiles.os
+import asyncio
 from shutil import copyfileobj
-from typing import List, Iterable
+from typing import List, Iterable, Optional
 from fastapi import (
     APIRouter,
     Request,
@@ -22,7 +25,14 @@ from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+from app.config import (
+    logger,
+    vector_store,
+    RAG_UPLOAD_DIR,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    file_storage_service,
+)
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -120,15 +130,63 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 @router.delete("/documents")
 async def delete_documents(document_ids: List[str] = Body(...)):
     try:
+        # Get documents first to extract storage metadata
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(document_ids)
-            await vector_store.delete(ids=document_ids)
+            documents = await vector_store.get_documents_by_ids(document_ids)
         else:
             existing_ids = vector_store.get_filtered_ids(document_ids)
-            vector_store.delete(ids=document_ids)
+            documents = vector_store.get_documents_by_ids(document_ids)
+
+        logger.info(
+            f"Retrieved {len(documents) if documents else 0} documents for deletion"
+        )
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
+
+        # Delete stored files if file_storage_service is available
+        if file_storage_service and documents:
+            logger.info(f"Attempting to delete files for {len(documents)} documents")
+            storage_keys = set()  # Use set to avoid duplicate deletions
+            for doc in documents:
+                # Check for storage key in metadata - try both local and S3 key names
+                storage_key = doc.metadata.get("storage_key") or doc.metadata.get(
+                    "s3_key"
+                )
+                if storage_key:
+                    storage_keys.add(storage_key)
+                    logger.info(f"Found storage key to delete: {storage_key}")
+                else:
+                    logger.warning(
+                        f"No storage key found in document metadata: {doc.metadata}"
+                    )
+
+            logger.info(f"Total unique storage keys to delete: {len(storage_keys)}")
+
+            # Delete files from storage
+            for storage_key in storage_keys:
+                try:
+                    deleted = await file_storage_service.delete_file(storage_key)
+                    if deleted:
+                        logger.info(f"Successfully deleted stored file: {storage_key}")
+                    else:
+                        logger.warning(f"Failed to delete stored file: {storage_key}")
+                except Exception as e:
+                    logger.error(f"Error deleting stored file {storage_key}: {e}")
+                    import traceback
+
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+        else:
+            logger.warning(
+                f"File deletion skipped - file_storage_service: {file_storage_service is not None}, documents: {len(documents) if documents else 0}"
+            )
+
+        # Delete vector embeddings
+        if isinstance(vector_store, AsyncPgVector):
+            await vector_store.delete(ids=document_ids)
+        else:
+            vector_store.delete(ids=document_ids)
 
         file_count = len(document_ids)
         return {
@@ -205,11 +263,13 @@ async def query_embeddings_by_file_id(
                 else:
                     if body.entity_id == doc_user_id:
                         logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
+                            f"Entity ID {body.entity_id} matches document "
+                            f"user_id but user {user_authorized} is not authorized"
                         )
                     else:
                         logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
+                            f"Access denied for both entity ID {body.entity_id} "
+                            f"and user {user_authorized} to document with user_id {doc_user_id}"
                         )
             else:
                 logger.warning(
@@ -241,23 +301,99 @@ def generate_digest(page_content: str):
     return hash_obj.hexdigest()
 
 
+# create batches for parallel execution
+def create_batches(lst, n):
+    """
+    Splits the list `lst` into `n` parts.
+    The parts will be as evenly sized as possible.
+    """
+    length = len(lst)
+    # Base size of each sublist
+    base = length // n
+    # How many lists need an extra element
+    extra = length % n
+
+    sublists = []
+    start_index = 0
+
+    for i in range(n):
+        # Determine how many elements this sublist should have
+        # Give 1 extra element to the first `extra` sublists
+        size = base + (1 if i < extra else 0)
+        end_index = start_index + size
+        sublists.append(lst[start_index:end_index])
+        start_index = end_index
+
+    return sublists
+
+
+async def add_documents_async(pgvector_store, documents, docids):
+    if len(documents) > 0:
+        logger.info("Adding Documents...")
+        process = psutil.Process(os.getpid())
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        logger.info(f"Memory usage-a: {mem_mb} MB")
+
+        nroddocs = await pgvector_store.aadd_documents(documents, ids=docids)
+        logger.info(f"Adding Documents done: {len(nroddocs)}")
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        logger.info(f"Memory usage-b: {mem_mb} MB")
+        return len(nroddocs)
+    else:
+        logger.info("No Documents to add = 0...")
+        return 0
+
+
 async def store_data_in_vector_db(
     data: Iterable[Document],
     file_id: str,
     user_id: str = "",
     clean_content: bool = False,
+    storage_metadata: Optional[dict] = None,
 ) -> bool:
+
+    process = psutil.Process(os.getpid())
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage1: {mem_mb} MB")
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
+
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage2: {mem_mb} MB")
 
     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage3: {mem_mb} MB")
+
     # Preparing documents with page content and metadata for insertion.
+    storage_meta_to_add = (
+        {
+            "source": storage_metadata["path"],
+            "storage_type": "local",
+            "storage_key": storage_metadata["key"],
+            "storage_folder": storage_metadata["folder"],
+            "original_filename": storage_metadata.get("original_filename"),
+        }
+        if storage_metadata and storage_metadata.get("storage_type") == "local"
+        else (
+            {
+                "source": f"s3://{storage_metadata['bucket']}/{storage_metadata['key']}",
+                "storage_type": "s3",
+                "s3_bucket": storage_metadata["bucket"],
+                "s3_key": storage_metadata["key"],
+                "original_filename": storage_metadata.get("original_filename"),
+            }
+            if storage_metadata
+            else {}
+        )
+    )
     docs = [
         Document(
             page_content=doc.page_content,
@@ -266,16 +402,56 @@ async def store_data_in_vector_db(
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
                 **(doc.metadata or {}),
+                # Add storage metadata if available
+                **storage_meta_to_add,
             },
         )
         for doc in documents
     ]
 
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage4: {mem_mb} MB")
+
+    batches = []
+    # Use single batch for simplicity
+    batches.append(docs)
+
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    logger.info(f"Memory usage5: {mem_mb} MB")
+
+    logger.info(
+        f"user: {user_id} with file {file_id} - chunked documents: {len(documents)}"
+    )
+
+    tasks = []
+    id = 0
+    for batch in batches:
+        tasks.append(add_documents_async(vector_store, batch, [file_id] * len(batch)))
+        logger.info(f"user: {user_id} with file {file_id} - batch {id}: {len(batch)}")
+        id += 1
+
     try:
+        ids = 0
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents)
+
+            logger.info(
+                f"user: {user_id} with file {file_id} - Execute Getting Documents in Parallel"
             )
+
+            results = await asyncio.gather(*tasks)
+
+            id = 0
+            for result in results:
+                logger.info(
+                    f"user: {user_id} with file {file_id} - Execute Parallel done batch {id} - {result} documents added"
+                )
+                ids = ids + result
+                id += 1
+
+            logger.info(
+                f"user: {user_id} with file {file_id} - Execute Parallel done total {ids} documents added"
+            )
+
         else:
             ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
@@ -305,8 +481,15 @@ async def embed_local_file(
 
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     try:
         loader, known_type = get_loader(
@@ -354,14 +537,24 @@ async def embed_file(
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
+    agentID: Optional[str] = Form(None),
 ):
     response_status = True
     response_message = "File processed successfully."
     known_type = None
+    storage_metadata = None
+
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
@@ -388,12 +581,48 @@ async def embed_file(
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
+
+        logger.debug(
+            f"Loading Filename:{file.filename} - ContentType:{file.content_type} - "
+            f"FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
+        )
+
         data = loader.load()
+
+        # Store file in persistent storage if service is available
+        if file_storage_service:
+            try:
+                folder_name = file_storage_service.get_folder_name(user_id, agentID)
+                storage_key = file_storage_service.generate_storage_key(
+                    folder_name, file.filename, file_id
+                )
+                storage_metadata = await file_storage_service.store_file(
+                    temp_file_path, storage_key, file.content_type, file.filename
+                )
+                storage_type = storage_metadata.get("storage_type", "unknown")
+                logger.info(f"File stored in {storage_type}: {storage_key}")
+            except Exception as e:
+                logger.error(f"File storage failed: {e}")
+
         result = await store_data_in_vector_db(
-            data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
+            data=data,
+            file_id=file_id,
+            user_id=user_id,
+            clean_content=file_ext == "pdf",
+            storage_metadata=storage_metadata,
         )
 
         if not result:
+            # Clean up stored file if database operation failed
+            if storage_metadata and file_storage_service:
+                try:
+                    storage_key = storage_metadata.get("key")
+                    if storage_key:
+                        await file_storage_service.delete_file(storage_key)
+                        logger.info(f"Cleaned up stored file: {storage_key}")
+                except Exception:
+                    logger.error("Failed to cleanup stored file")
+
             response_status = False
             response_message = "Failed to process/store the file data."
             raise HTTPException(
@@ -401,6 +630,16 @@ async def embed_file(
                 detail="Failed to process/store the file data.",
             )
         elif "error" in result:
+            # Clean up stored file if database operation failed
+            if storage_metadata and file_storage_service:
+                try:
+                    storage_key = storage_metadata.get("key")
+                    if storage_key:
+                        await file_storage_service.delete_file(storage_key)
+                        logger.info(f"Cleaned up stored file: {storage_key}")
+                except Exception:
+                    logger.error("Failed to cleanup stored file")
+
             response_status = False
             response_message = "Failed to process/store the file data."
             if isinstance(result["error"], str):
@@ -420,6 +659,16 @@ async def embed_file(
         )
         raise http_exc
     except Exception as e:
+        # Clean up stored file on processing failure
+        if storage_metadata and file_storage_service:
+            try:
+                storage_key = storage_metadata.get("key")
+                if storage_key:
+                    await file_storage_service.delete_file(storage_key)
+                    logger.info(f"Cleaned up stored file: {storage_key}")
+            except Exception:
+                logger.error("Failed to cleanup stored file")
+
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
         logger.error(
@@ -506,8 +755,15 @@ async def embed_file_upload(
 
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     try:
         with open(temp_file_path, "wb") as temp_file:
