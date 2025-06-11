@@ -1,7 +1,9 @@
 # app/routes/document_routes.py
-import os, psutil
+import os
+import psutil
 import hashlib
 import traceback
+import logging
 import aiofiles
 import aiofiles.os
 import asyncio
@@ -138,6 +140,10 @@ async def delete_documents(document_ids: List[str] = Body(...)):
             existing_ids = vector_store.get_filtered_ids(document_ids)
             documents = vector_store.get_documents_by_ids(document_ids)
 
+        logger.info(
+            f"Retrieved {len(documents) if documents else 0} documents for deletion"
+        )
+
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(
                 status_code=404, detail="One or more IDs not found"
@@ -145,14 +151,27 @@ async def delete_documents(document_ids: List[str] = Body(...)):
 
         # Delete stored files if file_storage_service is available
         if file_storage_service and documents:
+            logger.info(
+                f"Attempting to delete files for {len(documents)} documents"
+            )
             storage_keys = set()  # Use set to avoid duplicate deletions
             for doc in documents:
-                # Check for both local and S3 storage keys
+                # Check for storage key in metadata - try both local and S3 key names
                 storage_key = doc.metadata.get(
                     "storage_key"
                 ) or doc.metadata.get("s3_key")
                 if storage_key:
                     storage_keys.add(storage_key)
+                    logger.info(f"Found storage key to delete: {storage_key}")
+                else:
+                    logger.warning(
+                        f"No storage key found in document metadata: {doc.metadata}"
+                    )
+
+            logger.info(
+                f"Total unique storage keys to delete: {len(storage_keys)}"
+            )
+
             # Delete files from storage
             for storage_key in storage_keys:
                 try:
@@ -160,7 +179,9 @@ async def delete_documents(document_ids: List[str] = Body(...)):
                         storage_key
                     )
                     if deleted:
-                        logger.info(f"Deleted stored file: {storage_key}")
+                        logger.info(
+                            f"Successfully deleted stored file: {storage_key}"
+                        )
                     else:
                         logger.warning(
                             f"Failed to delete stored file: {storage_key}"
@@ -169,6 +190,13 @@ async def delete_documents(document_ids: List[str] = Body(...)):
                     logger.error(
                         f"Error deleting stored file {storage_key}: {e}"
                     )
+                    import traceback
+
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+        else:
+            logger.warning(
+                f"File deletion skipped - file_storage_service: {file_storage_service is not None}, documents: {len(documents) if documents else 0}"
+            )
 
         # Delete vector embeddings
         if isinstance(vector_store, AsyncPgVector):
@@ -315,7 +343,6 @@ def create_batches(lst, n):
     return sublists
 
 
-# Define an async function to add documents
 async def add_documents_async(pgvector_store, documents, docids):
     if len(documents) > 0:
         logger.info("Adding Documents...")
@@ -479,8 +506,21 @@ async def embed_local_file(
 
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
+            )
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = (
+            entity_id
+            if entity_id
+            else (jwt_user_id if jwt_user_id else "public")
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     try:
         loader, known_type, file_ext = get_loader(
@@ -539,8 +579,21 @@ async def embed_file(
 
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
+            )
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = (
+            entity_id
+            if entity_id
+            else (jwt_user_id if jwt_user_id else "public")
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
@@ -590,7 +643,7 @@ async def embed_file(
                     file.content_type,
                     file.filename,
                 )
-                storage_type = "S3" if file_storage_service.use_s3 else "local"
+                storage_type = storage_metadata.get("storage_type", "unknown")
                 logger.info(f"File stored in {storage_type}: {storage_key}")
             except Exception as e:
                 logger.error(f"File storage failed: {e}")
@@ -607,12 +660,10 @@ async def embed_file(
             # Clean up stored file if database operation failed
             if storage_metadata and file_storage_service:
                 try:
-                    await file_storage_service.delete_file(
-                        storage_metadata.get("key")
-                    )
-                    logger.info(
-                        f"Cleaned up stored file: {storage_metadata.get('key')}"
-                    )
+                    storage_key = storage_metadata.get("key")
+                    if storage_key:
+                        await file_storage_service.delete_file(storage_key)
+                        logger.info(f"Cleaned up stored file: {storage_key}")
                 except Exception:
                     logger.error("Failed to cleanup stored file")
 
@@ -626,12 +677,10 @@ async def embed_file(
             # Clean up stored file if database operation failed
             if storage_metadata and file_storage_service:
                 try:
-                    await file_storage_service.delete_file(
-                        storage_metadata.get("key")
-                    )
-                    logger.info(
-                        f"Cleaned up stored file: {storage_metadata.get('key')}"
-                    )
+                    storage_key = storage_metadata.get("key")
+                    if storage_key:
+                        await file_storage_service.delete_file(storage_key)
+                        logger.info(f"Cleaned up stored file: {storage_key}")
                 except Exception:
                     logger.error("Failed to cleanup stored file")
 
@@ -657,12 +706,10 @@ async def embed_file(
         # Clean up stored file on processing failure
         if storage_metadata and file_storage_service:
             try:
-                await file_storage_service.delete_file(
-                    storage_metadata.get("key")
-                )
-                logger.info(
-                    f"Cleaned up stored file: {storage_metadata.get('key')}"
-                )
+                storage_key = storage_metadata.get("key")
+                if storage_key:
+                    await file_storage_service.delete_file(storage_key)
+                    logger.info(f"Cleaned up stored file: {storage_key}")
             except Exception:
                 logger.error("Failed to cleanup stored file")
 
@@ -752,8 +799,21 @@ async def embed_file_upload(
 
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
+            )
     else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+        jwt_user_id = request.state.user.get("id")
+        user_id = (
+            entity_id
+            if entity_id
+            else (jwt_user_id if jwt_user_id else "public")
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
+            )
 
     try:
         with open(temp_file_path, "wb") as temp_file:
