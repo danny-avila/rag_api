@@ -21,9 +21,10 @@ class LocalFileStorage(BaseFileStorage):
         Args:
             storage_dir: Directory for local storage
         """
-        self.storage_dir = storage_dir
-        os.makedirs(storage_dir, exist_ok=True)
-        logger.info(f"Local storage initialized: {storage_dir}")
+        # Ensure trailing slash for consistency
+        self.storage_dir = storage_dir if storage_dir.endswith("/") else storage_dir + "/"
+        os.makedirs(self.storage_dir, exist_ok=True)
+        logger.info(f"Local storage initialized: {self.storage_dir}")
 
     async def store_file(
         self,

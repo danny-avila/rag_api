@@ -76,11 +76,11 @@ class BaseFileStorage:
                 f"get_folder_name called with user_id='{user_id}', agent_id='{agent_id}'"
             )
 
-        if agent_id:
+        if agent_id and agent_id.strip():
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Using agent_id as folder: {agent_id}")
             return agent_id
-        elif user_id and user_id != "public":
+        elif user_id and user_id.strip() and user_id != "public":
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Using user_id as folder: {user_id}")
             return user_id

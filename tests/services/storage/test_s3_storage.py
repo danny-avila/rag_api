@@ -58,10 +58,10 @@ class TestS3FileStorage:
 
             # Verify S3 client was called correctly
             self.mock_s3_client.put_object.assert_called_once()
-            call_args = self.mock_s3_client.put_object.call_args[0][0]
-            assert call_args["Bucket"] == "test-bucket"
-            assert call_args["Key"] == "user123/document.pdf"
-            assert call_args["ContentType"] == "application/pdf"
+            call_kwargs = self.mock_s3_client.put_object.call_args[1]
+            assert call_kwargs["Bucket"] == "test-bucket"
+            assert call_kwargs["Key"] == "user123/document.pdf"
+            assert call_kwargs["ContentType"] == "application/pdf"
 
             # Verify metadata
             assert metadata["storage_type"] == "s3"
@@ -187,8 +187,8 @@ class TestS3FileStorage:
             )
 
             # Should not include ContentType in S3 call
-            call_args = self.mock_s3_client.put_object.call_args[0][0]
-            assert "ContentType" not in call_args
+            call_kwargs = self.mock_s3_client.put_object.call_args[1]
+            assert "ContentType" not in call_kwargs
 
             # Metadata should have default content type
             assert metadata["content_type"] == "application/octet-stream"

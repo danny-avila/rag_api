@@ -116,9 +116,9 @@ class TestLocalFileStorage:
     @pytest.mark.asyncio
     async def test_delete_file_handles_errors(self):
         """Test that delete_file handles errors gracefully"""
-        # Try to delete with invalid path
-        result = await self.storage.delete_file("")
-        assert result is True  # Should handle gracefully
+        # Try to delete with problematic path (attempting to delete directory itself)
+        result = await self.storage.delete_file(".")
+        assert result is False  # Should return False on error (can't delete directory)
 
     def test_get_file_url_returns_path(self):
         """Test that get_file_url returns local path"""

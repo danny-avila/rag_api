@@ -101,21 +101,20 @@ class TestStorageManager:
 
         assert self.manager.circuit_open
 
-        # Mock time passage
-        with patch("time.time") as mock_time:
-            # Set current time beyond timeout
-            mock_time.return_value = time.time() + 10
+        # Manually set the last failure time to simulate time passage
+        original_time = self.manager.last_failure_time
+        self.manager.last_failure_time = time.time() - (self.manager.circuit_breaker_timeout + 1)
 
-            # Reset primary to succeed
-            self.mock_primary.store_file.side_effect = None
-            self.mock_primary.store_file.return_value = {"storage_type": "s3"}
+        # Reset primary to succeed
+        self.mock_primary.store_file.side_effect = None
+        self.mock_primary.store_file.return_value = {"storage_type": "s3"}
 
-            # Should retry primary
-            result = await self.manager.store_file("/tmp/test.pdf", "test.pdf")
+        # Should retry primary
+        result = await self.manager.store_file("/tmp/test.pdf", "test.pdf")
 
-            assert not self.manager.circuit_open
-            assert self.manager.primary_failures == 0
-            assert result["storage_type"] == "s3"
+        assert not self.manager.circuit_open
+        assert self.manager.primary_failures == 0
+        assert result["storage_type"] == "s3"
 
     @pytest.mark.asyncio
     async def test_store_file_no_fallback_raises_error(self):
