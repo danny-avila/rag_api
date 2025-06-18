@@ -39,7 +39,7 @@ class TestBaseFileStorage:
         """Test that long filenames are truncated"""
         long_name = "a" * 150 + ".txt"
         result = self.storage.sanitize_path_component(long_name)
-        assert len(result) == 100
+        assert len(result) == 99  # 95 chars + '.txt' (4 chars) = 99
         assert result.endswith(".txt")
         assert result.startswith("a" * 95)
 
