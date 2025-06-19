@@ -116,17 +116,6 @@ def test_embed_local_file(tmp_path, auth_headers, monkeypatch):
     test_file = tmp_path / "test.txt"
     test_file.write_text("This is a test document.")
 
-    # Override get_loader on the document_routes module so that /local/embed
-    # returns exactly 2 values (loader, known_type) and a loader that returns Document objects.
-    from app.routes import document_routes
-    def dummy_get_loader(filename, file_content_type, filepath):
-        class DummyLoader:
-            def load(self):
-                # Return a list of Document objects.
-                return [Document(page_content="Dummy document", metadata={})]
-        return DummyLoader(), True
-    monkeypatch.setattr(document_routes, "get_loader", dummy_get_loader)
-
     data = {
         "filepath": str(test_file),
         "filename": "test.txt",
@@ -165,16 +154,6 @@ def test_embed_file_upload(tmp_path, auth_headers, monkeypatch):
     file_content = "Test content for embed upload."
     test_file = tmp_path / "upload_test.txt"
     test_file.write_text(file_content)
-
-    # Override get_loader on the document_routes module so that /embed-upload
-    # returns exactly 2 values and a loader that returns Document objects.
-    from app.routes import document_routes
-    def dummy_get_loader(filename, file_content_type, filepath):
-        class DummyLoader:
-            def load(self):
-                return [Document(page_content="Dummy document", metadata={})]
-        return DummyLoader(), True
-    monkeypatch.setattr(document_routes, "get_loader", dummy_get_loader)
 
     with test_file.open("rb") as f:
         response = client.post(
