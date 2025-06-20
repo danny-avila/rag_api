@@ -179,6 +179,8 @@ OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
 GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIALS", "")
+env_value = get_env_variable("RAG_CHECK_EMBEDDING_CTX_LENGTH", "True").lower()
+RAG_CHECK_EMBEDDING_CTX_LENGTH = True if env_value == "true" else False
 
 ## Embeddings
 
@@ -193,6 +195,7 @@ def init_embeddings(provider, model):
             openai_api_base=RAG_OPENAI_BASEURL,
             openai_proxy=RAG_OPENAI_PROXY,
             chunk_size=EMBEDDINGS_CHUNK_SIZE,
+            check_embedding_ctx_length=RAG_CHECK_EMBEDDING_CTX_LENGTH,
         )
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
@@ -203,6 +206,7 @@ def init_embeddings(provider, model):
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
             api_version=RAG_AZURE_OPENAI_API_VERSION,
             chunk_size=EMBEDDINGS_CHUNK_SIZE,
+            check_embedding_ctx_length=RAG_CHECK_EMBEDDING_CTX_LENGTH,
         )
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
