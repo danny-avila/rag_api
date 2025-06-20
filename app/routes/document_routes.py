@@ -309,11 +309,13 @@ async def embed_local_file(
         user_id = entity_id if entity_id else request.state.user.get("id")
 
     try:
-        loader, known_type = get_loader(
+        loader, known_type, file_ext = get_loader(
             document.filename, document.file_content_type, document.filepath
         )
-        data = loader.load()
-        result = await store_data_in_vector_db(data, document.file_id, user_id)
+        data = await run_in_executor(None, loader.load)
+        result = await store_data_in_vector_db(
+            data, document.file_id, user_id, clean_content=file_ext == "pdf"
+        )
 
         if result:
             return {
@@ -388,7 +390,7 @@ async def embed_file(
         loader, known_type, file_ext = get_loader(
             file.filename, file.content_type, temp_file_path
         )
-        data = loader.load()
+        data = await run_in_executor(None, loader.load)
         result = await store_data_in_vector_db(
             data=data, file_id=file_id, user_id=user_id, clean_content=file_ext == "pdf"
         )
@@ -519,12 +521,14 @@ async def embed_file_upload(
         )
 
     try:
-        loader, known_type = get_loader(
+        loader, known_type, file_ext = get_loader(
             uploaded_file.filename, uploaded_file.content_type, temp_file_path
         )
 
-        data = loader.load()
-        result = await store_data_in_vector_db(data, file_id, user_id)
+        data = await run_in_executor(None, loader.load)
+        result = await store_data_in_vector_db(
+            data, file_id, user_id, clean_content=file_ext == "pdf"
+        )
 
         if not result:
             raise HTTPException(
