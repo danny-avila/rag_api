@@ -626,7 +626,7 @@ async def embed_file(
             f"FileExt:{file_ext} - KnownType:{known_type} - Loader:{loader}"
         )
 
-        data = loader.load()
+        data = await run_in_executor(None, loader.load)
 
         # Store file in persistent storage if service is available
         if file_storage_service:
