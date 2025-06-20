@@ -1,9 +1,11 @@
 # main.py
+import os
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 
 from starlette.responses import JSONResponse
 
@@ -16,11 +18,21 @@ from app.services.database import PSQLDatabase, ensure_custom_id_index_on_embedd
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
+    # Create bounded thread pool executor based on CPU cores
+    max_workers = min(int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 8)  # Cap at 8
+    app.state.thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rag-worker")
+    logger.info(f"Initialized thread pool with {max_workers} workers (CPU cores: {os.cpu_count()})")
+    
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         await PSQLDatabase.get_pool()  # Initialize the pool
         await ensure_custom_id_index_on_embedding()
 
     yield
+    
+    # Cleanup logic
+    logger.info("Shutting down thread pool")
+    app.state.thread_pool.shutdown(wait=True)
+    logger.info("Thread pool shutdown complete")
 
 app = FastAPI(lifespan=lifespan, debug=debug_mode)
 
