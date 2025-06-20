@@ -101,9 +101,7 @@ async def get_documents_by_ids(ids: list[str] = Query(...)):
 
         # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
-            raise HTTPException(
-                status_code=404, detail="One or more IDs not found"
-            )
+            raise HTTPException(status_code=404, detail="One or more IDs not found")
 
         # Ensure documents list is not empty
         if not documents:
@@ -145,21 +143,17 @@ async def delete_documents(document_ids: List[str] = Body(...)):
         )
 
         if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(
-                status_code=404, detail="One or more IDs not found"
-            )
+            raise HTTPException(status_code=404, detail="One or more IDs not found")
 
         # Delete stored files if file_storage_service is available
         if file_storage_service and documents:
-            logger.info(
-                f"Attempting to delete files for {len(documents)} documents"
-            )
+            logger.info(f"Attempting to delete files for {len(documents)} documents")
             storage_keys = set()  # Use set to avoid duplicate deletions
             for doc in documents:
                 # Check for storage key in metadata - try both local and S3 key names
-                storage_key = doc.metadata.get(
-                    "storage_key"
-                ) or doc.metadata.get("s3_key")
+                storage_key = doc.metadata.get("storage_key") or doc.metadata.get(
+                    "s3_key"
+                )
                 if storage_key:
                     storage_keys.add(storage_key)
                     logger.info(f"Found storage key to delete: {storage_key}")
@@ -168,28 +162,18 @@ async def delete_documents(document_ids: List[str] = Body(...)):
                         f"No storage key found in document metadata: {doc.metadata}"
                     )
 
-            logger.info(
-                f"Total unique storage keys to delete: {len(storage_keys)}"
-            )
+            logger.info(f"Total unique storage keys to delete: {len(storage_keys)}")
 
             # Delete files from storage
             for storage_key in storage_keys:
                 try:
-                    deleted = await file_storage_service.delete_file(
-                        storage_key
-                    )
+                    deleted = await file_storage_service.delete_file(storage_key)
                     if deleted:
-                        logger.info(
-                            f"Successfully deleted stored file: {storage_key}"
-                        )
+                        logger.info(f"Successfully deleted stored file: {storage_key}")
                     else:
-                        logger.warning(
-                            f"Failed to delete stored file: {storage_key}"
-                        )
+                        logger.warning(f"Failed to delete stored file: {storage_key}")
                 except Exception as e:
-                    logger.error(
-                        f"Error deleting stored file {storage_key}: {e}"
-                    )
+                    logger.error(f"Error deleting stored file {storage_key}: {e}")
                     import traceback
 
                     logger.error(f"Full traceback: {traceback.format_exc()}")
@@ -442,12 +426,8 @@ async def store_data_in_vector_db(
     tasks = []
     id = 0
     for batch in batches:
-        tasks.append(
-            add_documents_async(vector_store, batch, [file_id] * len(batch))
-        )
-        logger.info(
-            f"user: {user_id} with file {file_id} - batch {id}: {len(batch)}"
-        )
+        tasks.append(add_documents_async(vector_store, batch, [file_id] * len(batch)))
+        logger.info(f"user: {user_id} with file {file_id} - batch {id}: {len(batch)}")
         id += 1
 
     try:
@@ -473,9 +453,7 @@ async def store_data_in_vector_db(
             )
 
         else:
-            ids = vector_store.add_documents(
-                docs, ids=[file_id] * len(documents)
-            )
+            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
 
         return {"message": "Documents added successfully", "ids": ids}
 
@@ -507,16 +485,10 @@ async def embed_local_file(
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
-            )
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
         jwt_user_id = request.state.user.get("id")
-        user_id = (
-            entity_id
-            if entity_id
-            else (jwt_user_id if jwt_user_id else "public")
-        )
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
@@ -580,16 +552,10 @@ async def embed_file(
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
-            )
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
         jwt_user_id = request.state.user.get("id")
-        user_id = (
-            entity_id
-            if entity_id
-            else (jwt_user_id if jwt_user_id else "public")
-        )
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
@@ -631,9 +597,7 @@ async def embed_file(
         # Store file in persistent storage if service is available
         if file_storage_service:
             try:
-                folder_name = file_storage_service.get_folder_name(
-                    user_id, agentID
-                )
+                folder_name = file_storage_service.get_folder_name(user_id, agentID)
                 storage_key = file_storage_service.generate_storage_key(
                     folder_name, file.filename, file_id
                 )
@@ -800,16 +764,10 @@ async def embed_file_upload(
     if not hasattr(request.state, "user"):
         user_id = entity_id if entity_id else "public"
         if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}"
-            )
+            logger.debug(f"No JWT auth - user_id: {user_id}, entity_id: {entity_id}")
     else:
         jwt_user_id = request.state.user.get("id")
-        user_id = (
-            entity_id
-            if entity_id
-            else (jwt_user_id if jwt_user_id else "public")
-        )
+        user_id = entity_id if entity_id else (jwt_user_id if jwt_user_id else "public")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 f"JWT auth - user_id: {user_id}, entity_id: {entity_id}, jwt_user_id: {jwt_user_id}"
