@@ -5,6 +5,7 @@ langchain-core==0.3.27
 langchain-aws==0.2.1
 langchain-google-vertexai==2.0.0
 langchain_text_splitters==0.3.3
+langchain_elasticsearch==0.3.2
 boto3==1.34.144
 sqlalchemy==2.0.28
 python-dotenv==1.0.1

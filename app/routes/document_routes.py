@@ -31,6 +31,7 @@ from app.models import (
     QueryMultipleBody,
 )
 from app.services.vector_store.async_pg_vector import AsyncPgVector
+from app.services.vector_store.elasticsearch_vector import ExtendedElasticsearchVector
 from app.utils.document_loader import get_loader, clean_text, process_documents
 from app.utils.health import is_health_ok
 
@@ -181,6 +182,12 @@ async def query_embeddings_by_file_id(
                 embedding,
                 k=body.k,
                 filter={"file_id": body.file_id},
+            )
+        elif isinstance(vector_store, ExtendedElasticsearchVector):
+            documents = vector_store.similarity_search_with_score_by_vector(
+                query=body.query,
+                embedding=embedding,
+                file_ids=[body.file_id],
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
@@ -579,6 +586,12 @@ async def query_embeddings_by_file_ids(body: QueryMultipleBody):
                 embedding,
                 k=body.k,
                 filter={"file_id": {"$in": body.file_ids}},
+            )
+        elif isinstance(vector_store, ExtendedElasticsearchVector):
+            documents = vector_store.similarity_search_with_score_by_vector(
+                query=body.query,
+                embedding=embedding,
+                file_ids=body.file_ids,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(

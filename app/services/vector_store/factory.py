@@ -5,6 +5,7 @@ from langchain_core.embeddings import Embeddings
 from .async_pg_vector import AsyncPgVector
 from .atlas_mongo_vector import AtlasMongoVector
 from .extended_pg_vector import ExtendedPgVector
+from .elasticsearch_vector import ExtendedElasticsearchVector
 
 
 def get_vector_store(
@@ -31,6 +32,12 @@ def get_vector_store(
         mong_collection = mongo_db[collection_name]
         return AtlasMongoVector(
             collection=mong_collection, embedding=embeddings, index_name=search_index
+        )
+    elif mode == "elasticsearch":
+        return ExtendedElasticsearchVector(
+            es_url=connection_string,
+            index_name=collection_name,
+            embedding=embeddings,
         )
     else:
         raise ValueError("Invalid mode specified. Choose 'sync', 'async', or 'atlas-mongo'.")
