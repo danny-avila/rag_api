@@ -178,6 +178,7 @@ HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
+AWS_SESSION_TOKEN = get_env_variable("AWS_SESSION_TOKEN", "")
 GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIALS", "")
 
 ## Embeddings
@@ -225,11 +226,16 @@ def init_embeddings(provider, model):
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 
-        session = boto3.Session(
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-            region_name=AWS_DEFAULT_REGION,
-        )
+        session_kwargs = {
+            "aws_access_key_id": AWS_ACCESS_KEY_ID,
+            "aws_secret_access_key": AWS_SECRET_ACCESS_KEY,
+            "region_name": AWS_DEFAULT_REGION,
+        }
+
+        if AWS_SESSION_TOKEN:
+            session_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
+
+        session = boto3.Session(**session_kwargs)
         return BedrockEmbeddings(
             client=session.client("bedrock-runtime"),
             model_id=model,

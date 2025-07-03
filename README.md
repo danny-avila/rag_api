@@ -84,6 +84,7 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
+- `AWS_SESSION_TOKEN`: (Optional) may be needed for bedrock embeddings
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
