@@ -4,6 +4,7 @@ import datetime
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
+from concurrent.futures import ThreadPoolExecutor
 
 from main import app
 
@@ -24,19 +25,23 @@ def auth_headers():
 def override_vector_store(monkeypatch):
     from app.config import vector_store
 
+    # Initialize thread pool for tests since TestClient doesn't run lifespan
+    if not hasattr(app.state, 'thread_pool') or app.state.thread_pool is None:
+        app.state.thread_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="test-worker")
+
     # Override get_all_ids as an async function.
-    async def dummy_get_all_ids():
+    async def dummy_get_all_ids(executor=None):
         return ["testid1", "testid2"]
     monkeypatch.setattr(vector_store, "get_all_ids", dummy_get_all_ids)
 
     # Override get_filtered_ids as an async function.
-    async def dummy_get_filtered_ids(ids):
+    async def dummy_get_filtered_ids(ids, executor=None):
         dummy_ids = ["testid1", "testid2"]
         return [id for id in dummy_ids if id in ids]
     monkeypatch.setattr(vector_store, "get_filtered_ids", dummy_get_filtered_ids)
 
     # Override get_documents_by_ids as an async function.
-    async def dummy_get_documents_by_ids(ids):
+    async def dummy_get_documents_by_ids(ids, executor=None):
         return [
             Document(page_content="Test content", metadata={"file_id": id})
             for id in ids
@@ -56,22 +61,35 @@ def override_vector_store(monkeypatch):
             metadata={"file_id": filter.get("file_id", "testid1"), "user_id": "testuser"},
         )
         return [(doc, 0.9)]
+    
+    async def dummy_asimilarity_search_with_score_by_vector(embedding, k, filter=None, executor=None):
+        doc = Document(
+            page_content="Queried content",
+            metadata={"file_id": filter.get("file_id", "testid1") if filter else "testid1", "user_id": "testuser"},
+        )
+        return [(doc, 0.9)]
+    
     monkeypatch.setattr(
         vector_store,
         "similarity_search_with_score_by_vector",
         dummy_similarity_search_with_score_by_vector,
     )
+    monkeypatch.setattr(
+        vector_store,
+        "asimilarity_search_with_score_by_vector",
+        dummy_asimilarity_search_with_score_by_vector,
+    )
 
     # Override document addition functions.
     def dummy_add_documents(docs, ids):
         return ids
-    async def dummy_aadd_documents(docs, ids):
+    async def dummy_aadd_documents(docs, ids=None, executor=None):
         return ids
     monkeypatch.setattr(vector_store, "add_documents", dummy_add_documents)
     monkeypatch.setattr(vector_store, "aadd_documents", dummy_aadd_documents)
 
     # Override delete function.
-    async def dummy_delete(ids=None, collection_only=False):
+    async def dummy_delete(ids=None, collection_only=False, executor=None):
         return None
     monkeypatch.setattr(vector_store, "delete", dummy_delete)
 
