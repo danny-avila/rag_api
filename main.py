@@ -9,30 +9,48 @@ from concurrent.futures import ThreadPoolExecutor
 
 from starlette.responses import JSONResponse
 
-from app.config import VectorDBType, debug_mode, RAG_HOST, RAG_PORT, CHUNK_SIZE, CHUNK_OVERLAP, PDF_EXTRACT_IMAGES, VECTOR_DB_TYPE, \
-    LogMiddleware, logger
+from app.config import (
+    VectorDBType,
+    debug_mode,
+    RAG_HOST,
+    RAG_PORT,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    PDF_EXTRACT_IMAGES,
+    VECTOR_DB_TYPE,
+    LogMiddleware,
+    logger,
+)
 from app.middleware import security_middleware
 from app.routes import document_routes, pgvector_routes
-from app.services.database import PSQLDatabase, ensure_custom_id_index_on_embedding
+from app.services.database import PSQLDatabase, ensure_vector_indexes
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic goes here
     # Create bounded thread pool executor based on CPU cores
-    max_workers = min(int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 8)  # Cap at 8
-    app.state.thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rag-worker")
-    logger.info(f"Initialized thread pool with {max_workers} workers (CPU cores: {os.cpu_count()})")
-    
+    max_workers = min(
+        int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 8
+    )  # Cap at 8
+    app.state.thread_pool = ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="rag-worker"
+    )
+    logger.info(
+        f"Initialized thread pool with {max_workers} workers (CPU cores: {os.cpu_count()})"
+    )
+
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         await PSQLDatabase.get_pool()  # Initialize the pool
-        await ensure_custom_id_index_on_embedding()
+        await ensure_vector_indexes()
 
     yield
-    
+
     # Cleanup logic
     logger.info("Shutting down thread pool")
     app.state.thread_pool.shutdown(wait=True)
     logger.info("Thread pool shutdown complete")
+
 
 app = FastAPI(lifespan=lifespan, debug=debug_mode)
 
@@ -73,6 +91,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "message": "Request validation failed",
         },
     )
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, log_config=None)
