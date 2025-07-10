@@ -2,6 +2,7 @@
 import asyncpg
 from app.config import DSN, logger
 
+
 class PSQLDatabase:
     pool = None
 
@@ -17,7 +18,8 @@ class PSQLDatabase:
             await cls.pool.close()
             cls.pool = None
 
-async def ensure_custom_id_index_on_embedding():
+
+async def ensure_vector_indexes():
     table_name = "langchain_pg_embedding"
     column_name = "custom_id"
     # You might want to standardize the index naming convention
@@ -25,10 +27,20 @@ async def ensure_custom_id_index_on_embedding():
 
     pool = await PSQLDatabase.get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(f"""
-                CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name});
-            """)
-        logger.debug(f"Checking if index '{index_name}' on '{table_name}({column_name}) exists, if not found then the index is created.'")
+        await conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column_name});
+        """
+        )
+
+        await conn.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_{table_name}_file_id 
+            ON {table_name} ((cmetadata->>'file_id'));
+        """
+        )
+
+        logger.info("Vector database indexes ensured")
 
 
 async def pg_health_check() -> bool:
