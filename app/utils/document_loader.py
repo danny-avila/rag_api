@@ -1,8 +1,10 @@
 # app/utils/document_loader.py
+
 import os
 import codecs
 import tempfile
 from typing import List, Optional
+import chardet
 
 from langchain_core.documents import Document
 
@@ -23,13 +25,13 @@ from langchain_community.document_loaders import (
 
 def detect_file_encoding(filepath: str) -> str:
     """
-    Detect the encoding of a file by checking for BOM markers.
+    Detect the encoding of a file using BOM markers and chardet for broader support.
     Returns the detected encoding or 'utf-8' as default.
     """
     with open(filepath, "rb") as f:
-        raw = f.read(4)
+        raw = f.read(4096)  # Read a larger sample for better detection
 
-    # Check for BOM markers
+    # Check for BOM markers first
     if raw.startswith(codecs.BOM_UTF16_LE):
         return "utf-16-le"
     elif raw.startswith(codecs.BOM_UTF16_BE):
@@ -42,9 +44,14 @@ def detect_file_encoding(filepath: str) -> str:
         return "utf-32-le"
     elif raw.startswith(codecs.BOM_UTF32_BE):
         return "utf-32-be"
-    else:
-        # Default to utf-8 if no BOM is found
-        return "utf-8"
+
+    # Use chardet to detect encoding if no BOM is found
+    result = chardet.detect(raw)
+    encoding = result.get("encoding")
+    if encoding:
+        return encoding.lower()
+    # Default to utf-8 if detection fails
+    return "utf-8"
 
 
 def cleanup_temp_encoding_file(loader) -> None:
@@ -79,7 +86,7 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
                     mode="w", encoding="utf-8", suffix=".csv", delete=False
                 ) as temp_file:
                     # Read the original file with detected encoding
-                    with open(filepath, "r", encoding=encoding) as original_file:
+                    with open(filepath, "r", encoding=encoding, errors="replace") as original_file:
                         content = original_file.read()
                         temp_file.write(content)
 
