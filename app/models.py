@@ -42,3 +42,47 @@ class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
+
+
+# New KB-related models
+class KBCreateResponse(BaseModel):
+    kb_id: str
+    collection_name: str
+    status: str
+
+
+class KBDeleteResponse(BaseModel):
+    kb_id: str
+    status: str
+
+
+class KBInfoResponse(BaseModel):
+    kb_id: str
+    collection_id: str
+    document_count: int
+
+
+class V2EmbedResponse(BaseModel):
+    kb_id: str
+    file_id: str
+    filename: str
+    known_type: Optional[str]
+    file_size_bytes: int
+    chunk_count: int
+
+
+class V2QueryResponse(BaseModel):
+    results: List[dict]
+    kb_id: str
+
+
+class CrossKBQueryRequest(BaseModel):
+    kb_ids: List[str]
+    query: str
+    k: int = 5
+
+
+class CrossKBQueryResponse(BaseModel):
+    results: List[dict]
+    queried_kbs: List[str]
+    total_results: int
