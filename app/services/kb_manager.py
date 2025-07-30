@@ -67,8 +67,9 @@ class KBManager:
     async def delete_kb(kb_id: str) -> dict:
         """Delete knowledge base and all its dedicated tables"""
         try:
-            collection_table = f"kb_{kb_id}_collection"
-            embedding_table = f"kb_{kb_id}_embedding"
+            logger.info(f"Deleting KB: {kb_id}")
+            collection_table = f"collection_{kb_id}"
+            embedding_table = f"embedding_{kb_id}_embedding"
 
             pool = await PSQLDatabase.get_pool()
             async with pool.acquire() as conn:

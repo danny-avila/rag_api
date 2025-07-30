@@ -77,15 +77,24 @@ def clean_text(text: str):
     return _clean_text(text)
 
 
+@router.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "message": "Knowledge Base routes running properly"}
+
+
 @router.post("/{kb_id}/embed")
 async def embed_file_to_kb(
     kb_id: str,
     request: Request,
-    file_id: str = Form(...),
+    file_id: str = Form(
+        ...
+    ),  # file ID is optional for query, but required as a response for citation.
     file: UploadFile = File(...),
     entity_id: str = Form(None),
 ):
     """Embed a file into a specific knowledge base"""
+    logger.info(f"Embedding file {file.filename} to KB {kb_id} with ID {file_id}")
     try:
         vector_store = await get_kb_vector_store(kb_id)
     except Exception as e:
@@ -161,6 +170,7 @@ async def embed_file_to_kb(
 @router.get("/{kb_id}/documents", response_model=List[DocumentResponse])
 async def get_kb_documents(kb_id: str, request: Request, ids: List[str] = Query(...)):
     """Get documents from a specific knowledge base"""
+    logger.info(f"Retrieving documents from KB {kb_id} for IDs: {ids}")
     try:
         vector_store = await get_kb_vector_store(kb_id)
 
@@ -228,6 +238,7 @@ async def delete_kb_documents(
 @router.post("/{kb_id}/query")
 async def query_kb(kb_id: str, body: QueryRequestBody, request: Request):
     """Query a specific knowledge base"""
+    logger.info(f"Querying KB {kb_id} with query: {body.query}")
     try:
         vector_store = await get_kb_vector_store(kb_id)
 
