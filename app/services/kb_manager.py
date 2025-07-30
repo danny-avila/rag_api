@@ -24,7 +24,8 @@ class KBManager:
 
         try:
             # Create KB-specific vector store with dedicated tables
-            async with PSQLDatabase.get_pool().acquire() as conn:
+            pool = await PSQLDatabase.get_pool()
+            async with pool.acquire() as conn:
                 # Create KB-specific tables.
                 await conn.execute(
                     f"""
@@ -34,7 +35,7 @@ class KBManager:
                         cmetadata JSONB
                     );
                     
-                    CREATE TABLE {embedding_table} (
+                    CREATE TABLE {embedding_table}(
                         uuid UUID DEFAULT gen_random_uuid() PRIMARY KEY,
                         collection_id UUID REFERENCES {collection_table}(uuid) ON DELETE CASCADE,
                         embedding VECTOR(1536),
@@ -54,6 +55,10 @@ class KBManager:
                     USING hnsw (embedding vector_l2_ops);
                 """
                 )
+
+            logger.info(f"KB created successfully: {kb_id}")
+            return {"kb_id": kb_id, "status": "created"}
+
         except Exception as e:
             logger.error(f"Failed to create KB {kb_id}: {str(e)}")
             raise
@@ -65,7 +70,8 @@ class KBManager:
             collection_table = f"kb_{kb_id}_collection"
             embedding_table = f"kb_{kb_id}_embedding"
 
-            async with PSQLDatabase.get_pool().acquire() as conn:
+            pool = await PSQLDatabase.get_pool()
+            async with pool.acquire() as conn:
                 # Drop KB-specific tables (CASCADE handles FK constraints)
                 await conn.execute(f"DROP TABLE IF EXISTS {embedding_table} CASCADE")
                 await conn.execute(f"DROP TABLE IF EXISTS {collection_table} CASCADE")
@@ -92,7 +98,8 @@ class KBManager:
                 collection_table = f"kb_{kb_id}_collection"
                 embedding_table = f"kb_{kb_id}_embedding"
 
-                async with PSQLDatabase.get_pool().acquire() as conn:
+                pool = await PSQLDatabase.get_pool()
+                async with pool.acquire() as conn:
                     # Check if KB tables exist
                     table_exists = await conn.fetchrow(
                         "SELECT tablename FROM pg_tables WHERE tablename = $1",
