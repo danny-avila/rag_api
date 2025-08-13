@@ -22,13 +22,16 @@ from app.config import (
     logger,
 )
 from app.middleware import security_middleware
-from app.routes import document_routes, pgvector_routes
+from app.routes import document_routes, pgvector_routes, kb_routes, kb_document_routes
 from app.services.database import PSQLDatabase, ensure_vector_indexes
 
 
+# Lifespan function to perform the following actions.
+# - Database pool creation.
+# - Ensure Vector Indexes exist.
+# - Creates worker thread for async operations.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic goes here
     # Create bounded thread pool executor based on CPU cores
     max_workers = min(
         int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 8
@@ -72,7 +75,9 @@ app.state.CHUNK_OVERLAP = CHUNK_OVERLAP
 app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
 # Include routers
-app.include_router(document_routes.router)
+app.include_router(document_routes.router)  # Legacy routes for backward compatibility
+app.include_router(kb_routes.router)  # KB management specific routes.
+app.include_router(kb_document_routes.router)  # KB document management specific routes.
 if debug_mode:
     app.include_router(router=pgvector_routes.router)
 

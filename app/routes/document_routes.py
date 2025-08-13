@@ -22,7 +22,14 @@ from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+from app.config import (
+    logger,
+    vector_store,
+    RAG_UPLOAD_DIR,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    DEFAULT_KB_ID,
+)
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -200,7 +207,7 @@ async def query_embeddings_by_file_id(
             )
 
         if not documents:
-            return authorized_documents
+            return {"results": [], "kb_id": DEFAULT_KB_ID}
 
         document, score = documents[0]
         doc_metadata = document.metadata
@@ -228,7 +235,20 @@ async def query_embeddings_by_file_id(
                     f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
                 )
 
-        return authorized_documents
+        # Transform response to include kb_id
+        results = []
+        for doc, score in authorized_documents:
+            result = {
+                "content": doc.page_content,
+                "metadata": {
+                    **doc.metadata,
+                    "kb_id": DEFAULT_KB_ID,  # Add default KB ID
+                },
+                "score": float(score),
+            }
+            results.append(result)
+
+        return {"results": results, "kb_id": DEFAULT_KB_ID}
 
     except HTTPException as http_exc:
         logger.error(
@@ -395,6 +415,10 @@ async def embed_file(
             chunk_size = 64 * 1024  # 64 KB
             while content := await file.read(chunk_size):
                 await temp_file.write(content)
+
+        # Calculate file size after saving
+        file_size_bytes = os.path.getsize(temp_file_path)
+
     except Exception as e:
         logger.error(
             "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
@@ -479,6 +503,8 @@ async def embed_file(
         "file_id": file_id,
         "filename": file.filename,
         "known_type": known_type,
+        "file_size_bytes": file_size_bytes,
+        "chunk_count": len(result.get("ids", [])) if result and "ids" in result else 0,
     }
 
 

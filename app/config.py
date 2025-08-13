@@ -59,6 +59,7 @@ POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
 DB_HOST = get_env_variable("DB_HOST", "db")
 DB_PORT = get_env_variable("DB_PORT", "5432")
 COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
+DEFAULT_KB_ID = get_env_variable("DEFAULT_KB_ID", "default")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
 )
@@ -136,9 +137,34 @@ if console_json:
 
     formatter = JsonFormatter()
 else:
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    # Add ANSI color codes for different log levels
+    class ColoredFormatter(logging.Formatter):
+        # ANSI color codes
+        COLORS = {
+            "DEBUG": "\033[36m",  # Cyan
+            "INFO": "\033[32m",  # Green
+            "WARNING": "\033[33m",  # Yellow
+            "ERROR": "\033[31m",  # Red
+            "CRITICAL": "\033[35m",  # Magenta
+        }
+        RESET = "\033[0m"  # Reset color
+
+        def format(self, record):
+            # Get the original formatted message
+            formatted_message = super().format(record)
+
+            # Add color to the log level
+            level_name = record.levelname
+            if level_name in self.COLORS:
+                colored_level = f"{self.COLORS[level_name]}{level_name}{self.RESET}"
+                # Replace the level name in the formatted message with colored version
+                formatted_message = formatted_message.replace(
+                    level_name, colored_level, 1
+                )
+
+            return formatted_message
+
+    formatter = ColoredFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)
@@ -318,6 +344,11 @@ elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     )
 else:
     raise ValueError(f"Unsupported vector store type: {VECTOR_DB_TYPE}")
+
+# Also initialize factory for new KBs
+from app.services.vector_store.factory import VectorStoreManager
+
+logger.info("Vector store factory initialized")
 
 retriever = vector_store.as_retriever()
 

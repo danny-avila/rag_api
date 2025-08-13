@@ -10,6 +10,7 @@ class PSQLDatabase:
     async def get_pool(cls):
         if cls.pool is None:
             cls.pool = await asyncpg.create_pool(dsn=DSN)
+            return cls.pool
         return cls.pool
 
     @classmethod
