@@ -25,6 +25,7 @@ from app.config import (
     RAG_UPLOAD_DIR,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
+    vector_store,
 )
 from app.models import QueryRequestBody, DocumentResponse
 from app.utils.document_loader import get_loader, cleanup_temp_encoding_file
@@ -91,22 +92,13 @@ async def embed_file_to_kb(
         ...
     ),  # file ID is optional for query, but required as a response for citation.
     file: UploadFile = File(...),
-    entity_id: str = Form(None),
+    # entity_id: str = Form(None),
+    user_id: str = Form(None),  # Optional, can be set to "public" if not authenticated
 ):
     """Embed a file into a specific knowledge base"""
     logger.info(f"Embedding file {file.filename} to KB {kb_id} with ID {file_id}")
-    try:
-        vector_store = await get_kb_vector_store(kb_id)
-    except Exception as e:
-        logger.error(f"Failed to get vector store for KB {kb_id}: {str(e)}")
-        raise HTTPException(
-            status_code=404, detail=f"Knowledge base not found: {kb_id}"
-        )
-
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
-    else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+    # logger.info(f"Entity ID: {entity_id}")
+    logger.info(f"User ID: {user_id}")
 
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
@@ -121,6 +113,9 @@ async def embed_file_to_kb(
 
         # Calculate file size
         file_size_bytes = calculate_file_size(temp_file_path)
+        logger.info(
+            f"File {file.filename} saved to {temp_file_path} with size {file_size_bytes} bytes"
+        )
 
         # Process file
         loader, known_type, file_ext = get_loader(
@@ -130,11 +125,11 @@ async def embed_file_to_kb(
         cleanup_temp_encoding_file(loader)
 
         # Store in KB-specific vector store
-        result = await store_data_in_vector_db_kb(
-            vector_store=vector_store,
+        result = await store_data_in_vector_db(
             data=data,
             file_id=file_id,
             user_id=user_id,
+            kb_id=kb_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
         )
@@ -240,15 +235,13 @@ async def query_kb(kb_id: str, body: QueryRequestBody, request: Request):
     """Query a specific knowledge base"""
     logger.info(f"Querying KB {kb_id} with query: {body.query}")
     try:
-        vector_store = await get_kb_vector_store(kb_id)
-
         embedding = get_cached_query_embedding(body.query)
 
         if hasattr(vector_store, "asimilarity_search_with_score_by_vector"):
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": body.file_id} if body.file_id else None,
+                filter={"kb_id": kb_id} if kb_id else None,
                 executor=request.app.state.thread_pool,
             )
         else:
@@ -333,10 +326,10 @@ async def query_multiple_kbs(
 
 
 # Helper function for KB-specific embedding storage
-async def store_data_in_vector_db_kb(
-    vector_store,
+async def store_data_in_vector_db(
     data,
     file_id: str,
+    kb_id: str,
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
@@ -346,7 +339,16 @@ async def store_data_in_vector_db_kb(
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
+    logger.info(
+        f"This is the file content to be split: {data[:100]}..."
+    )  # Print first 100 characters
     documents = text_splitter.split_documents(data)
+    logger.info(f"Split into {len(documents)} chunks")
+
+    # print all the chunks.
+    for i, doc in enumerate(documents):
+        logger.info(f"Chunk {i}: {doc.page_content[:100]}...")
+        # Print the first 100 characters
 
     if clean_content:
         for doc in documents:
@@ -358,12 +360,19 @@ async def store_data_in_vector_db_kb(
             metadata={
                 "file_id": file_id,
                 "user_id": user_id,
+                "kb_id": kb_id,
                 "digest": generate_digest(doc.page_content),
                 **(doc.metadata or {}),
             },
         )
         for doc in documents
     ]
+
+    # print which collection this vector store is using
+    logger.info(
+        f"Storing {len(docs)} documents in vector store for KB with file_id: {file_id}"
+    )
+    logger.info(f"Using collection: {vector_store.collection_name}")
 
     try:
         if hasattr(vector_store, "aadd_documents"):

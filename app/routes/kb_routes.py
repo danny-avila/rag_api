@@ -5,6 +5,7 @@ from app.config import logger
 
 router = APIRouter(prefix="/knowledge-bases", tags=["Knowledge Bases"])
 
+
 # Create a new Knowledge Base.
 @router.post("/{kb_id}")
 async def create_knowledge_base(kb_id: str):
@@ -21,10 +22,12 @@ async def create_knowledge_base(kb_id: str):
         logger.error(f"Failed to create KB {kb_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # Delete a Knowledge Base.
 @router.delete("/{kb_id}")
 async def delete_knowledge_base(kb_id: str):
     """Delete a knowledge base and all its data"""
+    logger.info(f"Deleting KB: {kb_id}")
     try:
         result = await KBManager.delete_kb(kb_id)
         logger.info(f"KB deletion requested: {kb_id}")
@@ -32,6 +35,7 @@ async def delete_knowledge_base(kb_id: str):
     except Exception as e:
         logger.error(f"Failed to delete KB {kb_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Get basic information about the Knowledge base.
 @router.get("")

@@ -19,21 +19,21 @@ def get_vector_store(
 
     logger.info("factory get vector store function")
     if mode == "sync":
-        logger.info("synchronous connection")
+        print("synchronous connection")
         return ExtendedPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
         )
     elif mode == "async":
-        logger.info("Asynchronous connection")
+        print("Asynchronous connection")
         return AsyncPgVector(
             connection_string=connection_string,
             embedding_function=embeddings,
             collection_name=collection_name,
         )
     elif mode == "atlas-mongo":
-        logger.info("Mongo Atlas connection")
+        print("Mongo Atlas connection")
         mongo_db = MongoClient(connection_string).get_database()
         mong_collection = mongo_db[collection_name]
         return AtlasMongoVector(
@@ -65,7 +65,7 @@ class VectorStoreManager:
                 logger.info(
                     "vector client instance for the Knowledge base not found, creating new."
                 )
-                collection_name = f"kb_{kb_id}"
+                collection_name = f"collection_{kb_id}"
                 logger.info("collection name ", collection_name)
                 cls._instances[kb_id] = get_vector_store(
                     connection_string=connection_string,

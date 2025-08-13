@@ -137,9 +137,34 @@ if console_json:
 
     formatter = JsonFormatter()
 else:
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    # Add ANSI color codes for different log levels
+    class ColoredFormatter(logging.Formatter):
+        # ANSI color codes
+        COLORS = {
+            "DEBUG": "\033[36m",  # Cyan
+            "INFO": "\033[32m",  # Green
+            "WARNING": "\033[33m",  # Yellow
+            "ERROR": "\033[31m",  # Red
+            "CRITICAL": "\033[35m",  # Magenta
+        }
+        RESET = "\033[0m"  # Reset color
+
+        def format(self, record):
+            # Get the original formatted message
+            formatted_message = super().format(record)
+
+            # Add color to the log level
+            level_name = record.levelname
+            if level_name in self.COLORS:
+                colored_level = f"{self.COLORS[level_name]}{level_name}{self.RESET}"
+                # Replace the level name in the formatted message with colored version
+                formatted_message = formatted_message.replace(
+                    level_name, colored_level, 1
+                )
+
+            return formatted_message
+
+    formatter = ColoredFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)

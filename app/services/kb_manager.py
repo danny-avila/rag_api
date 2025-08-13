@@ -69,7 +69,7 @@ class KBManager:
         try:
             logger.info(f"Deleting KB: {kb_id}")
             collection_table = f"collection_{kb_id}"
-            embedding_table = f"embedding_{kb_id}_embedding"
+            embedding_table = f"embedding_{kb_id}"
 
             pool = await PSQLDatabase.get_pool()
             async with pool.acquire() as conn:
