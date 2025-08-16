@@ -4,14 +4,11 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - '*'
-
-permissions:
-  contents: read
-  packages: write
+      - "*"
 
 jobs:
   call-docker-build:
     uses: ./.github/workflows/docker-build-workflow.yaml
     with:
       tag: ${{ github.ref_name }}
+    secrets: inherit

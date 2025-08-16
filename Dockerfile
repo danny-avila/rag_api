@@ -1,4 +1,4 @@
-FROM python:3.10 AS main
+FROM ghcr.io/astral-sh/uv:python3.10-bookworm AS main
 
 WORKDIR /app
 
@@ -7,12 +7,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
     pandoc \
     netcat-openbsd \
-    libgl1-mesa-glx \  
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 # Download standard NLTK data, to prevent unstructured from downloading packages at runtime
 RUN python -m nltk.downloader -d /app/nltk_data punkt_tab averaged_perceptron_tagger

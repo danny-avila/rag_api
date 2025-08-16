@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths-ignore:
-      - 'README.md'
+      - "README.md"
     branches:
       - main
 
@@ -47,13 +47,14 @@ jobs:
 
       # Log in to Amazon ECR
       - name: Login to Amazon ECR
+        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       # Build and push Docker images to AWS ECR
       - name: Build and push Docker images to ECR
         uses: docker/build-push-action@v5
         env:
-          ECR_REGISTRY: ${{ secrets.AWS_ECR_REGISTRY }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.AWS_ECR_REPOSITORY }}
         with:
           context: .
