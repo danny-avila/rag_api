@@ -88,6 +88,9 @@ The following environment variables are required to run the application:
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
 - `AWS_SESSION_TOKEN`: (Optional) may be needed for bedrock embeddings
+- `BEDROCK_MAX_REQUESTS_PER_SECOND`: (Optional) Maximum requests per second for Bedrock embeddings, defaults to `2.0`. Helps prevent throttling errors.
+- `BEDROCK_MAX_BATCH_SIZE`: (Optional) Maximum texts to embed in one batch for Bedrock, defaults to `10`
+- `BEDROCK_MAX_RETRIES`: (Optional) Maximum retries for Bedrock throttling errors, defaults to `5`
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings. This should be a path to a service account credential file in JSON format, as accepted by [langchain](https://python.langchain.com/api_reference/google_vertexai/index.html)
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 

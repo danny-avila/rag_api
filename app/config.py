@@ -236,7 +236,7 @@ def init_embeddings(provider, model):
 
         return VertexAIEmbeddings(model=model)
     elif provider == EmbeddingsProvider.BEDROCK:
-        from langchain_aws import BedrockEmbeddings
+        from app.services.embeddings.bedrock_rate_limited import RateLimitedBedrockEmbeddings
 
         session_kwargs = {
             "aws_access_key_id": AWS_ACCESS_KEY_ID,
@@ -248,10 +248,20 @@ def init_embeddings(provider, model):
             session_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
 
         session = boto3.Session(**session_kwargs)
-        return BedrockEmbeddings(
+        
+        # Get rate limiting configuration from environment
+        max_rps = float(get_env_variable("BEDROCK_MAX_REQUESTS_PER_SECOND", "2.0"))
+        max_batch = int(get_env_variable("BEDROCK_MAX_BATCH_SIZE", "10"))
+        max_retries = int(get_env_variable("BEDROCK_MAX_RETRIES", "5"))
+        
+        return RateLimitedBedrockEmbeddings(
             client=session.client("bedrock-runtime"),
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
+            max_requests_per_second=max_rps,
+            max_batch_size=max_batch,
+            max_retries=max_retries,
+            initial_retry_delay=1.0,
         )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")

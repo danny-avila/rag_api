@@ -8,3 +8,4 @@ venv/
 *.pyc
 dev.yml
 SHOPIFY.md
+CLAUDE.md
