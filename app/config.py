@@ -367,4 +367,10 @@ known_source_ext = [
     "yml",
     "yaml",
     "eml",
+    "ex",
+    "exs",
+    "erl",
+    "tsx",
+    "jsx",
+    "lhs",
 ]
