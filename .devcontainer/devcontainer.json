@@ -1,0 +1,102 @@
+{
+  // --------------------------------------------------------
+  // [name] - Name of the development container
+  // --------------------------------------------------------
+  "name": "rag-api",
+
+  // --------------------------------------------------------
+  // [build] - Configure the build process
+  // --------------------------------------------------------
+  "build": {
+      "dockerfile": "Dockerfile",
+      "context": "..",
+      "args": {
+          "PYTHON_VERSION": "3.10"
+      }
+  },
+
+  // --------------------------------------------------------
+  // [features] - Install additional tools and runtimes
+  // --------------------------------------------------------
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": "false",
+      "dockerDashComposeVersion": "v2",
+      "installDockerBuildx": "true",
+      "installDockerComposeSwitch": "true"
+    }
+
+    // "ghcr.io/devcontainers/features/nvidia-cuda:1": {
+    //     "installCudnn": "true"
+    // }
+  },
+
+  // --------------------------------------------------------
+  // [customizations] - Configure the development container
+  // --------------------------------------------------------
+  "customizations": {
+      "vscode": {
+          "extensions": [
+              "bierner.markdown-mermaid",
+              "dotenv.dotenv-vscode",
+              "EditorConfig.EditorConfig",
+              "gabdug.pdm",
+              "mechatroner.rainbow-csv",
+              "ms-azuretools.vscode-docker",
+              "ms-python.debugpy",
+              "ms-python.python",
+              "njpwerner.autodocstring",
+              "shardulm94.trailing-spaces",
+              "tamasfe.even-better-toml"
+          ],
+          "settings": {
+              "python.linting.enabled": true,
+              "python.linting.pylintEnabled": true
+          }
+      }
+  },
+
+  // --------------------------------------------------------
+  // [forwardPorts] - Expose container ports to local machine
+  // --------------------------------------------------------
+  "forwardPorts": [8000],
+
+  // --------------------------------------------------------
+  // [portsAttributes] - Configure port forwarding behavior
+  // --------------------------------------------------------
+  "portsAttributes": {
+    "8000": {
+      "label": "Backend",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // --------------------------------------------------------
+  // [remoteEnv] - Set environment variables for the container
+  // --------------------------------------------------------
+  "containerEnv": {},
+
+  // --------------------------------------------------------------
+  // [postCreateCommand] - Run setup tasks after container creation
+  // --------------------------------------------------------------
+  "postCreateCommand": "apt-get moo",
+
+  // --------------------------------------------------------
+  // [runArgs] - Additional arguments for docker run command
+  // --------------------------------------------------------
+  "runArgs": [
+      "--name=devcontainer-rag-api",
+      "--privileged",
+      "--network=host"
+      // "--gpus=all"
+  ],
+
+  // --------------------------------------------------------
+  // [mounts] - Mount host Docker socket for docker-outside-of-docker
+  // --------------------------------------------------------
+  "mounts": [
+    // Add volume mount for NVIDIA runtime (if using nvidia-docker approach)
+    // "source=/dev/video0,target=/dev/video0,type=bind"
+  ]
+}
