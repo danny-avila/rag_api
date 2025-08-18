@@ -207,7 +207,8 @@ async def query_embeddings_by_file_id(
             )
 
         if not documents:
-            return {"results": [], "kb_id": DEFAULT_KB_ID}
+            return authorized_documents
+            # return {"results": [], "kb_id": DEFAULT_KB_ID}
 
         document, score = documents[0]
         doc_metadata = document.metadata
@@ -235,20 +236,22 @@ async def query_embeddings_by_file_id(
                     f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
                 )
 
+        # NOTE: This is for citations.
         # Transform response to include kb_id
-        results = []
-        for doc, score in authorized_documents:
-            result = {
-                "content": doc.page_content,
-                "metadata": {
-                    **doc.metadata,
-                    "kb_id": DEFAULT_KB_ID,  # Add default KB ID
-                },
-                "score": float(score),
-            }
-            results.append(result)
-
-        return {"results": results, "kb_id": DEFAULT_KB_ID}
+        # results = []
+        # for doc, score in authorized_documents:
+        #     result = {
+        #         "content": doc.page_content,
+        #         "metadata": {
+        #             **doc.metadata,
+        #             "kb_id": DEFAULT_KB_ID,  # Add default KB ID
+        #         },
+        #         "score": float(score),
+        #     }
+        #     results.append(result)
+        #
+        # return {"results": results, "kb_id": DEFAULT_KB_ID}
+        return authorized_documents
 
     except HTTPException as http_exc:
         logger.error(
