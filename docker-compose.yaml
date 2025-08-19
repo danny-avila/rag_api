@@ -17,8 +17,10 @@ services:
       - DB_PORT=5432
     ports:
       - "8000:8000"
+    runtime: ${DOCKER_RUNTIME:-runc}
     volumes:
       - ./uploads:/app/uploads
+      - ~/.cache/huggingface:/root/.cache/huggingface:rw
     depends_on:
       - db
     env_file:
