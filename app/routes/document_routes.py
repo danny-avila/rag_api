@@ -6,6 +6,7 @@ import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
 from typing import List, Iterable
+from rerankers import Reranker, Document as ReRankDocument
 from fastapi import (
     APIRouter,
     Request,
@@ -29,6 +30,7 @@ from app.models import (
     QueryRequestBody,
     DocumentResponse,
     QueryMultipleBody,
+    QueryMultipleDocs,
 )
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
@@ -643,6 +645,46 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_ids,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/rerank")
+async def rerank_documents_by_query(request: Request, body: QueryMultipleDocs):
+    try:
+        rk = Reranker(
+            body.config.get("model_name", "flashrank"),
+            model_type=body.config.get("model_type"),
+            lang=body.config.get("lang"),
+            api_provider=body.config.get("api_provider"),
+            api_key=body.config.get("api_key"),
+        )
+
+        docs = []
+        for i, d in enumerate(body.docs):
+            if isinstance(d, str):
+                docs.append(ReRankDocument(text=d, doc_id=i))
+            else:
+                docs.append(
+                    ReRankDocument(
+                        text=d.get("text", ""),
+                        doc_id=d.get("doc_id", i),
+                        metadata=d.get("metadata", {}) or {},
+                    )
+                )
+
+        top_k = body.k
+
+        results = rk.rank(query=body.query, docs=docs)
+        items = results.top_k(top_k) if top_k else results
+
+        return [[getattr(r.document, "text", None), r.score] for r in items]
+    except Exception as e:
+        logger.error(
+            "Error in reranking documents | Query: %s | Error: %s | Traceback: %s",
             body.query,
             str(e),
             traceback.format_exc(),
