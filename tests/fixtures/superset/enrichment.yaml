@@ -1,0 +1,45 @@
+# Enrichment configuration for dashboard metadata
+# Maps dashboard slugs to additional metadata
+
+dashboards:
+  user-retention-dashboard:
+    domain: "growth"
+    tags: ["retention", "cohort", "user-analytics", "product"]
+    priority: "high"
+    business_unit: "product"
+    
+  revenue-analytics:
+    domain: "finance"
+    tags: ["revenue", "financial", "business-metrics", "forecasting"]
+    priority: "critical"
+    business_unit: "finance"
+    
+  product-usage-metrics:
+    domain: "product"
+    tags: ["usage", "engagement", "features", "user-behavior"]
+    priority: "high"
+    business_unit: "product"
+    
+  marketing-performance:
+    domain: "marketing"
+    tags: ["campaigns", "roi", "acquisition", "performance"]
+    priority: "medium"
+    business_unit: "marketing"
+    
+  operational-kpis:
+    domain: "operations"
+    tags: ["kpis", "operations", "business-health", "monitoring"]
+    priority: "high"
+    business_unit: "operations"
+
+# Global enrichment rules
+global_rules:
+  # Default tags for all dashboards
+  default_tags: ["superset", "dashboard"]
+  
+  # Domain normalization
+  domain_mapping:
+    "growth": "product"
+    "fin": "finance"
+    "ops": "operations"
+    "mkt": "marketing"

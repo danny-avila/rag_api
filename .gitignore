@@ -1,10 +1,75 @@
+# IDEs
 .idea
+.vscode/
+*.swp
+*.swo
+
+# Python
 .venv
-.env
-__pycache__
-uploads/
-myenv/
 venv/
+myenv/
+__pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Uploads and data
+uploads/
+*.csv
+*.json
+*.yaml
+*.yml
+!tests/fixtures/**/*.csv
+!tests/fixtures/**/*.yaml
+!tests/fixtures/**/*.yml
+!docker-compose.yaml
+!.github/workflows/*.yml
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+coverage.xml
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
 dev.yml
 SHOPIFY.md
+test_ci_locally.sh

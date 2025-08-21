@@ -27,6 +27,7 @@ class EmbeddingsProvider(Enum):
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
     GOOGLE_VERTEXAI = "vertexai"
+    MOCK = "mock"
 
 
 def get_env_variable(
@@ -253,6 +254,20 @@ def init_embeddings(provider, model):
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
         )
+    elif provider == EmbeddingsProvider.MOCK:
+        # Mock embeddings for testing - return a dummy object
+        class MockLangChainEmbeddings:
+            def __init__(self):
+                self.model = "mock"
+            
+            def embed_documents(self, texts):
+                # Return dummy embeddings for compatibility
+                return [[0.0] * 3072 for _ in texts]
+            
+            def embed_query(self, text):
+                return [0.0] * 3072
+        
+        return MockLangChainEmbeddings()
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -286,6 +301,10 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.MOCK:
+    EMBEDDINGS_MODEL = "mock"
+    EMBEDDINGS_DIM = int(get_env_variable("EMBEDDINGS_DIM", "3072"))
+    EMBEDDINGS_SEED = int(get_env_variable("EMBEDDINGS_SEED", "42"))
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 

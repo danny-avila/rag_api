@@ -4,13 +4,18 @@ services:
   db:
     image: ankane/pgvector:latest
     environment:
-      POSTGRES_DB: mydatabase
-      POSTGRES_USER: myuser
-      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: rag_api
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
     volumes:
       - pgdata2:/var/lib/postgresql/data
     ports:
-      - "5433:5432"
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rag_api"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   pgdata2:

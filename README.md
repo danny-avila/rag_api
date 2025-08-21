@@ -1,13 +1,232 @@
-﻿# ID-based RAG FastAPI
+﻿# RAG API with Dash Assistant
 
 ## Overview
 This project integrates Langchain with FastAPI in an Asynchronous, Scalable manner, providing a framework for document indexing and retrieval, using PostgreSQL/pgvector.
 
-Files are organized into embeddings by `file_id`. The primary use case is for integration with [LibreChat](https://librechat.ai), but this simple API can be used for any ID-based use case.
+### Two Main Components:
 
-The main reason to use the ID approach is to work with embeddings on a file-level. This makes for targeted queries when combined with file metadata stored in a database, such as is done by LibreChat.
+1. **ID-based RAG** - Files organized by `file_id` for integration with [LibreChat](https://librechat.ai)
+2. **Dash Assistant** - Dashboard and chart search system with multi-signal retrieval
 
-The API will evolve over time to employ different querying/re-ranking methods, embedding models, and vector stores.
+The API evolves over time to employ different querying/re-ranking methods, embedding models, and vector stores.
+
+## Dashboard Assistant (MVP)
+
+Complete end-to-end setup for dashboard and chart search functionality.
+
+### Prerequisites
+- Docker and Docker Compose
+- Python 3.10+ with dependencies installed
+- PostgreSQL with pgvector support
+
+### Step-by-Step Setup
+
+#### 1. Start Database
+```bash
+docker compose up -d db
+```
+Wait for PostgreSQL to be ready (health check will confirm).
+
+#### 2. Run Database Migrations
+```bash
+python -m app.dash_assistant.migrate
+```
+This creates all necessary tables, indexes, and optimization functions.
+
+#### 3. Load Dashboard Data
+```bash
+# Complete data ingestion pipeline
+python -m app.dash_assistant.ingestion.index_jobs \
+  --dashboards-csv tests/fixtures/superset/dashboards.csv \
+  --charts-csv tests/fixtures/superset/charts.csv \
+  --md-dir tests/fixtures/superset/md \
+  --enrichment-yaml tests/fixtures/superset/enrichment.yaml \
+  --complete
+```
+
+#### 4. Generate Vector Embeddings
+```bash
+# Create embeddings for semantic search (only missing chunks)
+python -m app.dash_assistant.ingestion.index_jobs --only-missing
+```
+
+#### 5. Start API Server
+```bash
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+#### 6. Test Search Query
+```bash
+curl -X POST "http://localhost:8000/dash/query" \
+  -H "Content-Type: application/json" \
+  -d '{"q":"где найти retention","top_k":3}'
+```
+
+### Expected JSON Response Format
+
+```json
+{
+  "results": [
+    {
+      "title": "User Retention Dashboard",
+      "url": "https://superset.company.com/superset/dashboard/42/",
+      "score": 0.95,
+      "charts": [
+        {
+          "title": "Monthly Retention Cohorts",
+          "viz_type": "heatmap",
+          "url": "https://superset.company.com/explore/?slice_id=123"
+        }
+      ],
+      "why": "семантическая близость по содержимому, совпадения в тексте: retention"
+    },
+    {
+      "title": "Product Usage Metrics",
+      "url": "https://superset.company.com/superset/dashboard/15/",
+      "score": 0.78,
+      "charts": [
+        {
+          "title": "User Engagement Trends",
+          "viz_type": "line",
+          "url": "https://superset.company.com/explore/?slice_id=456"
+        }
+      ],
+      "why": "совпадение по заголовку, популярность учтена"
+    }
+  ],
+  "debug": {
+    "query_processing_time_ms": 145,
+    "total_candidates": 12,
+    "rrf_scores": {"42": 0.95, "15": 0.78},
+    "signal_sources": ["fts", "vector", "trigram"]
+  }
+}
+```
+
+### Slack Integration
+
+#### Slack Blocks Structure
+The system generates Slack Block Kit compatible responses:
+
+```json
+{
+  "blocks": [
+    {
+      "type": "header",
+      "text": {
+        "type": "plain_text",
+        "text": "🔍 Найденные дашборды"
+      }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*User Retention Dashboard* (Score: 0.95)\n📊 *Графики:* Monthly Retention Cohorts (heatmap)\n💡 *Почему:* семантическая близость по содержимому"
+      },
+      "accessory": {
+        "type": "button",
+        "text": {
+          "type": "plain_text",
+          "text": "Открыть"
+        },
+        "url": "https://superset.company.com/superset/dashboard/42/"
+      }
+    },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text",
+            "text": "👍 Полезно"
+          },
+          "action_id": "feedback_up",
+          "value": "entity_42"
+        },
+        {
+          "type": "button",
+          "text": {
+            "type": "plain_text", 
+            "text": "👎 Не то"
+          },
+          "action_id": "feedback_down",
+          "value": "entity_42"
+        }
+      ]
+    }
+  ]
+}
+```
+
+#### Feedback Endpoint
+```bash
+curl -X POST "http://localhost:8000/dash/feedback" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "qid": 123,
+    "entity_id": 42,
+    "chart_id": 456,
+    "feedback": "up"
+  }'
+```
+
+Response:
+```json
+{
+  "status": "success",
+  "message": "Feedback recorded successfully"
+}
+```
+
+## Makefile Commands
+
+For convenience, use the provided Makefile:
+
+```bash
+# Complete setup (recommended for first time)
+make setup-complete
+
+# Development setup (DB + migrations only)  
+make setup-dev
+
+# Individual steps
+make docker-db          # Start database
+make migrate            # Run migrations
+make ingest-complete    # Load test data
+make optimize-db        # Optimize after loading
+
+# Utilities
+make migrate-list       # Check migration status
+make help              # Show all commands
+```
+
+For detailed instructions, see [Dash Assistant README](app/dash_assistant/README.md).
+
+## Continuous Integration
+
+The project includes GitHub Actions CI workflow (`.github/workflows/ci.yml`) that:
+
+- **Tests on Python 3.10 & 3.11** with matrix builds
+- **PostgreSQL 16 with pgvector** service for integration tests  
+- **MOCK embeddings provider** - no external API calls in CI
+- **Automated migrations** before running tests
+- **Code quality checks** - linting, formatting, type checking
+- **Security scanning** - bandit and safety checks
+- **Test coverage** reporting
+
+### CI Environment Variables
+
+The CI automatically sets:
+```yaml
+EMBEDDINGS_PROVIDER: MOCK      # No external API calls
+EMBEDDINGS_DIMENSION: 3072     # Test dimension
+POSTGRES_DB: rag_api          # Test database
+OPENAI_API_KEY: ""            # Explicitly empty
+```
+
+This ensures tests run deterministically without external dependencies.
 
 ## Features
 - **Document Management**: Methods for adding, retrieving, and deleting documents.

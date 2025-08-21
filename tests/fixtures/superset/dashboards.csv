@@ -1,0 +1,6 @@
+superset_id,dashboard_slug,title,description,owner,url
+1,user-retention-dashboard,User Retention Dashboard,Dashboard showing user retention metrics and cohort analysis,john.doe@company.com,https://superset.company.com/dashboard/1/
+2,revenue-analytics,Revenue Analytics,Comprehensive revenue tracking and forecasting dashboard,jane.smith@company.com,https://superset.company.com/dashboard/2/
+3,product-usage-metrics,Product Usage Metrics,Track product feature usage and user engagement,bob.wilson@company.com,https://superset.company.com/dashboard/3/
+4,marketing-performance,Marketing Performance,Marketing campaign effectiveness and ROI analysis,alice.brown@company.com,https://superset.company.com/dashboard/4/
+5,operational-kpis,Operational KPIs,Key operational metrics and business health indicators,charlie.davis@company.com,https://superset.company.com/dashboard/5/
