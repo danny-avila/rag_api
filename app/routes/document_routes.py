@@ -22,7 +22,7 @@ from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP
+from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_BATCH_SIZE
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -285,12 +285,32 @@ async def store_data_in_vector_db(
     ]
 
     try:
-        if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents), executor=executor
-            )
-        else:
-            ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+        embedding_batch_size = EMBEDDING_BATCH_SIZE
+        if embedding_batch_size <= 0:   
+            if isinstance(vector_store, AsyncPgVector):
+                batch_ids = await vector_store.aadd_documents(
+                    batch, ids=[file_id] * len(batch), executor=executor
+                )
+            else:
+                   batch_ids = vector_store.add_documents(batch, ids=[file_id] * len(batch))
+            
+            return {"essage": "Documents added successfully", "ids": batch_ids}
+
+        ids = []
+        # Embedding the documents in batches
+        for i in range(0, len(docs), embedding_batch_size):
+            # compatible with the remaining number of documents is insufficient to form a batch
+            if i + embedding_batch_size > len(docs):
+                embedding_batch_size = len(docs) - i
+            batch = docs[i : i + embedding_batch_size]
+            if isinstance(vector_store, AsyncPgVector):
+                batch_ids = await vector_store.aadd_documents(
+                    batch, ids=[file_id] * len(batch), executor=executor
+                )
+            else:
+                   batch_ids = vector_store.add_documents(batch, ids=[file_id] * len(batch))
+
+            ids.extend(batch_ids)
 
         return {"message": "Documents added successfully", "ids": ids}
 
