@@ -133,39 +133,82 @@ class BackupEmbeddingsProvider(BaseModel, Embeddings):
     
     def _embed_with_failover(self, texts: List[str]) -> List[List[float]]:
         """Embed texts with automatic failover support."""
+        import time
+        
         # Check if we should try to recover to primary
         self._check_primary_recovery()
         
-        try:
-            # Try current provider
-            result = self.current_provider.embed_documents(texts)
+        max_attempts = self.max_primary_failures if not self.using_backup else 1
+        last_error = None
+        
+        # Try up to max_attempts times with the current provider
+        for attempt in range(max_attempts):
+            try:
+                # Try current provider
+                result = self.current_provider.embed_documents(texts)
+                
+                # Success!
+                self._handle_provider_success()
+                return result
+                
+            except Exception as e:
+                last_error = e
+                
+                # If we're not at max failures yet, retry with backoff
+                if attempt < max_attempts - 1:
+                    backoff_delay = min(0.5 * (2 ** attempt), 5.0)
+                    logger.info(
+                        f"{self.current_provider_name} attempt {attempt + 1}/{max_attempts} failed: {str(e)[:100]}. "
+                        f"Retrying in {backoff_delay:.1f}s..."
+                    )
+                    time.sleep(backoff_delay)
+                    continue
+                
+                # We've exhausted retries with current provider
+                logger.warning(
+                    f"{self.current_provider_name} failed after {max_attempts} attempts: {str(e)}"
+                )
+        
+        # If we get here, current provider failed all attempts
+        # Update failure count
+        if not self.using_backup:
+            with self.failover_lock:
+                self.consecutive_failures += max_attempts
+        
+        if not self.using_backup and self.consecutive_failures >= self.max_primary_failures:
+            # Time to switch to backup
+            with self.failover_lock:
+                self.current_provider = self.backup_provider
+                self.current_provider_name = self.backup_name
+                self.using_backup = True
+                self.backup_success_count = 0
             
-            # Success!
-            self._handle_provider_success()
-            return result
+            logger.warning(
+                f"🔄 Failing over from {self.primary_name} to {self.backup_name} "
+                f"after {self.consecutive_failures} consecutive failures"
+            )
             
-        except Exception as e:
-            # Provider failed
-            switched = self._handle_provider_failure(e)
-            
-            if switched:
-                # We switched to backup, try again
-                try:
-                    logger.info(f"🔄 Using backup provider {self.backup_name} after primary failure")
-                    result = self.current_provider.embed_documents(texts)
-                    self._handle_provider_success()
-                    
-                    # SUCCESS with backup - log but don't propagate the original error to client
-                    logger.warning(f"⚠️ Primary provider {self.primary_name} failed, but backup {self.backup_name} succeeded")
-                    logger.debug(f"Primary failure details: {str(e)}")
-                    
-                    return result
-                except Exception as backup_error:
-                    logger.error(f"❌ Both providers failed! Primary: {str(e)}, Backup: {str(backup_error)}")
-                    raise RuntimeError(f"All embedding providers failed. Primary ({self.primary_name}): {str(e)}, Backup ({self.backup_name}): {str(backup_error)}") from backup_error
-            else:
-                # No failover, propagate original error
-                raise RuntimeError(f"Embedding failed with {self.current_provider_name}: {str(e)}") from e
+            # Try with backup provider
+            try:
+                logger.info(f"🔄 Using backup provider {self.backup_name}")
+                result = self.current_provider.embed_documents(texts)
+                self._handle_provider_success()
+                
+                # SUCCESS with backup - don't raise the primary error
+                logger.warning(f"⚠️ Primary provider {self.primary_name} failed, but backup {self.backup_name} succeeded")
+                logger.debug(f"Primary failure details: {str(last_error)}")
+                
+                return result
+                
+            except Exception as backup_error:
+                logger.error(f"❌ Both providers failed! Primary: {str(last_error)}, Backup: {str(backup_error)}")
+                raise RuntimeError(
+                    f"All embedding providers failed. Primary ({self.primary_name}): {str(last_error)}, "
+                    f"Backup ({self.backup_name}): {str(backup_error)}"
+                ) from backup_error
+        else:
+            # Either backup failed or we haven't reached failover threshold
+            raise RuntimeError(f"Embedding failed with {self.current_provider_name}: {str(last_error)}") from last_error
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Embed multiple documents with backup failover."""
