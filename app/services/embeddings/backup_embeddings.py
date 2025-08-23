@@ -120,6 +120,8 @@ class BackupEmbeddingsProvider(BaseModel, Embeddings):
             self.consecutive_failures += 1
             if not self.using_backup:
                 self.using_backup = True
+                self.current_provider = self.backup_provider
+                self.current_provider_name = self.backup_name
                 logger.warning(f"🔄 Primary provider {self.primary_name} failed - switching to backup {self.backup_name} for {self.primary_cooldown_minutes} minutes")
     
     def _record_primary_recovery(self):
@@ -131,6 +133,8 @@ class BackupEmbeddingsProvider(BaseModel, Embeddings):
             self.consecutive_failures = 0
             self.using_backup = False
             self.backup_success_count = 0
+            self.current_provider = self.primary_provider
+            self.current_provider_name = self.primary_name
     
     def _embed_with_failover(self, texts: List[str]) -> List[List[float]]:
         """Embed texts with cooldown-based failover."""
@@ -172,6 +176,7 @@ class BackupEmbeddingsProvider(BaseModel, Embeddings):
                 if not self.using_backup:
                     self.current_provider = self.backup_provider
                     self.current_provider_name = self.backup_name
+                    self.using_backup = True
                 self.backup_success_count += 1
             
             return result

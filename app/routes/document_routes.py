@@ -157,13 +157,37 @@ async def delete_documents(request: Request, document_ids: List[str] = Body(...)
         )
         raise http_exc
     except Exception as e:
-        logger.error(
-            "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
-            document_ids,
-            str(e),
-            traceback.format_exc(),
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        
+        # Handle PostgreSQL connection errors more gracefully
+        if "server closed the connection unexpectedly" in error_msg or "connection" in error_msg.lower():
+            logger.error(
+                "Database connection error during document deletion | IDs: %s | Error: Database connection lost",
+                document_ids
+            )
+            raise HTTPException(
+                status_code=503, 
+                detail="Database temporarily unavailable. Please try again in a moment."
+            )
+        elif "OperationalError" in error_msg and "psycopg2" in error_msg:
+            logger.error(
+                "Database operational error during document deletion | IDs: %s | Error: %s",
+                document_ids,
+                error_msg
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Database service temporarily unavailable. Please try again."
+            )
+        else:
+            # Log full traceback for other errors
+            logger.error(
+                "Failed to delete documents | IDs: %s | Error: %s | Traceback: %s",
+                document_ids,
+                error_msg,
+                traceback.format_exc(),
+            )
+            raise HTTPException(status_code=500, detail=f"Failed to delete documents: {error_msg}")
 
 
 # Cache the embedding function with LRU cache
@@ -319,7 +343,19 @@ async def store_data_in_vector_db(
         )
         
         # Provide user-friendly error messages for common issues
-        if "Bedrock Model Error" in error_message or "Bedrock Access Denied" in error_message:
+        if "server closed the connection unexpectedly" in error_message or "connection" in error_message.lower():
+            return {
+                "message": "Database connection error", 
+                "error": "Database temporarily unavailable. Please try again in a moment.",
+                "retry_suggested": True
+            }
+        elif "OperationalError" in error_message and "psycopg2" in error_message:
+            return {
+                "message": "Database service error", 
+                "error": "Database service temporarily unavailable. Please try again.",
+                "retry_suggested": True
+            }
+        elif "Bedrock Model Error" in error_message or "Bedrock Access Denied" in error_message:
             # These are our custom helpful error messages
             return {"message": "Bedrock configuration error", "error": error_message}
         elif "model identifier is invalid" in error_message:
