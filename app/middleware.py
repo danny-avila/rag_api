@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 from fastapi.responses import JSONResponse
 from app.config import logger
 
-# Global semaphore to limit concurrent embed requests
-# Configurable via environment variable, default to 2 concurrent requests
+# Global semaphore to limit concurrent embed requests  
+# Configurable via environment variable, default to 3 concurrent requests
 def get_embed_concurrency_limit():
-    value = os.getenv("EMBED_CONCURRENCY_LIMIT", "2")
+    value = os.getenv("EMBED_CONCURRENCY_LIMIT", "3")
     # Strip comments and whitespace from environment variables
     if isinstance(value, str) and '#' in value:
         value = value.split('#')[0].strip()

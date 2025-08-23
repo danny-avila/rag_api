@@ -332,7 +332,6 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
-    AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.NVIDIA:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
@@ -340,8 +339,85 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.NVIDIA:
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
+# Load AWS credentials ONLY if Bedrock is used as primary or backup
+backup_provider_str = get_env_variable("EMBEDDINGS_PROVIDER_BACKUP", None)
+bedrock_needed = (
+    EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK or 
+    (backup_provider_str and backup_provider_str.lower() == "bedrock")
+)
+
+if bedrock_needed:
+    AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+    AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", None)
+    AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", None)  
+    AWS_SESSION_TOKEN = get_env_variable("AWS_SESSION_TOKEN", None)
+    logger.debug("AWS credentials loaded for Bedrock provider")
+else:
+    # Set to None when not needed
+    AWS_DEFAULT_REGION = None
+    AWS_ACCESS_KEY_ID = None  
+    AWS_SECRET_ACCESS_KEY = None
+    AWS_SESSION_TOKEN = None
+    logger.debug("AWS credentials not required - no Bedrock provider configured")
+
+# Initialize embeddings with backup support
+def init_embeddings_with_backup():
+    """Initialize embeddings with automatic backup failover."""
+    # Use already loaded backup provider string
+    backup_model = get_env_variable("EMBEDDINGS_MODEL_BACKUP", None)
+    
+    if backup_provider_str and backup_model:
+        # Backup is configured, create backup embeddings with failover
+        backup_provider = EmbeddingsProvider(backup_provider_str.lower())
+        
+        logger.info(f"Backup provider configured: {backup_provider.value} / {backup_model}")
+        
+        try:
+            # Initialize primary provider
+            primary_embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+            logger.info(f"✅ Primary provider initialized: {EMBEDDINGS_PROVIDER.value}")
+            
+            try:
+                # Initialize backup provider
+                backup_embeddings = init_embeddings(backup_provider, backup_model)
+                logger.info(f"✅ Backup provider initialized: {backup_provider.value}")
+                
+                # Create backup wrapper
+                from app.services.embeddings.backup_embeddings import BackupEmbeddingsProvider
+                
+                return BackupEmbeddingsProvider(
+                    primary_provider=primary_embeddings,
+                    backup_provider=backup_embeddings,
+                    primary_name=f"{EMBEDDINGS_PROVIDER.value}:{EMBEDDINGS_MODEL}",
+                    backup_name=f"{backup_provider.value}:{backup_model}"
+                )
+                
+            except Exception as backup_error:
+                logger.warning(f"⚠️ Backup provider failed to initialize: {str(backup_error)}")
+                logger.info(f"Continuing with primary provider only: {EMBEDDINGS_PROVIDER.value}")
+                return primary_embeddings
+                
+        except Exception as primary_error:
+            logger.error(f"❌ Primary provider failed to initialize: {str(primary_error)}")
+            
+            # Try to initialize backup as primary
+            try:
+                backup_embeddings = init_embeddings(backup_provider, backup_model)
+                logger.warning(f"🔄 Using backup provider as primary: {backup_provider.value}")
+                return backup_embeddings
+            except Exception as backup_error:
+                logger.error(f"❌ Both providers failed to initialize!")
+                raise RuntimeError(
+                    f"Failed to initialize any embedding provider. "
+                    f"Primary ({EMBEDDINGS_PROVIDER.value}): {str(primary_error)}, "
+                    f"Backup ({backup_provider.value}): {str(backup_error)}"
+                ) from primary_error
+    else:
+        # No backup configured, use single provider
+        return init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+
 try:
-    embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+    embeddings = init_embeddings_with_backup()
     logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 except Exception as e:
     error_message = str(e)
