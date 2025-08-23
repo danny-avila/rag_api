@@ -1,6 +1,7 @@
 .idea
 .venv
 .env
+.env.beta
 __pycache__
 uploads/
 myenv/

@@ -37,6 +37,9 @@ def get_env_variable(
         if default_value is None and required:
             raise ValueError(f"Environment variable '{var_name}' not found.")
         return default_value
+    # Strip comments and whitespace from environment variables
+    if isinstance(value, str) and '#' in value:
+        value = value.split('#')[0].strip()
     return value
 
 
@@ -249,19 +252,38 @@ def init_embeddings(provider, model):
 
         session = boto3.Session(**session_kwargs)
         
-        # Get rate limiting configuration from environment
-        max_rps = float(get_env_variable("BEDROCK_MAX_REQUESTS_PER_SECOND", "2.0"))
-        max_batch = int(get_env_variable("BEDROCK_MAX_BATCH_SIZE", "10"))
+        # Get reactive rate limiting configuration from environment
+        max_batch = int(get_env_variable("BEDROCK_MAX_BATCH_SIZE", "15"))
         max_retries = int(get_env_variable("BEDROCK_MAX_RETRIES", "5"))
+        initial_delay = float(get_env_variable("BEDROCK_INITIAL_RETRY_DELAY", "0.1"))
+        max_delay = float(get_env_variable("BEDROCK_MAX_RETRY_DELAY", "30.0"))
+        backoff_factor = float(get_env_variable("BEDROCK_BACKOFF_FACTOR", "2.0"))
+        recovery_factor = float(get_env_variable("BEDROCK_RECOVERY_FACTOR", "0.9"))
+        
+        # Get Titan V2 specific parameters
+        dimensions = get_env_variable("BEDROCK_EMBEDDING_DIMENSIONS", None)
+        if dimensions is not None:
+            dimensions = int(dimensions)
+        normalize = get_env_variable("BEDROCK_EMBEDDING_NORMALIZE", "true").lower() == "true"
+        
+        # Create client with connection pooling for maximum performance
+        config = boto3.session.Config(
+            max_pool_connections=50,  # Increased for better concurrency
+            retries={'max_attempts': 0}  # We handle retries in our wrapper
+        )
         
         return RateLimitedBedrockEmbeddings(
-            client=session.client("bedrock-runtime"),
+            client=session.client("bedrock-runtime", config=config),
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
-            max_requests_per_second=max_rps,
             max_batch_size=max_batch,
             max_retries=max_retries,
-            initial_retry_delay=1.0,
+            initial_retry_delay=initial_delay,
+            max_retry_delay=max_delay,
+            backoff_factor=backoff_factor,
+            recovery_factor=recovery_factor,
+            dimensions=dimensions,
+            normalize=normalize,
         )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
@@ -299,9 +321,43 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
-embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
-
-logger.info(f"Initialized embeddings of type: {type(embeddings)}")
+try:
+    embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+    logger.info(f"Initialized embeddings of type: {type(embeddings)}")
+except Exception as e:
+    error_message = str(e)
+    
+    # Provide helpful configuration error messages
+    if EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
+        if "model identifier is invalid" in error_message:
+            logger.error(
+                f"❌ BEDROCK CONFIGURATION ERROR ❌\n\n"
+                f"The Bedrock model '{EMBEDDINGS_MODEL}' is not available in region '{AWS_DEFAULT_REGION}'.\n\n"
+                f"💡 Quick Fix:\n"
+                f"   Set EMBEDDINGS_MODEL=amazon.titan-embed-text-v1 in your .env file\n\n"
+                f"🔍 Available models in most regions:\n"
+                f"   • amazon.titan-embed-text-v1\n"
+                f"   • cohere.embed-english-v3\n"
+                f"   • cohere.embed-multilingual-v3\n\n"
+                f"🌍 To check available models in {AWS_DEFAULT_REGION}:\n"
+                f"   AWS Console → Bedrock → Foundation models → Embedding"
+            )
+        elif "AccessDeniedException" in error_message:
+            logger.error(
+                f"❌ BEDROCK ACCESS ERROR ❌\n\n"
+                f"Your AWS account doesn't have access to Bedrock in '{AWS_DEFAULT_REGION}'.\n\n"
+                f"💡 Solutions:\n"
+                f"   1. AWS Console → Bedrock → Model access → Request model access\n"
+                f"   2. Enable foundation models you want to use\n"
+                f"   3. Verify IAM permissions include 'bedrock:InvokeModel'\n\n"
+                f"⚠️  Note: Bedrock may not be available in all regions"
+            )
+        else:
+            logger.error(f"❌ BEDROCK ERROR: {error_message}")
+    else:
+        logger.error(f"❌ EMBEDDINGS ERROR ({EMBEDDINGS_PROVIDER}): {error_message}")
+    
+    raise RuntimeError(f"Failed to initialize embeddings: {error_message}") from e
 
 # Vector store
 if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:

@@ -1,5 +1,6 @@
 # app/routes/document_routes.py
 import os
+import time
 import hashlib
 import traceback
 import aiofiles
@@ -17,6 +18,7 @@ from fastapi import (
     Query,
     status,
 )
+from fastapi.responses import StreamingResponse
 from langchain_core.documents import Document
 from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -264,6 +266,8 @@ async def store_data_in_vector_db(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
     documents = text_splitter.split_documents(data)
+    
+    logger.info(f"Processing file {file_id}: split into {len(documents)} chunks with size {CHUNK_SIZE}")
 
     # If `clean_content` is True, clean the page_content of each document (remove null bytes)
     if clean_content:
@@ -285,24 +289,53 @@ async def store_data_in_vector_db(
     ]
 
     try:
+        logger.info(f"Starting embedding for file {file_id}: {len(docs)} document chunks")
+        start_time = time.time()
+        
         if isinstance(vector_store, AsyncPgVector):
+            # Balanced batch size for good performance without timeouts  
+            batch_size = 25 if CHUNK_SIZE > 1500 else 40
             ids = await vector_store.aadd_documents(
-                docs, ids=[file_id] * len(documents), executor=executor
+                docs, 
+                ids=[file_id] * len(documents), 
+                executor=executor,
+                batch_size=batch_size
             )
         else:
             ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
-
+        
+        duration = time.time() - start_time
+        logger.info(f"Completed embedding for file {file_id} in {duration:.2f}s")
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
+        error_message = str(e)
         logger.error(
             "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
             file_id,
             user_id,
-            str(e),
+            error_message,
             traceback.format_exc(),
         )
-        return {"message": "An error occurred while adding documents.", "error": str(e)}
+        
+        # Provide user-friendly error messages for common issues
+        if "Bedrock Model Error" in error_message or "Bedrock Access Denied" in error_message:
+            # These are our custom helpful error messages
+            return {"message": "Bedrock configuration error", "error": error_message}
+        elif "model identifier is invalid" in error_message:
+            return {
+                "message": "Invalid embedding model configuration", 
+                "error": "The configured Bedrock embedding model is not available. Please check your EMBEDDINGS_MODEL setting.",
+                "details": error_message
+            }
+        elif "AccessDeniedException" in error_message:
+            return {
+                "message": "Bedrock access denied", 
+                "error": "Your AWS account doesn't have access to Bedrock. Please enable model access in the AWS Console.",
+                "details": error_message
+            }
+        else:
+            return {"message": "An error occurred while adding documents.", "error": error_message}
 
 
 @router.post("/local/embed")
@@ -338,13 +371,19 @@ async def embed_local_file(
             executor=request.app.state.thread_pool,
         )
 
-        if result:
+        if result and "error" not in result:
             return {
                 "status": True,
                 "file_id": document.file_id,
                 "filename": document.filename,
                 "known_type": known_type,
             }
+        elif "error" in result:
+            error_message = result.get("error", "An error occurred while adding documents.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=error_message,
+            )
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -385,6 +424,8 @@ async def embed_file(
         user_id = entity_id if entity_id else "public"
     else:
         user_id = entity_id if entity_id else request.state.user.get("id")
+
+    logger.info(f"Processing embed request for file_id={file_id}, filename={file.filename}, user_id={user_id}")
 
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
@@ -436,11 +477,10 @@ async def embed_file(
             response_message = "Failed to process/store the file data."
             if isinstance(result["error"], str):
                 response_message = result["error"]
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An unspecified error occurred.",
-                )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=response_message,
+            )
     except HTTPException as http_exc:
         response_status = False
         response_message = f"HTTP Exception: {http_exc.detail}"
@@ -473,6 +513,7 @@ async def embed_file(
                 traceback.format_exc(),
             )
 
+    logger.info(f"Successfully completed embed request for file_id={file_id}, filename={file.filename}")
     return {
         "status": response_status,
         "message": response_message,
@@ -575,6 +616,12 @@ async def embed_file_upload(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
+            )
+        elif "error" in result:
+            error_message = result.get("error", "An error occurred while adding documents.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=error_message,
             )
     except HTTPException as http_exc:
         logger.error(

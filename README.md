@@ -88,9 +88,14 @@ The following environment variables are required to run the application:
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
 - `AWS_SESSION_TOKEN`: (Optional) may be needed for bedrock embeddings
-- `BEDROCK_MAX_REQUESTS_PER_SECOND`: (Optional) Maximum requests per second for Bedrock embeddings, defaults to `2.0`. Helps prevent throttling errors.
-- `BEDROCK_MAX_BATCH_SIZE`: (Optional) Maximum texts to embed in one batch for Bedrock, defaults to `10`
+- `BEDROCK_MAX_BATCH_SIZE`: (Optional) Maximum texts to embed in one batch for Bedrock, defaults to `15`. Higher values improve throughput but may increase memory usage.
 - `BEDROCK_MAX_RETRIES`: (Optional) Maximum retries for Bedrock throttling errors, defaults to `5`
+- `BEDROCK_INITIAL_RETRY_DELAY`: (Optional) Initial delay in seconds when first throttled, defaults to `0.1`
+- `BEDROCK_MAX_RETRY_DELAY`: (Optional) Maximum delay between retries, defaults to `30.0`
+- `BEDROCK_BACKOFF_FACTOR`: (Optional) Exponential backoff multiplier when throttled, defaults to `2.0`
+- `BEDROCK_RECOVERY_FACTOR`: (Optional) Factor to reduce delay after successful calls, defaults to `0.9`
+- `BEDROCK_EMBEDDING_DIMENSIONS`: (Optional) Output vector dimensions for Titan V2 (256, 512, or 1024), defaults to `512` for optimal balance of accuracy and storage cost
+- `BEDROCK_EMBEDDING_NORMALIZE`: (Optional) Whether to normalize embeddings for Titan V2, defaults to `true` (optimal for RAG)
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings. This should be a path to a service account credential file in JSON format, as accepted by [langchain](https://python.langchain.com/api_reference/google_vertexai/index.html)
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 

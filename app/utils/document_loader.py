@@ -54,15 +54,20 @@ def cleanup_temp_encoding_file(loader) -> None:
 
     :param loader: The document loader that may have created a temporary file
     """
-    if hasattr(loader, "_temp_filepath"):
+    if hasattr(loader, "_temp_filepath") and loader._temp_filepath is not None:
         try:
-            os.remove(loader._temp_filepath)
+            if os.path.exists(loader._temp_filepath):
+                os.remove(loader._temp_filepath)
+                logger.debug(f"Cleaned up temporary file: {loader._temp_filepath}")
         except Exception as e:
-            logger.warning(f"Failed to remove temporary UTF-8 file: {e}")
+            logger.warning(f"Failed to remove temporary UTF-8 file '{loader._temp_filepath}': {e}")
+    else:
+        # No temp file to clean up - this is normal for most loaders
+        logger.debug("No temporary file to clean up")
 
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
-    """Get the appropriate document loader based on file type and\or content type."""
+    """Get the appropriate document loader based on file type and/or content type."""
     file_ext = filename.split(".")[-1].lower()
     known_type = True
 
@@ -101,19 +106,24 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
                 raise e
         else:
             loader = CSVLoader(filepath)
+            # Ensure _temp_filepath is set to None for consistency
+            loader._temp_filepath = None
     elif file_ext == "rst":
         loader = UnstructuredRSTLoader(filepath, mode="elements")
+        loader._temp_filepath = None
     elif file_ext == "xml" or file_content_type in [
             "application/xml",
             "text/xml",
             "application/xhtml+xml",
         ]:
         loader = UnstructuredXMLLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext in ["ppt", "pptx"] or file_content_type in [
             "application/vnd.ms-powerpoint",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         ]:
         loader = UnstructuredPowerPointLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext == "md" or file_content_type in [
             "text/markdown",
             "text/x-markdown",
@@ -121,26 +131,33 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
             "application/x-markdown",
         ]:
         loader = UnstructuredMarkdownLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext == "epub" or file_content_type == "application/epub+zip":
         loader = UnstructuredEPubLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext in ["doc", "docx"] or file_content_type in [
             "application/msword",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ]:
         loader = Docx2txtLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext in ["xls", "xlsx"] or file_content_type in [
             "application/vnd.ms-excel",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ]:
         loader = UnstructuredExcelLoader(filepath)
+        loader._temp_filepath = None
     elif file_ext == "json" or file_content_type == "application/json":
         loader = TextLoader(filepath, autodetect_encoding=True)
+        loader._temp_filepath = None
     elif file_ext in known_source_ext or (
             file_content_type and file_content_type.find("text/") >= 0
         ):
         loader = TextLoader(filepath, autodetect_encoding=True)
+        loader._temp_filepath = None
     else:
         loader = TextLoader(filepath, autodetect_encoding=True)
+        loader._temp_filepath = None
         known_type = False
 
     return loader, known_type, file_ext
