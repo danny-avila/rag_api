@@ -96,6 +96,12 @@ The following environment variables are required to run the application:
 - `BEDROCK_RECOVERY_FACTOR`: (Optional) Factor to reduce delay after successful calls, defaults to `0.9`
 - `BEDROCK_EMBEDDING_DIMENSIONS`: (Optional) Output vector dimensions for Titan V2 (256, 512, or 1024), defaults to `512` for optimal balance of accuracy and storage cost
 - `BEDROCK_EMBEDDING_NORMALIZE`: (Optional) Whether to normalize embeddings for Titan V2, defaults to `true` (optimal for RAG)
+- `NVIDIA_MAX_BATCH_SIZE`: (Optional) Maximum texts per batch for NVIDIA embeddings, defaults to `20`
+- `NVIDIA_MAX_RETRIES`: (Optional) Maximum retries for NVIDIA API errors, defaults to `3`
+- `NVIDIA_TIMEOUT`: (Optional) Request timeout for NVIDIA API calls, defaults to `30.0` seconds
+- `NVIDIA_INPUT_TYPE`: (Optional) Input type parameter for NVIDIA API, defaults to `query`
+- `NVIDIA_ENCODING_FORMAT`: (Optional) Encoding format for NVIDIA embeddings, defaults to `float`
+- `NVIDIA_TRUNCATE`: (Optional) Truncation behavior for NVIDIA API, defaults to `NONE`
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings. This should be a path to a service account credential file in JSON format, as accepted by [langchain](https://python.langchain.com/api_reference/google_vertexai/index.html)
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 

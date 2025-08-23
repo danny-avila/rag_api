@@ -27,6 +27,7 @@ class EmbeddingsProvider(Enum):
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
     GOOGLE_VERTEXAI = "vertexai"
+    NVIDIA = "nvidia"
 
 
 def get_env_variable(
@@ -285,6 +286,20 @@ def init_embeddings(provider, model):
             dimensions=dimensions,
             normalize=normalize,
         )
+    elif provider == EmbeddingsProvider.NVIDIA:
+        from app.services.embeddings.nvidia_embeddings import NVIDIAEmbeddings
+        
+        return NVIDIAEmbeddings(
+            base_url=RAG_OPENAI_BASEURL,
+            model=model,
+            api_key=RAG_OPENAI_API_KEY,
+            max_batch_size=int(get_env_variable("NVIDIA_MAX_BATCH_SIZE", "20")),
+            max_retries=int(get_env_variable("NVIDIA_MAX_RETRIES", "3")),
+            timeout=float(get_env_variable("NVIDIA_TIMEOUT", "30.0")),
+            input_type=get_env_variable("NVIDIA_INPUT_TYPE", "query"),
+            encoding_format=get_env_variable("NVIDIA_ENCODING_FORMAT", "float"),
+            truncate=get_env_variable("NVIDIA_TRUNCATE", "NONE"),
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -318,6 +333,10 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.NVIDIA:
+    EMBEDDINGS_MODEL = get_env_variable(
+        "EMBEDDINGS_MODEL", "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
+    )
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
