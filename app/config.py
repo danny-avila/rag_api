@@ -385,11 +385,15 @@ def init_embeddings_with_backup():
                 # Create backup wrapper
                 from app.services.embeddings.backup_embeddings import BackupEmbeddingsProvider
                 
+                # Get cooldown configuration
+                primary_cooldown_minutes = int(get_env_variable("PRIMARY_FAILOVER_COOLDOWN_MINUTES", "1"))
+                
                 return BackupEmbeddingsProvider(
                     primary_provider=primary_embeddings,
                     backup_provider=backup_embeddings,
                     primary_name=f"{EMBEDDINGS_PROVIDER.value}:{EMBEDDINGS_MODEL}",
-                    backup_name=f"{backup_provider.value}:{backup_model}"
+                    backup_name=f"{backup_provider.value}:{backup_model}",
+                    primary_cooldown_minutes=primary_cooldown_minutes
                 )
                 
             except Exception as backup_error:
