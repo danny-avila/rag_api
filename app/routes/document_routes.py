@@ -249,7 +249,7 @@ async def query_embeddings_by_file_id(
 
 
 def generate_digest(page_content: str):
-    hash_obj = hashlib.md5(page_content.encode())
+    hash_obj = hashlib.md5(page_content.encode('utf-8', errors="surrogateescape"))
     return hash_obj.hexdigest()
 
 
