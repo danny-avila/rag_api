@@ -42,6 +42,94 @@ from app.utils.health import is_health_ok
 router = APIRouter()
 
 
+def get_user_id(request: Request, entity_id: str = None) -> str:
+    """Extract user ID from request or entity_id."""
+    if not hasattr(request.state, "user"):
+        return entity_id if entity_id else "public"
+    else:
+        return entity_id if entity_id else request.state.user.get("id")
+
+
+async def save_upload_file_async(file: UploadFile, temp_file_path: str) -> None:
+    """Save uploaded file asynchronously."""
+    try:
+        async with aiofiles.open(temp_file_path, "wb") as temp_file:
+            chunk_size = 64 * 1024  # 64 KB
+            while content := await file.read(chunk_size):
+                await temp_file.write(content)
+    except Exception as e:
+        logger.error(
+            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+            temp_file_path,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save the uploaded file. Error: {str(e)}",
+        )
+
+
+def save_upload_file_sync(file: UploadFile, temp_file_path: str) -> None:
+    """Save uploaded file synchronously."""
+    try:
+        with open(temp_file_path, "wb") as temp_file:
+            copyfileobj(file.file, temp_file)
+    except Exception as e:
+        logger.error(
+            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+            temp_file_path,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save the uploaded file. Error: {str(e)}",
+        )
+
+
+async def load_file_content(
+    filename: str, content_type: str, file_path: str, executor
+) -> tuple:
+    """Load file content using appropriate loader."""
+    loader, known_type, file_ext = get_loader(filename, content_type, file_path)
+    data = await run_in_executor(executor, loader.load)
+
+    # Clean up temporary UTF-8 file if it was created for encoding conversion
+    cleanup_temp_encoding_file(loader)
+
+    return data, known_type, file_ext
+
+
+def extract_text_from_documents(documents: List[Document], file_ext: str) -> str:
+    """Extract text content from loaded documents."""
+    text_content = ""
+    if documents:
+        for doc in documents:
+            if hasattr(doc, "page_content"):
+                # Clean text if it's a PDF
+                if file_ext == "pdf":
+                    text_content += clean_text(doc.page_content) + "\n"
+                else:
+                    text_content += doc.page_content + "\n"
+
+    # Remove trailing newline
+    return text_content.rstrip("\n")
+
+
+async def cleanup_temp_file_async(file_path: str) -> None:
+    """Clean up temporary file asynchronously."""
+    try:
+        await aiofiles.os.remove(file_path)
+    except Exception as e:
+        logger.error(
+            "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
+            file_path,
+            str(e),
+            traceback.format_exc(),
+        )
+
+
 @router.get("/ids")
 async def get_all_ids(request: Request):
     try:
@@ -386,40 +474,21 @@ async def embed_file(
     response_status = True
     response_message = "File processed successfully."
     known_type = None
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
-    else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
 
+    user_id = get_user_id(request, entity_id)
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
     os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
 
+    await save_upload_file_async(file, temp_file_path)
+
     try:
-        async with aiofiles.open(temp_file_path, "wb") as temp_file:
-            chunk_size = 64 * 1024  # 64 KB
-            while content := await file.read(chunk_size):
-                await temp_file.write(content)
-    except Exception as e:
-        logger.error(
-            "Failed to save uploaded file | Path: %s | Error: %s | Traceback: %s",
+        data, known_type, file_ext = await load_file_content(
+            file.filename,
+            file.content_type,
             temp_file_path,
-            str(e),
-            traceback.format_exc(),
+            request.app.state.thread_pool,
         )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save the uploaded file. Error: {str(e)}",
-        )
-
-    try:
-        loader, known_type, file_ext = get_loader(
-            file.filename, file.content_type, temp_file_path
-        )
-        data = await run_in_executor(request.app.state.thread_pool, loader.load)
-
-        # Clean up temporary UTF-8 file if it was created for encoding conversion
-        cleanup_temp_encoding_file(loader)
 
         result = await store_data_in_vector_db(
             data=data,
@@ -468,15 +537,7 @@ async def embed_file(
             detail=f"Error during file processing: {str(e)}",
         )
     finally:
-        try:
-            await aiofiles.os.remove(temp_file_path)
-        except Exception as e:
-            logger.error(
-                "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
-                temp_file_path,
-                str(e),
-                traceback.format_exc(),
-            )
+        await cleanup_temp_file_async(temp_file_path)
 
     return {
         "status": response_status,
@@ -542,31 +603,18 @@ async def embed_file_upload(
     uploaded_file: UploadFile = File(...),
     entity_id: str = Form(None),
 ):
+    user_id = get_user_id(request, entity_id)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
-    else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
+    save_upload_file_sync(uploaded_file, temp_file_path)
 
     try:
-        with open(temp_file_path, "wb") as temp_file:
-            copyfileobj(uploaded_file.file, temp_file)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save the uploaded file. Error: {str(e)}",
+        data, known_type, file_ext = await load_file_content(
+            uploaded_file.filename,
+            uploaded_file.content_type,
+            temp_file_path,
+            request.app.state.thread_pool,
         )
-
-    try:
-        loader, known_type, file_ext = get_loader(
-            uploaded_file.filename, uploaded_file.content_type, temp_file_path
-        )
-
-        data = await run_in_executor(request.app.state.thread_pool, loader.load)
-
-        # Clean up temporary UTF-8 file if it was created for encoding conversion
-        cleanup_temp_encoding_file(loader)
 
         result = await store_data_in_vector_db(
             data,
@@ -653,3 +701,67 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             traceback.format_exc(),
         )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/text")
+async def extract_text_from_file(
+    request: Request,
+    file_id: str = Form(...),
+    file: UploadFile = File(...),
+    entity_id: str = Form(None),
+):
+    """
+    Extract text content from an uploaded file without creating embeddings.
+    Returns the raw text content for text parsing purposes.
+    """
+    user_id = get_user_id(request, entity_id)
+    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
+    os.makedirs(temp_base_path, exist_ok=True)
+    temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+
+    await save_upload_file_async(file, temp_file_path)
+
+    try:
+        data, known_type, file_ext = await load_file_content(
+            file.filename,
+            file.content_type,
+            temp_file_path,
+            request.app.state.thread_pool,
+        )
+
+        # Extract text content from loaded documents
+        text_content = extract_text_from_documents(data, file_ext)
+
+        return {
+            "text": text_content,
+            "file_id": file_id,
+            "filename": file.filename,
+            "known_type": known_type,
+        }
+
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in extract_text_from_file | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
+    except Exception as e:
+        logger.error(
+            "Error during text extraction | File: %s | Error: %s | Traceback: %s",
+            file.filename,
+            str(e),
+            traceback.format_exc(),
+        )
+        if "No pandoc was found" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.PANDOC_NOT_INSTALLED,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Error during text extraction: {str(e)}",
+            )
+    finally:
+        await cleanup_temp_file_async(temp_file_path)
