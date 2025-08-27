@@ -31,6 +31,7 @@ pymongo==4.6.3
 langchain-mongodb==0.2.0
 langchain-ollama==0.3.3
 langchain-huggingface==0.1.0
+langchain-google-genai==2.1.10
 cryptography==45.0.5
 python-magic==0.4.27
 python-pptx==1.0.2
