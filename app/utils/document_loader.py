@@ -148,12 +148,37 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
 
 def clean_text(text: str) -> str:
     """
+    Clean up text from PDF lopader
+
+    :param text: The original text
+    :return: Cleaned text
+    """
+    text = remove_null(text)
+    text = remove_non_utf8(text)
+    return text
+
+
+def remove_null(text: str) -> str:
+    """
     Remove NUL (0x00) characters from a string.
 
     :param text: The original text with potential NUL characters.
     :return: Cleaned text without NUL characters.
     """
     return text.replace("\x00", "")
+
+
+def remove_non_utf8(text: str) -> str:
+    """
+    Remove invalid UTF-8 characters from a string, such as surrogate characters
+
+    :param text: The original text with potential invalid utf-8 characters
+    :return: Cleaned text without invalid utf-8 characters.
+    """
+    try:
+        return text.encode("utf-8", "ignore").decode("utf-8")
+    except UnicodeError:
+        return text
 
 
 def process_documents(documents: List[Document]) -> str:
