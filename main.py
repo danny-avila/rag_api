@@ -21,7 +21,7 @@ from app.config import (
     LogMiddleware,
     logger,
 )
-from app.middleware import security_middleware
+from app.middleware import security_middleware, timeout_middleware, throttle_embed_middleware
 from app.routes import document_routes, pgvector_routes
 from app.services.database import PSQLDatabase, ensure_vector_indexes
 
@@ -64,6 +64,11 @@ app.add_middleware(
 
 app.add_middleware(LogMiddleware)
 
+# Add timeout middleware first (outermost)
+app.middleware("http")(timeout_middleware)
+# Add throttling middleware second (before security)
+app.middleware("http")(throttle_embed_middleware)
+# Add security middleware third
 app.middleware("http")(security_middleware)
 
 # Set state variables for use in routes
@@ -94,4 +99,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=RAG_HOST, port=RAG_PORT, log_config=None)
+    # Configure uvicorn with longer timeouts for large document processing
+    uvicorn.run(
+        app, 
+        host=RAG_HOST, 
+        port=RAG_PORT, 
+        log_config=None,
+        timeout_keep_alive=300,  # 5 minutes keep-alive
+        timeout_graceful_shutdown=30,
+        limit_concurrency=100,
+        limit_max_requests=1000
+    )

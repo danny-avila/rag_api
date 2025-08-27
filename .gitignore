@@ -1,6 +1,7 @@
 .idea
 .venv
 .env
+.env.beta
 __pycache__
 uploads/
 myenv/
@@ -8,3 +9,4 @@ venv/
 *.pyc
 dev.yml
 SHOPIFY.md
+CLAUDE.md
