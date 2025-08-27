@@ -61,7 +61,7 @@ def cleanup_temp_encoding_file(loader) -> None:
 
     :param loader: The document loader that may have created a temporary file
     """
-    if hasattr(loader, "_temp_filepath"):
+    if hasattr(loader, "_temp_filepath") and loader._temp_filepath is not None:
         try:
             os.remove(loader._temp_filepath)
         except Exception as e:
@@ -90,7 +90,9 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
                     mode="w", encoding="utf-8", suffix=".csv", delete=False
                 ) as temp_file:
                     # Read the original file with detected encoding
-                    with open(filepath, "r", encoding=encoding, errors="replace") as original_file:
+                    with open(
+                        filepath, "r", encoding=encoding, errors="replace"
+                    ) as original_file:
                         content = original_file.read()
                         temp_file.write(content)
 
@@ -111,40 +113,40 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
     elif file_ext == "rst":
         loader = UnstructuredRSTLoader(filepath, mode="elements")
     elif file_ext == "xml" or file_content_type in [
-            "application/xml",
-            "text/xml",
-            "application/xhtml+xml",
-        ]:
+        "application/xml",
+        "text/xml",
+        "application/xhtml+xml",
+    ]:
         loader = UnstructuredXMLLoader(filepath)
     elif file_ext in ["ppt", "pptx"] or file_content_type in [
-            "application/vnd.ms-powerpoint",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ]:
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ]:
         loader = UnstructuredPowerPointLoader(filepath)
     elif file_ext == "md" or file_content_type in [
-            "text/markdown",
-            "text/x-markdown",
-            "application/markdown",
-            "application/x-markdown",
-        ]:
+        "text/markdown",
+        "text/x-markdown",
+        "application/markdown",
+        "application/x-markdown",
+    ]:
         loader = UnstructuredMarkdownLoader(filepath)
     elif file_ext == "epub" or file_content_type == "application/epub+zip":
         loader = UnstructuredEPubLoader(filepath)
     elif file_ext in ["doc", "docx"] or file_content_type in [
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ]:
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]:
         loader = Docx2txtLoader(filepath)
     elif file_ext in ["xls", "xlsx"] or file_content_type in [
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ]:
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ]:
         loader = UnstructuredExcelLoader(filepath)
     elif file_ext == "json" or file_content_type == "application/json":
         loader = TextLoader(filepath, autodetect_encoding=True)
     elif file_ext in known_source_ext or (
-            file_content_type and file_content_type.find("text/") >= 0
-        ):
+        file_content_type and file_content_type.find("text/") >= 0
+    ):
         loader = TextLoader(filepath, autodetect_encoding=True)
     else:
         loader = TextLoader(filepath, autodetect_encoding=True)
