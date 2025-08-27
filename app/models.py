@@ -42,3 +42,10 @@ class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
+
+
+class QueryMultipleDocs(BaseModel):
+    query: str
+    docs: List[str]
+    config: dict
+    k: int = 4
