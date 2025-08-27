@@ -83,7 +83,7 @@ def override_vector_store(monkeypatch):
     # Override document addition functions.
     def dummy_add_documents(docs, ids):
         return ids
-    async def dummy_aadd_documents(docs, ids=None, executor=None):
+    async def dummy_aadd_documents(docs, ids=None, executor=None, batch_size=None):
         return ids
     monkeypatch.setattr(vector_store, "add_documents", dummy_add_documents)
     monkeypatch.setattr(vector_store, "aadd_documents", dummy_aadd_documents)

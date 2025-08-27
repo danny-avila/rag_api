@@ -64,7 +64,7 @@ The following environment variables are required to run the application:
 - `DEBUG_RAG_API`: (Optional) Set to "True" to show more verbose logging output in the server console, and to enable postgresql database routes
 - `DEBUG_PGVECTOR_QUERIES`: (Optional) Set to "True" to enable detailed PostgreSQL query logging for pgvector operations. Useful for debugging performance issues with vector database queries.
 - `CONSOLE_JSON`: (Optional) Set to "True" to log as json for Cloud Logging aggregations
-- `EMBEDDINGS_PROVIDER`: (Optional) either "openai", "bedrock", "azure", "huggingface", "huggingfacetei", "vertexai", or "ollama", where "huggingface" uses sentence_transformers; defaults to "openai"
+- `EMBEDDINGS_PROVIDER`: (Optional) either "openai", "bedrock", "azure", "huggingface", "huggingfacetei", "vertexai", "ollama", or "nvidia", where "huggingface" uses sentence_transformers; defaults to "openai"
 - `EMBEDDINGS_MODEL`: (Optional) Set a valid embeddings model to use from the configured provider.
     - **Defaults**
     - openai: "text-embedding-3-small"
@@ -74,6 +74,42 @@ The following environment variables are required to run the application:
     - vertexai: "text-embedding-004"
     - ollama: "nomic-embed-text"
     - bedrock: "amazon.titan-embed-text-v1"
+    - nvidia: "nvidia/llama-3.2-nemoretriever-300m-embed-v1"
+- `EMBEDDINGS_PROVIDER_BACKUP`: (Optional) Backup provider for automatic failover ("openai", "bedrock", "azure", "huggingface", "huggingfacetei", "vertexai", "ollama", "nvidia")
+- `EMBEDDINGS_MODEL_BACKUP`: (Optional) Backup model to use when primary provider fails
+- `PRIMARY_FAILOVER_COOLDOWN_MINUTES`: (Optional) Minutes to wait before retrying failed primary provider (default: 1)
+- `EMBED_CONCURRENCY_LIMIT`: (Optional) Maximum concurrent embedding requests to prevent overload (default: 3)
+
+#### Backup Embedding Provider Configuration
+The RAG API supports intelligent backup embedding providers for high availability:
+- **Automatic failover**: When primary provider fails, requests automatically switch to backup
+- **Smart cooldown**: Failed primary providers are avoided for configurable time period
+- **Transparent operation**: LibreChat receives success responses when backup succeeds
+- **Automatic recovery**: Primary provider is retried when cooldown expires
+
+#### NVIDIA Embedding Provider Configuration
+- `NVIDIA_BASE_URL`: (Optional) NVIDIA API endpoint URL (default: "http://localhost:8003/v1")
+- `NVIDIA_API_KEY`: (Optional) API key for NVIDIA embedding service
+- `NVIDIA_MODEL`: (Optional) NVIDIA model to use (default: "nvidia/llama-3.2-nemoretriever-300m-embed-v1")
+- `NVIDIA_INPUT_TYPE`: (Optional) Input type for embeddings ("query", "passage", default: "passage")
+- `NVIDIA_ENCODING_FORMAT`: (Optional) Encoding format ("float", "base64", default: "float")
+- `NVIDIA_TRUNCATE`: (Optional) Truncate input if too long ("NONE", "START", "END", default: "NONE")
+- `NVIDIA_MAX_RETRIES`: (Optional) Maximum retry attempts (default: 3)
+- `NVIDIA_TIMEOUT`: (Optional) Read timeout in seconds (default: 3, connection timeout: 2s)
+- `NVIDIA_MAX_BATCH_SIZE`: (Optional) Maximum texts per batch (default: 32)
+
+#### AWS Bedrock Enhanced Configuration
+- `BEDROCK_EMBEDDING_DIMENSIONS`: (Optional) For Titan V2 models - embedding dimensions (256, 512, or 1024, default: 1024)
+- `BEDROCK_EMBEDDING_NORMALIZE`: (Optional) For Titan V2 models - normalize embeddings ("true"/"false", default: "true")
+- `BEDROCK_MAX_BATCH_SIZE`: (Optional) Maximum texts per Bedrock batch (default: 15)
+- `BEDROCK_INITIAL_RETRY_DELAY`: (Optional) Initial retry delay in seconds for rate limiting (default: 1.0)
+- `BEDROCK_MAX_RETRY_DELAY`: (Optional) Maximum retry delay in seconds (default: 60.0)
+- `BEDROCK_BACKOFF_FACTOR`: (Optional) Exponential backoff multiplier (default: 2.0)
+
+**Bedrock Timeout Configuration (optimized for backup failover):**
+- Connection timeout: 5 seconds 
+- Read timeout: 30 seconds (reduced from default 60s)
+
 - `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
@@ -125,6 +161,45 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
+### High Availability Configuration Example
+
+For production environments requiring maximum uptime, you can configure redundant embedding providers with automatic failover. This example uses NVIDIA as the primary provider with AWS Bedrock as backup:
+
+```env
+# Primary Provider - NVIDIA Embeddings (Local/On-Premises)
+EMBEDDINGS_PROVIDER=nvidia
+EMBEDDINGS_MODEL=nvidia/llama-3.2-nemoretriever-300m-embed-v1
+NVIDIA_BASE_URL=http://your-nvidia-server:8003/v1
+NVIDIA_API_KEY=your-nvidia-api-key
+NVIDIA_MAX_BATCH_SIZE=32
+NVIDIA_TIMEOUT=3
+
+# Backup Provider - AWS Bedrock Titan V2 Embeddings  
+EMBEDDINGS_PROVIDER_BACKUP=bedrock
+EMBEDDINGS_MODEL_BACKUP=amazon.titan-embed-text-v2:0
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+AWS_DEFAULT_REGION=us-west-2
+BEDROCK_EMBEDDING_DIMENSIONS=512
+BEDROCK_EMBEDDING_NORMALIZE=true
+
+# Failover Configuration
+PRIMARY_FAILOVER_COOLDOWN_MINUTES=2
+EMBED_CONCURRENCY_LIMIT=3
+
+# Performance Tuning
+CHUNK_SIZE=1500
+CHUNK_OVERLAP=100
+```
+
+**How this works:**
+- **Primary**: NVIDIA embeddings serve all requests when available
+- **Failover**: If NVIDIA fails, requests automatically switch to Bedrock
+- **Cooldown**: After failure, NVIDIA is not retried for 2 minutes (prevents cascading failures)
+- **Recovery**: NVIDIA is automatically retried when cooldown expires
+- **Transparency**: LibreChat receives successful responses when backup succeeds
+
+This configuration ensures high availability with seamless failover while maintaining optimal performance and cost efficiency.
 
 ### Proxy Configuration
 
@@ -139,6 +214,68 @@ rag_api:
 
 This configuration will ensure that all HTTP/HTTPS requests from the RAG API container are routed through your specified proxy server.
 
+### Failover Testing
+
+The RAG API includes comprehensive testing tools to validate backup provider functionality and performance under real-world conditions.
+
+#### Automated Failover Testing
+
+Test the backup embedding system with realistic service interruptions:
+
+```bash
+# Run comprehensive failover test with service toggling
+sudo -v && python3 test_failover_automation.py
+```
+
+**What this test does:**
+- Uploads all PDFs from `$RAG_UPLOAD_DIR/pdfs` (or `~/uploads_rag/pdfs`)
+- Randomly blocks/unblocks primary provider using iptables
+- Measures failover performance and success rates
+- Automatically cleans up all uploaded documents
+- Generates detailed statistics and timing analysis
+
+**Test Results Example:**
+```
+📊 TEST RESULTS SUMMARY
+📈 UPLOAD STATISTICS:
+   Total uploads: 28
+   ✅ Successful: 28 (100.0%)
+   Average duration: 5.2s
+   Fastest upload: 0.8s
+🔀 FAILOVER STATISTICS:
+   Port blocks: 9
+   Port unblocks: 8
+```
+
+#### Test Data Setup
+
+Download sample PDFs for testing:
+
+```bash
+# Set upload directory (default: ~/uploads_rag)
+export RAG_UPLOAD_DIR=${RAG_UPLOAD_DIR:-~/uploads_rag}
+mkdir -p $RAG_UPLOAD_DIR/pdfs
+
+# Download 30 sample PDFs from arXiv
+for i in $(seq -f "%05g" 1 30); do
+    wget "https://arxiv.org/pdf/2301.$i.pdf" -P $RAG_UPLOAD_DIR/pdfs
+    sleep 1
+done
+```
+
+#### Manual Testing
+
+For manual testing with iptables service toggling:
+
+```bash
+# Block primary provider (triggers backup failover)
+sudo iptables -A OUTPUT -p tcp --dport 8003 -j REJECT
+
+# Unblock primary provider (triggers recovery)  
+sudo iptables -D OUTPUT -p tcp --dport 8003 -j REJECT
+```
+
+Use these commands while uploading documents through LibreChat to observe failover behavior in the logs.
 
 ### Cloud Installation Settings:
 

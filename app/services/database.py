@@ -9,7 +9,15 @@ class PSQLDatabase:
     @classmethod
     async def get_pool(cls):
         if cls.pool is None:
-            cls.pool = await asyncpg.create_pool(dsn=DSN)
+            cls.pool = await asyncpg.create_pool(
+                dsn=DSN,
+                min_size=5,        # Minimum number of connections
+                max_size=20,       # Maximum number of connections
+                max_queries=1000,  # Maximum queries per connection
+                max_inactive_connection_lifetime=300,  # 5 minutes
+                command_timeout=60.0,  # 60 seconds command timeout
+            )
+            logger.info(f"Database pool created with min_size=5, max_size=20")
         return cls.pool
 
     @classmethod

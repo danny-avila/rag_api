@@ -62,14 +62,48 @@ class AsyncPgVector(ExtendedPgVector):
         documents: List[Document], 
         ids: Optional[List[str]] = None,
         executor=None,
+        batch_size: int = 100,
         **kwargs
     ) -> List[str]:
-        """Async version of add_documents"""
+        """Async version of add_documents with batch processing"""
         executor = executor or self._get_thread_pool()
-        return await run_in_executor(
-            executor, 
-            super().add_documents, 
-            documents, 
-            ids=ids,
-            **kwargs
-        )
+        
+        # If documents are small enough, process in one batch
+        if len(documents) <= batch_size:
+            return await run_in_executor(
+                executor, 
+                super().add_documents, 
+                documents, 
+                ids=ids,
+                **kwargs
+            )
+        
+        # Process in batches for large document sets
+        from app.config import logger
+        all_ids = []
+        total_docs = len(documents)
+        
+        for i in range(0, total_docs, batch_size):
+            batch_docs = documents[i:i+batch_size]
+            batch_ids = ids[i:i+batch_size] if ids else None
+            
+            batch_num = (i // batch_size) + 1
+            total_batches = (total_docs + batch_size - 1) // batch_size
+            
+            logger.info(f"Inserting batch {batch_num}/{total_batches} ({len(batch_docs)} docs) into vector store")
+            
+            batch_result = await run_in_executor(
+                executor, 
+                super().add_documents, 
+                batch_docs, 
+                ids=batch_ids,
+                **kwargs
+            )
+            all_ids.extend(batch_result)
+            
+            # Small delay between batches to prevent overload
+            if i + batch_size < total_docs:
+                await asyncio.sleep(0.1)
+        
+        logger.info(f"Completed inserting {total_docs} documents into vector store")
+        return all_ids
