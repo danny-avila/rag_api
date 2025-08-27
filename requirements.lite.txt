@@ -1,7 +1,8 @@
 langchain==0.3.26
 langchain-community==0.3.27
 langchain-openai==0.3.27
-langchain-core==0.3.68
+langchain-core==0.3.75
+langchain-google-genai==2.1.10
 langchain-google-vertexai==2.0.27
 sqlalchemy==2.0.41
 python-dotenv==1.1.1

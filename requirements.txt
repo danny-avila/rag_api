@@ -1,7 +1,7 @@
 langchain==0.3.26
 langchain-community==0.3.27
 langchain-openai==0.3.27
-langchain-core==0.3.68
+langchain-core==0.3.75
 langchain-aws==0.2.1
 langchain-google-vertexai==2.0.27
 langchain_text_splitters==0.3.8 # 0.3.3
@@ -31,6 +31,7 @@ pymongo==4.6.3
 langchain-mongodb==0.2.0
 langchain-ollama==0.3.3
 langchain-huggingface==0.1.0
+langchain-google-genai==2.1.10
 cryptography==45.0.5
 python-magic==0.4.27
 python-pptx==1.0.2
