@@ -29,7 +29,7 @@ onnxruntime==1.20.1
 rapidocr==2.0.6
 opencv-python-headless==4.9.0.80
 pymongo==4.6.3
-langchain-mongodb>=0.4.0
+langchain-mongodb==0.4.0
 langchain-ollama==0.3.3
 langchain-huggingface==0.1.0
 langchain-google-genai==2.1.10
@@ -39,4 +39,4 @@ python-pptx==1.0.2
 xlrd==2.0.2
 pydantic==2.10.0
 chardet==5.2.0
-numpy>=2.1.0
+numpy==2.1.0

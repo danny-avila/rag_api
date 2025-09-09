@@ -26,7 +26,7 @@ onnxruntime==1.20.1
 rapidocr==2.0.6
 opencv-python-headless==4.9.0.80
 pymongo==4.6.3
-langchain-mongodb>=0.4.0
+langchain-mongodb==0.4.0
 cryptography==45.0.5
 python-magic==0.4.27
 python-pptx==1.0.2
@@ -35,4 +35,4 @@ langchain-aws==0.2.31
 boto3==1.39.7
 chardet==5.2.0
 langchain-ollama==0.3.3
-numpy>=2.1.0
+numpy==2.1.0
