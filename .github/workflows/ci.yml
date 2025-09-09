@@ -13,10 +13,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.13.7
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: '3.13.7'
 
       - name: Cache pip dependencies
         uses: actions/cache@v4
