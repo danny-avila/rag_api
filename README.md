@@ -71,7 +71,7 @@ The following environment variables are required to run the application:
     - azure: "text-embedding-3-small" (will be used as your Azure Deployment)
     - huggingface: "sentence-transformers/all-MiniLM-L6-v2"
     - huggingfacetei: "http://huggingfacetei:3000". Hugging Face TEI uses model defined on TEI service launch.
-    - vertexai: "text-embedding-004"
+    - vertexai: "text-embedding-005"
     - ollama: "nomic-embed-text"
     - bedrock: "amazon.titan-embed-text-v1"
     - google_genai: "gemini-embedding-001"
