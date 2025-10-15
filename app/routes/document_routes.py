@@ -23,7 +23,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 import asyncio
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_BATCH_SIZE
+from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_BATCH_SIZE, EMBEDIING_MAX_QUEUE_SIZE
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -360,7 +360,7 @@ async def _process_documents_async_pipeline(
         total_chunks = len(documents)
 
         # Create a queue for producer-consumer pattern
-        embedding_queue = asyncio.Queue(maxsize=3)  # Buffer up to 3 batches
+        embedding_queue = asyncio.Queue(maxsize=EMBEDIING_MAX_QUEUE_SIZE)  # Buffer up to 3 batches
         results_queue = asyncio.Queue()
 
         logger.info(
