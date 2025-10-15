@@ -70,6 +70,12 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
+# Embedding batch processing - If this variable is set to a number greater than zero
+# documents will be processed in smaller batches to prevent memory accumulation
+# This controls how many document chunks are processed at once during embedding generation
+# hint: 750 seems to be a good balance between speed and memory usage for text-embedding-3-small embeddings
+EMBEDDING_BATCH_SIZE = int(get_env_variable("EMBEDDING_BATCH_SIZE", "0"))
+
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
