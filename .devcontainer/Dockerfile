@@ -1,7 +1,7 @@
 # --------------------------------------------------------
 # Development Dockerfile for RAG API
 # --------------------------------------------------------
-ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=3.13.7
 FROM python:${PYTHON_VERSION}-bookworm
 
 # --------------------------------------------------------
