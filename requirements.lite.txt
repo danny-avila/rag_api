@@ -35,4 +35,4 @@ langchain-aws==0.2.31
 boto3==1.39.7
 chardet==5.2.0
 langchain-ollama==0.3.3
-numpy==2.1.0
+numpy>=2.1.0,<3.0.0
