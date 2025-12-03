@@ -9,20 +9,11 @@ on:
       - main
 
 jobs:
-  build:
+  build-main:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - target: main
-            file: Dockerfile
-            image_name: librechat-rag-api-dev
-          - target: lite
-            file: Dockerfile.lite
-            image_name: librechat-rag-api-dev-lite
 
     steps:
       # Check out the repository
@@ -45,15 +36,63 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push Docker images for each target
-      - name: Build and push Docker images
+      # Build and push main Docker image
+      - name: Build and push main Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.file }}
+          file: Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
-          platforms: linux/amd64,linux/arm64
-          target: ${{ matrix.target }}
+            ghcr.io/${{ github.repository_owner }}/librechat-rag-api-dev:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/librechat-rag-api-dev:latest
+          platforms: linux/amd64
+          target: main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  build-lite:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # Check out the repository
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Set up QEMU
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Log in to GitHub Container Registry
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and push lite Docker image
+      - name: Build and push lite Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.lite
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/librechat-rag-api-dev-lite:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/librechat-rag-api-dev-lite:latest
+          platforms: linux/amd64
+          target: lite
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
