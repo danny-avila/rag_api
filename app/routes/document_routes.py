@@ -350,6 +350,7 @@ async def _process_documents_async_pipeline(
         documents (List[Document]): The list of Document objects to process and add.
         file_id (str): The identifier for the file associated with these documents.
         vector_store: The synchronous vector store instance to which documents are added.
+        executor: The executor for running blocking operations asynchronously.
 
     Returns:
         List[str]: A list of IDs corresponding to the successfully added documents.
