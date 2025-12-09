@@ -345,17 +345,18 @@ async def _process_documents_async_pipeline(
     """
     Process documents using async pipeline with concurrent embedding generation and DB insertion.
     This provides better memory efficiency by immediately inserting embeddings as they're generated.
+
     Args:
         documents (List[Document]): The list of Document objects to process and add.
         file_id (str): The identifier for the file associated with these documents.
         vector_store: The synchronous vector store instance to which documents are added.
+
     Returns:
         List[str]: A list of IDs corresponding to the successfully added documents.
+
     Raises:
         Exception: If any batch fails to process, the exception is raised after attempting rollback.
     """
-
-    from app.services.vector_store.async_pg_vector import AsyncPgVector
 
     total_chunks = len(documents)
 
@@ -492,12 +493,15 @@ async def _process_documents_batched_sync(
 ) -> List[str]:
     """
     Processes documents in batches and adds them to a synchronous vector store.
+
     Args:
         documents (List[Document]): The list of Document objects to process and add.
         file_id (str): The identifier for the file associated with these documents.
         vector_store: The synchronous vector store instance to which documents are added.
+
     Returns:
         List[str]: A list of IDs corresponding to the successfully added documents.
+
     Raises:
         Exception: If any batch fails to process, the exception is raised after attempting rollback.
     """
