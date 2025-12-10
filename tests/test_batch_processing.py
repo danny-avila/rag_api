@@ -235,66 +235,74 @@ class TestBatchConfiguration:
     """Test configuration and edge cases."""
 
     def test_batch_calculation(self):
-        """Test batch count calculation."""
+        """Test batch count calculation using the utility function."""
+        from app.routes.document_routes import calculate_num_batches
+
         # 10 docs, batch size 3 = 4 batches (3+3+3+1)
-        total = 10
-        batch_size = 3
-        expected = 4
-        actual = (total + batch_size - 1) // batch_size
-        assert actual == expected
+        assert calculate_num_batches(10, 3) == 4
 
         # Exact division
-        assert (9 + 3 - 1) // 3 == 3
+        assert calculate_num_batches(9, 3) == 3
 
         # Single item
-        assert (1 + 3 - 1) // 3 == 1
+        assert calculate_num_batches(1, 3) == 1
 
         # Zero items
-        assert (0 + 3 - 1) // 3 == 0
+        assert calculate_num_batches(0, 3) == 0
 
-    def test_embedding_batch_size_default(self):
-        """Test that EMBEDDING_BATCH_SIZE defaults to 0."""
+        # Batch size larger than total
+        assert calculate_num_batches(5, 10) == 1
+
+        # Edge case: batch_size of 0 returns 1 (fallback)
+        assert calculate_num_batches(10, 0) == 1
+
+        # Edge case: batch_size of 1
+        assert calculate_num_batches(5, 1) == 5
+
+    def test_embedding_batch_size_from_env(self):
+        """Test that EMBEDDING_BATCH_SIZE is read from environment variable."""
         import os
+        from importlib import reload
 
-        # Save current value if it exists
+        # Save current value
         original = os.environ.get("EMBEDDING_BATCH_SIZE")
 
         try:
-            # Remove env var to test default
-            if "EMBEDDING_BATCH_SIZE" in os.environ:
-                del os.environ["EMBEDDING_BATCH_SIZE"]
+            # Set a specific test value
+            os.environ["EMBEDDING_BATCH_SIZE"] = "999"
 
-            # Re-import to get default value
-            from importlib import reload
             import app.config as config_module
 
             reload(config_module)
 
-            assert config_module.EMBEDDING_BATCH_SIZE == 0
+            assert config_module.EMBEDDING_BATCH_SIZE == 999
         finally:
             # Restore original value
             if original is not None:
                 os.environ["EMBEDDING_BATCH_SIZE"] = original
+            elif "EMBEDDING_BATCH_SIZE" in os.environ:
+                del os.environ["EMBEDDING_BATCH_SIZE"]
 
-    def test_embedding_max_queue_size_default(self):
-        """Test that EMBEDDING_MAX_QUEUE_SIZE defaults to 3."""
+    def test_embedding_max_queue_size_from_env(self):
+        """Test that EMBEDDING_MAX_QUEUE_SIZE is read from environment variable."""
         import os
+        from importlib import reload
 
         original = os.environ.get("EMBEDDING_MAX_QUEUE_SIZE")
 
         try:
-            if "EMBEDDING_MAX_QUEUE_SIZE" in os.environ:
-                del os.environ["EMBEDDING_MAX_QUEUE_SIZE"]
+            os.environ["EMBEDDING_MAX_QUEUE_SIZE"] = "10"
 
-            from importlib import reload
             import app.config as config_module
 
             reload(config_module)
 
-            assert config_module.EMBEDDING_MAX_QUEUE_SIZE == 3
+            assert config_module.EMBEDDING_MAX_QUEUE_SIZE == 10
         finally:
             if original is not None:
                 os.environ["EMBEDDING_MAX_QUEUE_SIZE"] = original
+            elif "EMBEDDING_MAX_QUEUE_SIZE" in os.environ:
+                del os.environ["EMBEDDING_MAX_QUEUE_SIZE"]
 
 
 class TestBatchSizeEdgeCases:

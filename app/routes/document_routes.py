@@ -56,6 +56,13 @@ from app.utils.health import is_health_ok
 router = APIRouter()
 
 
+def calculate_num_batches(total: int, batch_size: int) -> int:
+    """Calculate the number of batches needed to process total items."""
+    if batch_size <= 0:
+        return 1
+    return (total + batch_size - 1) // batch_size
+
+
 def get_user_id(request: Request, entity_id: str = None) -> str:
     """Extract user ID from request or entity_id."""
     if not hasattr(request.state, "user"):
@@ -377,7 +384,7 @@ async def _process_documents_async_pipeline(
     results_queue = asyncio.Queue()
     all_ids = []
 
-    num_batches = (total_chunks + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+    num_batches = calculate_num_batches(total_chunks, EMBEDDING_BATCH_SIZE)
 
     logger.info(
         "Starting async pipeline for file %s: %d chunks with %d batch size",
@@ -532,7 +539,7 @@ async def _process_documents_batched_sync(
         return []
 
     all_ids = []
-    num_batches = (total_chunks + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
+    num_batches = calculate_num_batches(total_chunks, EMBEDDING_BATCH_SIZE)
 
     logger.info(
         "Processing file %s with sync batching: %d batches of %d chunks each",
