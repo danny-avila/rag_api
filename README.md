@@ -59,6 +59,8 @@ The following environment variables are required to run the application:
 - `COLLECTION_NAME`: (Optional) The name of the collection in the vector store. Default value is "testcollection".
 - `CHUNK_SIZE`: (Optional) The size of the chunks for text processing. Default value is "1500".
 - `CHUNK_OVERLAP`: (Optional) The overlap between chunks during text processing. Default value is "100".
+- `EMBEDDING_BATCH_SIZE`: (Optional) Number of document chunks to process per batch. Set to `0` (default) to disable batching. Recommended value is `750` for `text-embedding-3-small`.
+- `EMBEDDING_MAX_QUEUE_SIZE`: (Optional) Maximum number of batches to buffer in memory during async processing. Default value is "3".
 - `RAG_UPLOAD_DIR`: (Optional) The directory where uploaded files are stored. Default value is "./uploads/".
 - `PDF_EXTRACT_IMAGES`: (Optional) A boolean value indicating whether to extract images from PDF files. Default value is "False".
 - `DEBUG_RAG_API`: (Optional) Set to "True" to show more verbose logging output in the server console, and to enable postgresql database routes
@@ -94,6 +96,41 @@ The following environment variables are required to run the application:
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
+
+### Embedding Batch Processing
+
+For large files, you can enable batched embedding processing to reduce memory consumption. This is particularly useful in memory-constrained environments like Kubernetes pods with memory limits.
+
+#### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBEDDING_BATCH_SIZE` | `0` | Number of document chunks to process per batch. `0` disables batching (original behavior). |
+| `EMBEDDING_MAX_QUEUE_SIZE` | `3` | Maximum number of batches to buffer in memory during async processing. |
+
+#### Recommended Settings
+
+For `text-embedding-3-small` model:
+- `EMBEDDING_BATCH_SIZE=750` - Good balance of throughput and memory
+
+For memory-constrained environments (< 2GB RAM):
+- `EMBEDDING_BATCH_SIZE=100-250`
+
+For high-throughput environments:
+- `EMBEDDING_BATCH_SIZE=1000-2000`
+- `EMBEDDING_MAX_QUEUE_SIZE=5`
+
+#### Behavior
+
+When `EMBEDDING_BATCH_SIZE > 0`:
+- Documents are processed in batches of the specified size
+- Each batch is embedded and inserted before the next batch starts
+- On failure, successfully inserted documents are rolled back
+- Memory usage is bounded by `EMBEDDING_BATCH_SIZE * EMBEDDING_MAX_QUEUE_SIZE`
+
+When `EMBEDDING_BATCH_SIZE = 0` (default):
+- All documents are processed at once (original behavior)
+- Better for small files or memory-rich environments
 
 ### Use Atlas MongoDB as Vector Database
 
@@ -168,6 +205,81 @@ Notes:
   * If you do not enable the extension, rag_api service will throw an error that it cannot create the extension due to the note above.
 
 ### Dev notes:
+
+#### Running Tests
+
+##### Prerequisites
+
+Install test dependencies:
+
+```bash
+pip install -r test_requirements.txt
+```
+
+##### Running All Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run with coverage (if pytest-cov is installed)
+pytest --cov=app
+```
+
+##### Running Specific Test Files
+
+```bash
+# Run batch processing unit tests
+pytest tests/test_batch_processing.py -v
+
+# Run batch processing integration tests (memory optimization tests)
+pytest tests/test_batch_processing_integration.py -v
+
+# Run main API tests
+pytest tests/test_main.py -v
+```
+
+##### Running Tests by Category
+
+```bash
+# Run only integration tests (marked with @pytest.mark.integration)
+pytest -m integration -v
+
+# Skip integration tests
+pytest -m "not integration" -v
+
+# Run only async tests
+pytest -k "async" -v
+```
+
+##### Test Categories
+
+| Test File | Description |
+|-----------|-------------|
+| `test_batch_processing.py` | Unit tests for batch processing functions |
+| `test_batch_processing_integration.py` | Memory optimization and integration tests |
+| `test_main.py` | API endpoint tests |
+| `test_config.py` | Configuration tests |
+| `test_middleware.py` | Middleware tests |
+| `test_models.py` | Model tests |
+
+##### Memory Optimization Tests
+
+The `test_batch_processing_integration.py` file includes tests that verify the memory optimization behavior:
+
+- **`test_memory_bounded_by_batch_size`**: Verifies that the number of documents in memory at any time is bounded by `EMBEDDING_BATCH_SIZE`
+- **`test_memory_tracking_with_tracemalloc`**: Uses Python's `tracemalloc` to monitor memory usage during batch processing
+- **`test_sync_memory_bounded_by_batch_size`**: Same verification for the synchronous code path
+
+Run memory tests specifically:
+
+```bash
+pytest tests/test_batch_processing_integration.py::TestMemoryOptimization -v
+pytest tests/test_batch_processing_integration.py::TestSyncBatchedMemory -v
+```
 
 #### Installing pre-commit formatter
 

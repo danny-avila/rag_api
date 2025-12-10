@@ -5,7 +5,8 @@ import traceback
 import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
-from typing import List, Iterable
+from typing import List, Iterable, TYPE_CHECKING
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
     Request,
@@ -23,7 +24,19 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 import asyncio
 
-from app.config import logger, vector_store, RAG_UPLOAD_DIR, CHUNK_SIZE, CHUNK_OVERLAP, EMBEDDING_BATCH_SIZE, EMBEDDING_MAX_QUEUE_SIZE
+if TYPE_CHECKING:
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from langchain_community.vectorstores.pgvector import PGVector as PgVector
+
+from app.config import (
+    logger,
+    vector_store,
+    RAG_UPLOAD_DIR,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_MAX_QUEUE_SIZE,
+)
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -336,45 +349,46 @@ async def query_embeddings_by_file_id(
         )
         raise HTTPException(status_code=500, detail=str(e))
 
+
 async def _process_documents_async_pipeline(
-        documents: List[Document],
-        file_id: str,
-        vector_store,
-        executor
+    documents: List[Document],
+    file_id: str,
+    vector_store: "AsyncPgVector",
+    executor: "ThreadPoolExecutor",
 ) -> List[str]:
     """
-    Process documents using async pipeline with concurrent embedding generation and DB insertion.
-    This provides better memory efficiency by immediately inserting embeddings as they're generated.
+    Process documents using async producer-consumer pattern for batched embedding and insertion.
 
     Args:
-        documents (List[Document]): The list of Document objects to process and add.
-        file_id (str): The identifier for the file associated with these documents.
-        vector_store: The synchronous vector store instance to which documents are added.
-        executor: The executor for running blocking operations asynchronously.
+        documents: List of Document objects to process
+        file_id: Unique identifier for the file being processed
+        vector_store: AsyncPgVector instance for document storage
+        executor: ThreadPoolExecutor for concurrent operations
 
     Returns:
-        List[str]: A list of IDs corresponding to the successfully added documents.
-
-    Raises:
-        Exception: If any batch fails to process, the exception is raised after attempting rollback.
+        List of document IDs that were successfully inserted
     """
-
     total_chunks = len(documents)
+    if total_chunks == 0:
+        return []
 
     # Create a queue for producer-consumer pattern
-    embedding_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)  # Buffer up to 3 batches
+    embedding_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)
     results_queue = asyncio.Queue()
+    all_ids = []
+
+    num_batches = (total_chunks + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
 
     logger.info(
         "Starting async pipeline for file %s: %d chunks with %d batch size",
-        file_id, total_chunks, EMBEDDING_BATCH_SIZE
+        file_id,
+        total_chunks,
+        EMBEDDING_BATCH_SIZE,
     )
 
-    async def embedding_producer():
-        """Generate embeddings and put them in the queue"""
+    async def batch_producer():
+        """Produce document batches and put them in the queue."""
         try:
-            num_batches = (total_chunks + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
-
             for batch_idx in range(num_batches):
                 start_idx = batch_idx * EMBEDDING_BATCH_SIZE
                 end_idx = min(start_idx + EMBEDDING_BATCH_SIZE, total_chunks)
@@ -383,56 +397,58 @@ async def _process_documents_async_pipeline(
 
                 logger.info(
                     "Generating embeddings for batch %d/%d: chunks %d-%d",
-                    batch_idx + 1, num_batches, start_idx, end_idx - 1
+                    batch_idx + 1,
+                    num_batches,
+                    start_idx,
+                    end_idx - 1,
                 )
 
                 # Put batch in queue for processing
-                await embedding_queue.put((batch_documents, batch_ids, batch_idx + 1, num_batches))
-
-            # Signal end of production
+                await embedding_queue.put(
+                    (batch_documents, batch_ids, batch_idx + 1, num_batches)
+                )
+        except Exception as e:
+            logger.error("Error in batch producer: %s", e)
+            raise
+        finally:
+            # Always signal end of production
             await embedding_queue.put(None)
 
-        except Exception as e:
-            logger.error(f"Error in embedding producer: {e}")
-            await embedding_queue.put(None)  # Signal end even on error
-            raise
-
-    async def database_consumer():
-        """Consume embeddings from queue and insert into database"""
+    async def embedding_consumer():
+        """Consume batches from queue, embed and insert into database."""
         try:
-            batch_results = []
-
             while True:
                 item = await embedding_queue.get()
                 if item is None:  # End signal
+                    embedding_queue.task_done()
                     break
 
                 batch_documents, batch_ids, batch_num, total_batches = item
 
                 logger.info(
                     "Inserting batch %d/%d into database (%d chunks)",
-                    batch_num, total_batches, len(batch_documents)
+                    batch_num,
+                    total_batches,
+                    len(batch_documents),
                 )
 
-                # Insert batch into database
-                batch_result_ids = await vector_store.aadd_documents(
-                    batch_documents, ids=batch_ids, executor=executor
-                )
-
-                batch_results.extend(batch_result_ids)
-
-                # Clear batch from memory immediately
-                del batch_documents, batch_ids, batch_result_ids
-
-                # Mark task as done
-                embedding_queue.task_done()
-
-            # Put results in results queue
-            await results_queue.put(batch_results)
+                try:
+                    # Insert batch into database
+                    batch_result_ids = await vector_store.aadd_documents(
+                        batch_documents, ids=batch_ids, executor=executor
+                    )
+                    await results_queue.put(batch_result_ids)
+                except Exception as e:
+                    logger.error(
+                        "Error processing batch %d/%d: %s", batch_num, total_batches, e
+                    )
+                    await results_queue.put(e)  # Put exception object
+                finally:
+                    embedding_queue.task_done()
 
         except Exception as e:
-            logger.error(f"Error in database consumer: {e}")
-            await results_queue.put([])  # Empty results on error
+            logger.error("Fatal error in embedding consumer: %s", e)
+            await results_queue.put(e)
             raise
 
     producer_task = None
@@ -440,26 +456,29 @@ async def _process_documents_async_pipeline(
 
     try:
         # Start producer and consumer concurrently
-        producer_task = asyncio.create_task(embedding_producer())
-        consumer_task = asyncio.create_task(database_consumer())
+        producer_task = asyncio.create_task(batch_producer())
+        consumer_task = asyncio.create_task(embedding_consumer())
 
         # Wait for both to complete
-        # When return_exceptions=False, exceptions are propagated immediately and will
-        # be caught by the outer try-except block.
         await asyncio.gather(producer_task, consumer_task, return_exceptions=False)
 
-        # Get final results
-        batch_results = await results_queue.get()
+        # Collect results from all batches
+        for _ in range(num_batches):
+            result = await results_queue.get()
+            if isinstance(result, Exception):
+                raise result
+            all_ids.extend(result)
 
         logger.info(
             "Async pipeline completed for file %s: %d embeddings created",
-            file_id, len(batch_results)
+            file_id,
+            len(all_ids),
         )
 
-        return batch_results
+        return all_ids
 
     except Exception as e:
-        logger.error(f"Pipeline failed for file {file_id}: {e}")
+        logger.error("Pipeline failed for file %s: %s", file_id, e)
         if consumer_task is not None or producer_task is not None:
             # if one of the tasks is still running, cancel it
             if consumer_task is not None and not consumer_task.done():
@@ -473,47 +492,56 @@ async def _process_documents_async_pipeline(
             elif producer_task is None:
                 await asyncio.gather(consumer_task, return_exceptions=True)
             else:
-                await asyncio.gather(consumer_task, producer_task, return_exceptions=True)
+                await asyncio.gather(
+                    consumer_task, producer_task, return_exceptions=True
+                )
 
-        # Attempt emergency rollback if not already done
-        try:
-            logger.warning(f"Performing rollback of file {file_id}")
-            # temp_vector_store
-            await vector_store.delete(ids=[file_id], executor=executor)
-            logger.info(f"Emergency rollback completed for file {file_id}")
-        except Exception as cleanup_error:
-            logger.error(f"Emergency rollback failed: {cleanup_error}")
+        # Attempt rollback only if we inserted something
+        if all_ids:
+            try:
+                logger.warning("Performing rollback of file %s", file_id)
+                await vector_store.delete(ids=[file_id], executor=executor)
+                logger.info("Rollback completed for file %s", file_id)
+            except Exception as cleanup_error:
+                logger.error("Rollback failed for file %s: %s", file_id, cleanup_error)
 
         # Re-raise the original error
         raise
 
+
 async def _process_documents_batched_sync(
-        documents: List[Document],
-        file_id: str,
-        vector_store
+    documents: List[Document],
+    file_id: str,
+    vector_store: "PgVector",
+    executor: "ThreadPoolExecutor",
 ) -> List[str]:
     """
-    Processes documents in batches and adds them to a synchronous vector store.
+    Process documents in batches using synchronous vector store operations.
 
     Args:
-        documents (List[Document]): The list of Document objects to process and add.
-        file_id (str): The identifier for the file associated with these documents.
-        vector_store: The synchronous vector store instance to which documents are added.
+        documents: List of Document objects to process
+        file_id: Unique identifier for the file being processed
+        vector_store: Synchronous PgVector instance for document storage
+        executor: ThreadPoolExecutor for running sync operations
 
     Returns:
-        List[str]: A list of IDs corresponding to the successfully added documents.
-
-    Raises:
-        Exception: If any batch fails to process, the exception is raised after attempting rollback.
+        List of document IDs that were successfully inserted
     """
     total_chunks = len(documents)
+    if total_chunks == 0:
+        return []
+
     all_ids = []
     num_batches = (total_chunks + EMBEDDING_BATCH_SIZE - 1) // EMBEDDING_BATCH_SIZE
 
     logger.info(
         "Processing file %s with sync batching: %d batches of %d chunks each",
-        file_id, num_batches, EMBEDDING_BATCH_SIZE
+        file_id,
+        num_batches,
+        EMBEDDING_BATCH_SIZE,
     )
+
+    loop = asyncio.get_event_loop()
 
     for batch_idx in range(num_batches):
         start_idx = batch_idx * EMBEDDING_BATCH_SIZE
@@ -523,34 +551,45 @@ async def _process_documents_batched_sync(
 
         logger.info(
             "Processing batch %d/%d: chunks %d-%d (%d chunks)",
-            batch_idx + 1, num_batches, start_idx, end_idx - 1, len(batch_documents)
+            batch_idx + 1,
+            num_batches,
+            start_idx,
+            end_idx - 1,
+            len(batch_documents),
         )
 
         try:
-            batch_result_ids = vector_store.add_documents(batch_documents, ids=batch_ids)
+            # Wrap sync call in executor to avoid blocking the event loop
+            batch_result_ids = await loop.run_in_executor(
+                executor,
+                lambda docs=batch_documents, ids=batch_ids: vector_store.add_documents(
+                    documents=docs, ids=ids
+                ),
+            )
             all_ids.extend(batch_result_ids)
 
-            # Clear batch references to free memory immediately
-            del batch_documents, batch_ids, batch_result_ids
-
         except Exception as batch_error:
-            logger.error(f"Batch {batch_idx + 1} failed: {batch_error}")
+            logger.error("Batch %d failed: %s", batch_idx + 1, batch_error)
 
             # Rollback entire file from vector store
-            if all_ids:  # any batch succeeded (i.e., any chunks for this file were inserted)
-                logger.warning(f"Rolling back file {file_id} due to batch failure")
+            if (
+                all_ids
+            ):  # any batch succeeded (i.e., any chunks for this file were inserted)
+                logger.warning("Rolling back file %s due to batch failure", file_id)
                 try:
-                    if hasattr(vector_store, 'delete'):
-                        vector_store.delete(ids=[file_id])
-                    elif hasattr(vector_store, '_delete_multiple'):
-                        vector_store._delete_multiple(ids=[file_id])
-                    logger.info(f"Rollback completed for file {file_id}")
+                    await loop.run_in_executor(
+                        executor, lambda: vector_store.delete(ids=[file_id])
+                    )
+                    logger.info("Rollback completed for file %s", file_id)
                 except Exception as rollback_error:
-                    logger.error(f"Rollback failed: {rollback_error}")
+                    logger.error(
+                        "Rollback failed for file %s: %s", file_id, rollback_error
+                    )
 
             raise batch_error
 
     return all_ids
+
 
 def generate_digest(page_content: str):
     try:
@@ -614,7 +653,7 @@ async def store_data_in_vector_db(
             else:
                 # Fallback to batched processing for sync vector stores
                 ids = await _process_documents_batched_sync(
-                    docs, file_id, vector_store
+                    docs, file_id, vector_store, executor
                 )
 
         return {"message": "Documents added successfully", "ids": ids}
