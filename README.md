@@ -34,6 +34,33 @@ pip install -r requirements.txt
 uvicorn main:app
 ```
 
+### Clean Install (Local Development)
+
+To do a clean reinstall of all dependencies (e.g., after updating `requirements.txt`):
+
+```bash
+# Remove existing virtual environment and recreate it
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+For the lite version (without sentence_transformers/huggingface):
+
+```bash
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.lite.txt
+```
+
+For Docker, rebuild without cache:
+
+```bash
+docker compose build --no-cache
+```
+
 ### Environment Variables
 
 The following environment variables are required to run the application:
