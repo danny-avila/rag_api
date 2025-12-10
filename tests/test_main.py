@@ -28,10 +28,17 @@ def auth_headers():
 def override_vector_store(monkeypatch):
     from app.config import vector_store
     from app.services.vector_store.async_pg_vector import AsyncPgVector
-    from app.routes.document_routes import get_cached_query_embedding
+    from app.routes import document_routes
 
-    # Clear the LRU cache to ensure our mock embedding_function is used
-    get_cached_query_embedding.cache_clear()
+    # Clear the LRU cache and patch the cached function to return dummy embeddings
+    document_routes.get_cached_query_embedding.cache_clear()
+
+    def dummy_get_cached_query_embedding(query):
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(
+        document_routes, "get_cached_query_embedding", dummy_get_cached_query_embedding
+    )
 
     # Initialize thread pool for tests since TestClient doesn't run lifespan
     if not hasattr(app.state, "thread_pool") or app.state.thread_pool is None:
