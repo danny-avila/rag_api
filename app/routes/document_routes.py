@@ -608,13 +608,16 @@ def generate_digest(page_content: str):
     return hash_obj.hexdigest()
 
 
-async def store_data_in_vector_db(
+def _prepare_documents_sync(
     data: Iterable[Document],
     file_id: str,
-    user_id: str = "",
-    clean_content: bool = False,
-    executor=None,
-) -> bool:
+    user_id: str,
+    clean_content: bool,
+) -> List[Document]:
+    """
+    Synchronous document preparation - runs in executor to avoid blocking event loop.
+    Handles text splitting, cleaning, and metadata preparation.
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
     )
@@ -626,7 +629,7 @@ async def store_data_in_vector_db(
             doc.page_content = clean_text(doc.page_content)
 
     # Preparing documents with page content and metadata for insertion.
-    docs = [
+    return [
         Document(
             page_content=doc.page_content,
             metadata={
@@ -639,15 +642,34 @@ async def store_data_in_vector_db(
         for doc in documents
     ]
 
+
+async def store_data_in_vector_db(
+    data: Iterable[Document],
+    file_id: str,
+    user_id: str = "",
+    clean_content: bool = False,
+    executor=None,
+) -> bool:
+    # Run document preparation in executor to avoid blocking the event loop
+    loop = asyncio.get_event_loop()
+    docs = await loop.run_in_executor(
+        executor,
+        _prepare_documents_sync,
+        data,
+        file_id,
+        user_id,
+        clean_content,
+    )
+
     try:
         if EMBEDDING_BATCH_SIZE <= 0:
             # synchronously embed the file and insert into vector store in one go
             if isinstance(vector_store, AsyncPgVector):
                 ids = await vector_store.aadd_documents(
-                    docs, ids=[file_id] * len(documents), executor=executor
+                    docs, ids=[file_id] * len(docs), executor=executor
                 )
             else:
-                ids = vector_store.add_documents(docs, ids=[file_id] * len(documents))
+                ids = vector_store.add_documents(docs, ids=[file_id] * len(docs))
         else:
             # asynchronously embed the file and insert into vector store as it is embedding
             # to lessen memory impact and speed up slightly as the majority of the document
@@ -884,7 +906,7 @@ async def embed_file_upload(
     user_id = get_user_id(request, entity_id)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
-    save_upload_file_sync(uploaded_file, temp_file_path)
+    await save_upload_file_async(uploaded_file, temp_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
@@ -926,7 +948,7 @@ async def embed_file_upload(
             detail=f"Error during file processing: {str(e)}",
         )
     finally:
-        os.remove(temp_file_path)
+        await cleanup_temp_file_async(temp_file_path)
 
     return {
         "status": True,
