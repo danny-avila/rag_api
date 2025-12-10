@@ -548,7 +548,7 @@ async def _process_documents_batched_sync(
         EMBEDDING_BATCH_SIZE,
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     for batch_idx in range(num_batches):
         start_idx = batch_idx * EMBEDDING_BATCH_SIZE
@@ -651,7 +651,7 @@ async def store_data_in_vector_db(
     executor=None,
 ) -> bool:
     # Run document preparation in executor to avoid blocking the event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     docs = await loop.run_in_executor(
         executor,
         _prepare_documents_sync,
