@@ -28,6 +28,10 @@ def auth_headers():
 def override_vector_store(monkeypatch):
     from app.config import vector_store
     from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from app.routes.document_routes import get_cached_query_embedding
+
+    # Clear the LRU cache to ensure our mock embedding_function is used
+    get_cached_query_embedding.cache_clear()
 
     # Initialize thread pool for tests since TestClient doesn't run lifespan
     if not hasattr(app.state, "thread_pool") or app.state.thread_pool is None:
@@ -59,7 +63,7 @@ def override_vector_store(monkeypatch):
         AsyncPgVector, "get_documents_by_ids", dummy_get_documents_by_ids
     )
 
-    # Override embedding_function.
+    # Override embedding_function with a dummy that doesn't call OpenAI
     class DummyEmbedding:
         def embed_query(self, query):
             return [0.1, 0.2, 0.3]
