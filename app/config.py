@@ -70,6 +70,22 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
+# Batch processing configuration for memory-constrained environments.
+# When EMBEDDING_BATCH_SIZE > 0, documents are processed in batches to reduce
+# peak memory usage. This is useful for Kubernetes pods with memory limits.
+#
+# Trade-offs:
+# - Smaller batch size = lower memory, more DB round trips
+# - Larger batch size = higher memory, fewer DB round trips
+# - 0 = disable batching, process all at once (original behavior)
+#
+# Recommended: 750 for text-embedding-3-small (good balance of speed and memory)
+EMBEDDING_BATCH_SIZE = int(get_env_variable("EMBEDDING_BATCH_SIZE", "0"))
+
+# Maximum number of batches to buffer in memory during async processing.
+# Higher values allow more parallelism but use more memory.
+EMBEDDING_MAX_QUEUE_SIZE = int(get_env_variable("EMBEDDING_MAX_QUEUE_SIZE", "3"))
+
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
