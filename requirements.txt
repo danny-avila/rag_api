@@ -37,5 +37,7 @@ python-magic==0.4.27
 python-pptx==1.0.2
 xlrd==2.0.2
 pydantic==2.9.2
+rerankers[transformers]==0.6.0
+rerankers[flashrank]==0.6.0
 chardet==5.2.0
 tenacity>=9.0.0
