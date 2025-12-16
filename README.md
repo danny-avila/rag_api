@@ -191,6 +191,16 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
+#### Create a `file_id` Index (recommended)
+
+We recommend creating a standard MongoDB index on `file_id` to keep lookups fast. After creating the collection, run the following once (via Atlas UI, Compass, or `mongosh`):
+
+```javascript
+db.getCollection("<COLLECTION_NAME>").createIndex({ file_id: 1 })
+```
+
+Replace `<COLLECTION_NAME>` with the same collection used by the RAG API. This ensures lookups remain fast even as the number of embedded documents grows.
+
 
 ### Proxy Configuration
 
