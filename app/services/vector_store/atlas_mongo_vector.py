@@ -5,6 +5,21 @@ from langchain_core.embeddings import Embeddings
 from langchain_mongodb import MongoDBAtlasVectorSearch
 
 class AtlasMongoVector(MongoDBAtlasVectorSearch):
+    def close(self) -> None:
+        """
+        Close the underlying MongoDB client connection.
+
+        This method safely closes the MongoClient associated with this vector store
+        to release connection resources and prevent memory leaks.
+        """
+        collection = getattr(self, "_collection", None)
+        try:
+            client = collection.database.client if collection is not None else None
+            if client is not None:
+                client.close()
+        except Exception:
+            pass
+
     @property
     def embedding_function(self) -> Embeddings:
         return self.embeddings

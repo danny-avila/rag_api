@@ -123,19 +123,27 @@ async def load_file_content(
 
 
 def extract_text_from_documents(documents: List[Document], file_ext: str) -> str:
-    """Extract text content from loaded documents."""
-    text_content = ""
+    """
+    Extract text content from loaded documents.
+
+    Uses a list to collect parts and joins at the end to avoid O(n²)
+    string concatenation overhead for large documents.
+
+    :param documents: List of Document objects to extract text from
+    :param file_ext: File extension (e.g., 'pdf') to determine if cleaning is needed
+    :return: Combined text content from all documents
+    """
+    parts: List[str] = []
     if documents:
         for doc in documents:
             if hasattr(doc, "page_content"):
                 # Clean text if it's a PDF
                 if file_ext == "pdf":
-                    text_content += clean_text(doc.page_content) + "\n"
+                    parts.append(clean_text(doc.page_content))
                 else:
-                    text_content += doc.page_content + "\n"
+                    parts.append(doc.page_content)
 
-    # Remove trailing newline
-    return text_content.rstrip("\n")
+    return "\n".join(parts)
 
 
 async def cleanup_temp_file_async(file_path: str) -> None:
@@ -628,19 +636,21 @@ def _prepare_documents_sync(
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
-    # Preparing documents with page content and metadata for insertion.
-    return [
-        Document(
-            page_content=doc.page_content,
-            metadata={
+    # Mutate metadata in-place rather than creating new Document objects.
+    # This optimization reduces peak memory usage by avoiding duplicate allocations
+    # when processing large files with many chunks.
+    for doc in documents:
+        metadata = dict(doc.metadata or {})
+        metadata.update(
+            {
                 "file_id": file_id,
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
-                **(doc.metadata or {}),
-            },
+            }
         )
-        for doc in documents
-    ]
+        doc.metadata = metadata
+
+    return documents
 
 
 async def store_data_in_vector_db(
@@ -838,6 +848,10 @@ async def embed_file(
         )
     finally:
         await cleanup_temp_file_async(temp_file_path)
+        try:
+            await file.close()
+        except Exception:
+            pass
 
     return {
         "status": response_status,
@@ -949,6 +963,10 @@ async def embed_file_upload(
         )
     finally:
         await cleanup_temp_file_async(temp_file_path)
+        try:
+            await uploaded_file.close()
+        except Exception:
+            pass
 
     return {
         "status": True,
@@ -1065,3 +1083,7 @@ async def extract_text_from_file(
             )
     finally:
         await cleanup_temp_file_async(temp_file_path)
+        try:
+            await file.close()
+        except Exception:
+            pass

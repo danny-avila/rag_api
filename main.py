@@ -18,6 +18,7 @@ from app.config import (
     CHUNK_OVERLAP,
     PDF_EXTRACT_IMAGES,
     VECTOR_DB_TYPE,
+    vector_store,
     LogMiddleware,
     logger,
 )
@@ -51,6 +52,22 @@ async def lifespan(app: FastAPI):
     app.state.thread_pool.shutdown(wait=True)
     logger.info("Thread pool shutdown complete")
 
+    if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+        try:
+            await PSQLDatabase.close_pool()
+            logger.info("PostgreSQL pool closed")
+        except Exception as e:
+            logger.warning("Failed to close PostgreSQL pool: %s", e)
+
+    # Close vector store resources (SQLAlchemy engine / Mongo client)
+    try:
+        close_fn = getattr(vector_store, "close", None)
+        if callable(close_fn):
+            close_fn()
+            logger.info("Vector store resources closed")
+    except Exception as e:
+        logger.warning("Failed to close vector store resources: %s", e)
+
 
 app = FastAPI(lifespan=lifespan, debug=debug_mode)
 
@@ -79,7 +96,12 @@ if debug_mode:
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Limit logged body size to prevent memory issues with large uploads.
+    # The full body is still read by FastAPI, but we truncate for logging only.
     body = await request.body()
+    max_log_bytes = 64 * 1024  # 64 KB
+    if len(body) > max_log_bytes:
+        body = body[:max_log_bytes] + b"... (truncated)"
     logger.debug(f"Validation error occurred")
     logger.debug(f"Raw request body: {body.decode()}")
     logger.debug(f"Validation errors: {exc.errors()}")

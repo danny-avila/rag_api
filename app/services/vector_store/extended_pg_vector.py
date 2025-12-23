@@ -165,3 +165,10 @@ class ExtendedPgVector(PGVector):
                 stmt = stmt.where(self.EmbeddingStore.custom_id.in_(ids))
                 session.execute(stmt)
             session.commit()
+
+    def close(self) -> None:
+        """Release underlying SQLAlchemy engine resources."""
+        bind = getattr(self, "_bind", None)
+        dispose = getattr(bind, "dispose", None)
+        if callable(dispose):
+            dispose()

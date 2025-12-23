@@ -93,8 +93,12 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
                     with open(
                         filepath, "r", encoding=encoding, errors="replace"
                     ) as original_file:
-                        content = original_file.read()
-                        temp_file.write(content)
+                        # Stream conversion to avoid loading large CSVs into memory.
+                        while True:
+                            chunk = original_file.read(1024 * 1024)  # 1 MB
+                            if not chunk:
+                                break
+                            temp_file.write(chunk)
 
                     temp_filepath = temp_file.name
 
@@ -191,7 +195,16 @@ def remove_non_utf8(text: str) -> str:
 
 
 def process_documents(documents: List[Document]) -> str:
-    processed_text = ""
+    """
+    Process a list of documents into a single formatted string.
+
+    Uses a list to collect parts and joins at the end to avoid O(n²)
+    string concatenation overhead for large documents.
+
+    :param documents: List of Document objects to process
+    :return: Formatted string with page markers and content
+    """
+    parts: List[str] = []
     last_page: Optional[int] = None
     doc_basename = ""
 
@@ -200,21 +213,31 @@ def process_documents(documents: List[Document]) -> str:
             doc_basename = doc.metadata["source"].split("/")[-1]
             break
 
-    processed_text += f"{doc_basename}\n"
+    parts.append(f"{doc_basename}\n")
+
+    # Track only the tail to avoid repeatedly scanning a huge string.
+    tail = (parts[-1][-CHUNK_OVERLAP:] if CHUNK_OVERLAP > 0 else "")
 
     for doc in documents:
         current_page = doc.metadata.get("page")
         if current_page and current_page != last_page:
-            processed_text += f"\n# PAGE {doc.metadata['page']}\n\n"
+            header = f"\n# PAGE {doc.metadata['page']}\n\n"
+            parts.append(header)
+            if CHUNK_OVERLAP > 0:
+                tail = (tail + header)[-CHUNK_OVERLAP:]
             last_page = current_page
 
         new_content = doc.page_content
-        if processed_text.endswith(new_content[:CHUNK_OVERLAP]):
-            processed_text += new_content[CHUNK_OVERLAP:]
+        if CHUNK_OVERLAP > 0 and tail == new_content[:CHUNK_OVERLAP]:
+            to_add = new_content[CHUNK_OVERLAP:]
         else:
-            processed_text += new_content
+            to_add = new_content
 
-    return processed_text.strip()
+        parts.append(to_add)
+        if CHUNK_OVERLAP > 0:
+            tail = (tail + to_add)[-CHUNK_OVERLAP:]
+
+    return "".join(parts).strip()
 
 
 class SafePyPDFLoader:
