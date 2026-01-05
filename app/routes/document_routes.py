@@ -107,7 +107,12 @@ def save_upload_file_sync(file: UploadFile, temp_file_path: str) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save the uploaded file. Error: {str(e)}",
         )
-
+        
+def validate_file_path(base_dir: str, file_path: str) -> bool:
+    """Validate that a file path is within the allowed base directory."""
+    allowed_dir = os.path.abspath(base_dir)
+    requested_file_path = os.path.abspath(os.path.join(base_dir, file_path))
+    return requested_file_path if requested_file_path.startswith(allowed_dir) else None
 
 async def load_file_content(
     filename: str, content_type: str, file_path: str, executor
@@ -702,8 +707,10 @@ async def store_data_in_vector_db(
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
-    # Check if the file exists
-    if not os.path.exists(document.filepath):
+    file_path = validate_file_path(RAG_UPLOAD_DIR, document.filepath)
+    
+    # Check if the file exists and if it is within the allowed upload directory
+    if file_path is None or not os.path.exists(file_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
@@ -716,7 +723,7 @@ async def embed_local_file(
 
     try:
         loader, known_type, file_ext = get_loader(
-            document.filename, document.file_content_type, document.filepath
+            document.filename, document.file_content_type, file_path
         )
         data = await run_in_executor(request.app.state.thread_pool, loader.load)
 
