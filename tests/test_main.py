@@ -27,6 +27,18 @@ def auth_headers():
 @pytest.fixture(autouse=True)
 def override_vector_store(monkeypatch):
     from app.config import vector_store
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from app.routes import document_routes
+
+    # Clear the LRU cache and patch the cached function to return dummy embeddings
+    document_routes.get_cached_query_embedding.cache_clear()
+
+    def dummy_get_cached_query_embedding(query):
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(
+        document_routes, "get_cached_query_embedding", dummy_get_cached_query_embedding
+    )
 
     # Initialize thread pool for tests since TestClient doesn't run lifespan
     if not hasattr(app.state, "thread_pool") or app.state.thread_pool is None:
@@ -34,31 +46,31 @@ def override_vector_store(monkeypatch):
             max_workers=2, thread_name_prefix="test-worker"
         )
 
-    # Override get_all_ids as an async function.
-    async def dummy_get_all_ids(executor=None):
+    # Override get_all_ids as an async function - patch at CLASS level to bypass run_in_executor
+    async def dummy_get_all_ids(self, executor=None):
         return ["testid1", "testid2"]
 
-    monkeypatch.setattr(vector_store, "get_all_ids", dummy_get_all_ids)
+    monkeypatch.setattr(AsyncPgVector, "get_all_ids", dummy_get_all_ids)
 
     # Override get_filtered_ids as an async function.
-    async def dummy_get_filtered_ids(ids, executor=None):
+    async def dummy_get_filtered_ids(self, ids, executor=None):
         dummy_ids = ["testid1", "testid2"]
         return [id for id in dummy_ids if id in ids]
 
-    monkeypatch.setattr(vector_store, "get_filtered_ids", dummy_get_filtered_ids)
+    monkeypatch.setattr(AsyncPgVector, "get_filtered_ids", dummy_get_filtered_ids)
 
     # Override get_documents_by_ids as an async function.
-    async def dummy_get_documents_by_ids(ids, executor=None):
+    async def dummy_get_documents_by_ids(self, ids, executor=None):
         return [
             Document(page_content="Test content", metadata={"file_id": id})
             for id in ids
         ]
 
     monkeypatch.setattr(
-        vector_store, "get_documents_by_ids", dummy_get_documents_by_ids
+        AsyncPgVector, "get_documents_by_ids", dummy_get_documents_by_ids
     )
 
-    # Override embedding_function.
+    # Override embedding_function with a dummy that doesn't call OpenAI
     class DummyEmbedding:
         def embed_query(self, query):
             return [0.1, 0.2, 0.3]
@@ -66,7 +78,7 @@ def override_vector_store(monkeypatch):
     vector_store.embedding_function = DummyEmbedding()
 
     # Override similarity search to return a tuple (Document, score).
-    def dummy_similarity_search_with_score_by_vector(embedding, k, filter):
+    def dummy_similarity_search_with_score_by_vector(self, embedding, k, filter):
         doc = Document(
             page_content="Queried content",
             metadata={
@@ -77,7 +89,7 @@ def override_vector_store(monkeypatch):
         return [(doc, 0.9)]
 
     async def dummy_asimilarity_search_with_score_by_vector(
-        embedding, k, filter=None, executor=None
+        self, embedding, k, filter=None, executor=None
     ):
         doc = Document(
             page_content="Queried content",
@@ -89,31 +101,31 @@ def override_vector_store(monkeypatch):
         return [(doc, 0.9)]
 
     monkeypatch.setattr(
-        vector_store,
+        AsyncPgVector,
         "similarity_search_with_score_by_vector",
         dummy_similarity_search_with_score_by_vector,
     )
     monkeypatch.setattr(
-        vector_store,
+        AsyncPgVector,
         "asimilarity_search_with_score_by_vector",
         dummy_asimilarity_search_with_score_by_vector,
     )
 
     # Override document addition functions.
-    def dummy_add_documents(docs, ids):
+    def dummy_add_documents(self, docs, ids):
         return ids
 
-    async def dummy_aadd_documents(docs, ids=None, executor=None):
+    async def dummy_aadd_documents(self, docs, ids=None, executor=None):
         return ids
 
-    monkeypatch.setattr(vector_store, "add_documents", dummy_add_documents)
-    monkeypatch.setattr(vector_store, "aadd_documents", dummy_aadd_documents)
+    monkeypatch.setattr(AsyncPgVector, "add_documents", dummy_add_documents)
+    monkeypatch.setattr(AsyncPgVector, "aadd_documents", dummy_aadd_documents)
 
     # Override delete function.
-    async def dummy_delete(ids=None, collection_only=False, executor=None):
+    async def dummy_delete(self, ids=None, collection_only=False, executor=None):
         return None
 
-    monkeypatch.setattr(vector_store, "delete", dummy_delete)
+    monkeypatch.setattr(AsyncPgVector, "delete", dummy_delete)
 
 
 def test_get_all_ids(auth_headers):
