@@ -107,7 +107,7 @@ def save_upload_file_sync(file: UploadFile, temp_file_path: str) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save the uploaded file. Error: {str(e)}",
         )
-        
+
 def validate_file_path(base_dir: str, file_path: str) -> bool:
     """Validate that a file path is within the allowed base directory."""
     allowed_dir = os.path.abspath(base_dir)
@@ -784,16 +784,24 @@ async def embed_file(
 
     user_id = get_user_id(request, entity_id)
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+    validated_file_path = validate_file_path(temp_base_path, temp_file_path)
 
-    await save_upload_file_async(file, temp_file_path)
+    if validated_file_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
+        
+    os.makedirs(temp_base_path, exist_ok=True)
+
+    await save_upload_file_async(file, validated_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,
-            temp_file_path,
+            validated_file_path,
             request.app.state.thread_pool,
         )
 
@@ -911,15 +919,22 @@ async def embed_file_upload(
     entity_id: str = Form(None),
 ):
     user_id = get_user_id(request, entity_id)
-    temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
+    
+    validated_temp_file_path = validate_file_path(RAG_UPLOAD_DIR, uploaded_file.filename)
+    
+    if validated_temp_file_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
 
-    await save_upload_file_async(uploaded_file, temp_file_path)
+    await save_upload_file_async(uploaded_file, validated_temp_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             uploaded_file.filename,
             uploaded_file.content_type,
-            temp_file_path,
+            validated_temp_file_path,
             request.app.state.thread_pool,
         )
 
@@ -955,7 +970,7 @@ async def embed_file_upload(
             detail=f"Error during file processing: {str(e)}",
         )
     finally:
-        await cleanup_temp_file_async(temp_file_path)
+        await cleanup_temp_file_async(validated_temp_file_path)
 
     return {
         "status": True,
