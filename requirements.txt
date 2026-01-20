@@ -10,7 +10,7 @@ sqlalchemy==2.0.41
 python-dotenv==1.1.1
 fastapi==0.115.12
 psycopg2-binary==2.9.9
-pgvector==0.2.5
+pgvector==0.4.2
 uvicorn==0.28.0
 pypdf==6.4.0
 unstructured==0.16.11
