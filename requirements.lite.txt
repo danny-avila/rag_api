@@ -19,7 +19,7 @@ openpyxl==3.1.5
 docx2txt==0.9
 pypandoc==1.15
 PyJWT==2.8.0
-asyncpg==0.29.0
+asyncpg==0.31.0
 python-multipart==0.0.19
 aiofiles==24.1.0
 rapidocr-onnxruntime==1.4.4
