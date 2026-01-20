@@ -23,7 +23,7 @@ pypandoc==1.15
 PyJWT==2.8.0
 asyncpg==0.29.0
 python-multipart==0.0.19
-sentence_transformers==3.1.1
+sentence_transformers==5.2.0
 aiofiles==24.1.0
 rapidocr-onnxruntime==1.4.4
 opencv-python-headless==4.9.0.80
