@@ -10,7 +10,7 @@ fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
 uvicorn==0.28.0
-pypdf==6.4.0
+pypdf==6.6.0
 unstructured==0.16.11
 markdown==3.8.2
 networkx==3.2.1
