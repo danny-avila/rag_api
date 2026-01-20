@@ -5,7 +5,7 @@ langchain-core==0.3.81
 langchain-google-genai==2.1.10
 langchain-google-vertexai==2.0.27
 sqlalchemy==2.0.41
-python-dotenv==1.1.1
+python-dotenv==1.2.1
 fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
