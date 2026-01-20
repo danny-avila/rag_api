@@ -16,7 +16,7 @@ pypdf==6.4.0
 unstructured==0.16.11
 markdown==3.8.2
 networkx==3.2.1
-pandas==2.2.1
+pandas==2.3.3
 openpyxl==3.1.5
 docx2txt==0.9
 pypandoc==1.15
