@@ -1038,16 +1038,25 @@ async def extract_text_from_file(
     """
     user_id = get_user_id(request, entity_id)
     temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    os.makedirs(temp_base_path, exist_ok=True)
     temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+    validated_temp_file_path = validate_file_path(temp_base_path, temp_file_path)
+    
+    if validated_temp_file_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
 
-    await save_upload_file_async(file, temp_file_path)
+    # create base directory only if the file path is valid
+    os.makedirs(temp_base_path, exist_ok=True)
+    
+    await save_upload_file_async(file, validated_temp_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,
-            temp_file_path,
+            validated_temp_file_path,
             request.app.state.thread_pool,
         )
 
