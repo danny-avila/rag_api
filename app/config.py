@@ -261,7 +261,7 @@ def init_embeddings(provider, model):
     elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
         from langchain_google_vertexai import VertexAIEmbeddings
 
-        return VertexAIEmbeddings(model=model)
+        return VertexAIEmbeddings(model=model, location=VERTEXAI_LOCATION)
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 
@@ -305,7 +305,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
         "EMBEDDINGS_MODEL", "http://huggingfacetei:3000"
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_VERTEXAI:
-    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-005")
+    VERTEXAI_LOCATION = get_env_variable("VERTEXAI_LOCATION", "us-central1")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_GENAI:
