@@ -79,11 +79,12 @@ if POSTGRES_USE_UNIX_SOCKET:
 else:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
     if POSTGRES_DATABASE_ARGS:
-        # Properly encode the query parameters
-        args_pairs = urllib.parse.parse_qsl(POSTGRES_DATABASE_ARGS, keep_blank_values=True)
-        encoded_args = urllib.parse.urlencode(args_pairs, quote_via=urllib.parse.quote_plus)
-        connection_suffix = f"{connection_suffix}?{encoded_args}"
-
+    if POSTGRES_DATABASE_ARGS:
+        connection_suffix = f"{connection_suffix}&{POSTGRES_DATABASE_ARGS}"
+else:
+    connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@{DB_HOST}:{DB_PORT}/{urllib.parse.quote_plus(POSTGRES_DB)}"
+    if POSTGRES_DATABASE_ARGS:
+        connection_suffix = f"{connection_suffix}?{POSTGRES_DATABASE_ARGS}"
 CONNECTION_STRING = f"postgresql+psycopg2://{connection_suffix}"
 DSN = f"postgresql://{connection_suffix}"
 
