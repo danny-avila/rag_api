@@ -26,6 +26,7 @@ class EmbeddingsProvider(Enum):
     HUGGINGFACETEI = "huggingfacetei"
     OLLAMA = "ollama"
     BEDROCK = "bedrock"
+    GOOGLE_GENAI = "google_genai"
     GOOGLE_VERTEXAI = "vertexai"
 
 
@@ -68,6 +69,22 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 )  # Deprecated, backwards compatability
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
+
+# Batch processing configuration for memory-constrained environments.
+# When EMBEDDING_BATCH_SIZE > 0, documents are processed in batches to reduce
+# peak memory usage. This is useful for Kubernetes pods with memory limits.
+#
+# Trade-offs:
+# - Smaller batch size = lower memory, more DB round trips
+# - Larger batch size = higher memory, fewer DB round trips
+# - 0 = disable batching, process all at once (original behavior)
+#
+# Recommended: 750 for text-embedding-3-small (good balance of speed and memory)
+EMBEDDING_BATCH_SIZE = int(get_env_variable("EMBEDDING_BATCH_SIZE", "0"))
+
+# Maximum number of batches to buffer in memory during async processing.
+# Higher values allow more parallelism but use more memory.
+EMBEDDING_MAX_QUEUE_SIZE = int(get_env_variable("EMBEDDING_MAX_QUEUE_SIZE", "3"))
 
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
@@ -186,6 +203,9 @@ HF_TOKEN = get_env_variable("HF_TOKEN", "")
 OLLAMA_BASE_URL = get_env_variable("OLLAMA_BASE_URL", "http://ollama:11434")
 AWS_ACCESS_KEY_ID = get_env_variable("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_ACCESS_KEY = get_env_variable("AWS_SECRET_ACCESS_KEY", "")
+GOOGLE_API_KEY = get_env_variable("GOOGLE_API_KEY", "")
+GOOGLE_KEY = get_env_variable("GOOGLE_KEY", GOOGLE_API_KEY)
+RAG_GOOGLE_API_KEY = get_env_variable("RAG_GOOGLE_API_KEY", GOOGLE_KEY)
 AWS_SESSION_TOKEN = get_env_variable("AWS_SESSION_TOKEN", "")
 GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIALS", "")
 env_value = get_env_variable("RAG_CHECK_EMBEDDING_CTX_LENGTH", "True").lower()
@@ -231,6 +251,13 @@ def init_embeddings(provider, model):
         from langchain_ollama import OllamaEmbeddings
 
         return OllamaEmbeddings(model=model, base_url=OLLAMA_BASE_URL)
+    elif provider == EmbeddingsProvider.GOOGLE_GENAI:
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        return GoogleGenerativeAIEmbeddings(
+            model=model,
+            google_api_key=RAG_GOOGLE_API_KEY,
+        )
     elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
         from langchain_google_vertexai import VertexAIEmbeddings
 
@@ -281,6 +308,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_VERTEXAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_GENAI:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "gemini-embedding-001")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
     EMBEDDINGS_MODEL = get_env_variable(
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"

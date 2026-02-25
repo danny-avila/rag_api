@@ -34,6 +34,33 @@ pip install -r requirements.txt
 uvicorn main:app
 ```
 
+### Clean Install (Local Development)
+
+To do a clean reinstall of all dependencies (e.g., after updating `requirements.txt`):
+
+```bash
+# Remove existing virtual environment and recreate it
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+For the lite version (without sentence_transformers/huggingface):
+
+```bash
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.lite.txt
+```
+
+For Docker, rebuild without cache:
+
+```bash
+docker compose build --no-cache
+```
+
 ### Environment Variables
 
 The following environment variables are required to run the application:
@@ -59,12 +86,14 @@ The following environment variables are required to run the application:
 - `COLLECTION_NAME`: (Optional) The name of the collection in the vector store. Default value is "testcollection".
 - `CHUNK_SIZE`: (Optional) The size of the chunks for text processing. Default value is "1500".
 - `CHUNK_OVERLAP`: (Optional) The overlap between chunks during text processing. Default value is "100".
+- `EMBEDDING_BATCH_SIZE`: (Optional) Number of document chunks to process per batch. Set to `0` (default) to disable batching. Recommended value is `750` for `text-embedding-3-small`.
+- `EMBEDDING_MAX_QUEUE_SIZE`: (Optional) Maximum number of batches to buffer in memory during async processing. Default value is "3".
 - `RAG_UPLOAD_DIR`: (Optional) The directory where uploaded files are stored. Default value is "./uploads/".
 - `PDF_EXTRACT_IMAGES`: (Optional) A boolean value indicating whether to extract images from PDF files. Default value is "False".
 - `DEBUG_RAG_API`: (Optional) Set to "True" to show more verbose logging output in the server console, and to enable postgresql database routes
 - `DEBUG_PGVECTOR_QUERIES`: (Optional) Set to "True" to enable detailed PostgreSQL query logging for pgvector operations. Useful for debugging performance issues with vector database queries.
 - `CONSOLE_JSON`: (Optional) Set to "True" to log as json for Cloud Logging aggregations
-- `EMBEDDINGS_PROVIDER`: (Optional) either "openai", "bedrock", "azure", "huggingface", "huggingfacetei", "vertexai", or "ollama", where "huggingface" uses sentence_transformers; defaults to "openai"
+- `EMBEDDINGS_PROVIDER`: (Optional) either "openai", "bedrock", "azure", "huggingface", "huggingfacetei", "google_genai", "vertexai", or "ollama", where "huggingface" uses sentence_transformers; defaults to "openai"
 - `EMBEDDINGS_MODEL`: (Optional) Set a valid embeddings model to use from the configured provider.
     - **Defaults**
     - openai: "text-embedding-3-small"
@@ -74,6 +103,7 @@ The following environment variables are required to run the application:
     - vertexai: "text-embedding-004"
     - ollama: "nomic-embed-text"
     - bedrock: "amazon.titan-embed-text-v1"
+    - google_genai: "gemini-embedding-001"
 - `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
@@ -87,11 +117,47 @@ The following environment variables are required to run the application:
 - `AWS_DEFAULT_REGION`: (Optional) defaults to `us-east-1`
 - `AWS_ACCESS_KEY_ID`: (Optional) needed for bedrock embeddings
 - `AWS_SECRET_ACCESS_KEY`: (Optional) needed for bedrock embeddings
+- `GOOGLE_API_KEY`, `GOOGLE_KEY`, `RAG_GOOGLE_API_KEY`: (Optional) Google API key for Google GenAI embeddings. Priority order: RAG_GOOGLE_API_KEY > GOOGLE_KEY > GOOGLE_API_KEY
 - `AWS_SESSION_TOKEN`: (Optional) may be needed for bedrock embeddings
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings. This should be a path to a service account credential file in JSON format, as accepted by [langchain](https://python.langchain.com/api_reference/google_vertexai/index.html)
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
+
+### Embedding Batch Processing
+
+For large files, you can enable batched embedding processing to reduce memory consumption. This is particularly useful in memory-constrained environments like Kubernetes pods with memory limits.
+
+#### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBEDDING_BATCH_SIZE` | `0` | Number of document chunks to process per batch. `0` disables batching (original behavior). |
+| `EMBEDDING_MAX_QUEUE_SIZE` | `3` | Maximum number of batches to buffer in memory during async processing. |
+
+#### Recommended Settings
+
+For `text-embedding-3-small` model:
+- `EMBEDDING_BATCH_SIZE=750` - Good balance of throughput and memory
+
+For memory-constrained environments (< 2GB RAM):
+- `EMBEDDING_BATCH_SIZE=100-250`
+
+For high-throughput environments:
+- `EMBEDDING_BATCH_SIZE=1000-2000`
+- `EMBEDDING_MAX_QUEUE_SIZE=5`
+
+#### Behavior
+
+When `EMBEDDING_BATCH_SIZE > 0`:
+- Documents are processed in batches of the specified size
+- Each batch is embedded and inserted before the next batch starts
+- On failure, successfully inserted documents are rolled back
+- Memory usage is bounded by `EMBEDDING_BATCH_SIZE * EMBEDDING_MAX_QUEUE_SIZE`
+
+When `EMBEDDING_BATCH_SIZE = 0` (default):
+- All documents are processed at once (original behavior)
+- Better for small files or memory-rich environments
 
 ### Use Atlas MongoDB as Vector Database
 
@@ -124,6 +190,16 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 ```
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+
+#### Create a `file_id` Index (recommended)
+
+We recommend creating a standard MongoDB index on `file_id` to keep lookups fast. After creating the collection, run the following once (via Atlas UI, Compass, or `mongosh`):
+
+```javascript
+db.getCollection("<COLLECTION_NAME>").createIndex({ file_id: 1 })
+```
+
+Replace `<COLLECTION_NAME>` with the same collection used by the RAG API. This ensures lookups remain fast even as the number of embedded documents grows.
 
 
 ### Proxy Configuration
@@ -167,6 +243,81 @@ Notes:
 
 ### Dev notes:
 
+#### Running Tests
+
+##### Prerequisites
+
+Install test dependencies:
+
+```bash
+pip install -r test_requirements.txt
+```
+
+##### Running All Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run with coverage (if pytest-cov is installed)
+pytest --cov=app
+```
+
+##### Running Specific Test Files
+
+```bash
+# Run batch processing unit tests
+pytest tests/test_batch_processing.py -v
+
+# Run batch processing integration tests (memory optimization tests)
+pytest tests/test_batch_processing_integration.py -v
+
+# Run main API tests
+pytest tests/test_main.py -v
+```
+
+##### Running Tests by Category
+
+```bash
+# Run only integration tests (marked with @pytest.mark.integration)
+pytest -m integration -v
+
+# Skip integration tests
+pytest -m "not integration" -v
+
+# Run only async tests
+pytest -k "async" -v
+```
+
+##### Test Categories
+
+| Test File | Description |
+|-----------|-------------|
+| `test_batch_processing.py` | Unit tests for batch processing functions |
+| `test_batch_processing_integration.py` | Memory optimization and integration tests |
+| `test_main.py` | API endpoint tests |
+| `test_config.py` | Configuration tests |
+| `test_middleware.py` | Middleware tests |
+| `test_models.py` | Model tests |
+
+##### Memory Optimization Tests
+
+The `test_batch_processing_integration.py` file includes tests that verify the memory optimization behavior:
+
+- **`test_memory_bounded_by_batch_size`**: Verifies that the number of documents in memory at any time is bounded by `EMBEDDING_BATCH_SIZE`
+- **`test_memory_tracking_with_tracemalloc`**: Uses Python's `tracemalloc` to monitor memory usage during batch processing
+- **`test_sync_memory_bounded_by_batch_size`**: Same verification for the synchronous code path
+
+Run memory tests specifically:
+
+```bash
+pytest tests/test_batch_processing_integration.py::TestMemoryOptimization -v
+pytest tests/test_batch_processing_integration.py::TestSyncBatchedMemory -v
+```
+
 #### Installing pre-commit formatter
 
 Run the following commands to install pre-commit formatter, which uses [black](https://github.com/psf/black) code formatter:
@@ -175,3 +326,4 @@ Run the following commands to install pre-commit formatter, which uses [black](h
 pip install pre-commit
 pre-commit install
 ```
+
