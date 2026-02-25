@@ -32,3 +32,4 @@ xlrd==2.0.2
 langchain-aws==0.2.1
 boto3==1.34.144
 langchain-ollama==0.3.3
+nltk==3.9.3
