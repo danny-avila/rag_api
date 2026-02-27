@@ -280,6 +280,56 @@ class TestLocalEmbedPathTraversal:
         )
 
 
+class TestEntityIdPathTraversal:
+    """Path traversal via entity_id parameter poisoning temp_base_path."""
+
+    @pytest.mark.parametrize(
+        "entity_id",
+        [
+            "../../etc",
+            "../../../",
+            "legit/../../../etc",
+        ],
+    )
+    def test_embed_entity_id_traversal(self, auth_headers, entity_id, tmp_path):
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("test content")
+        with test_file.open("rb") as f:
+            response = client.post(
+                "/embed",
+                data={"file_id": "testid1", "entity_id": entity_id},
+                files={"file": ("safe.txt", f, "text/plain")},
+                headers=auth_headers,
+            )
+        assert response.status_code == 400, (
+            f"entity_id traversal not blocked on /embed with entity_id={entity_id!r}. "
+            f"Got status {response.status_code}: {response.text}"
+        )
+
+    @pytest.mark.parametrize(
+        "entity_id",
+        [
+            "../../etc",
+            "../../../",
+            "legit/../../../etc",
+        ],
+    )
+    def test_text_entity_id_traversal(self, auth_headers, entity_id, tmp_path):
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("test content")
+        with test_file.open("rb") as f:
+            response = client.post(
+                "/text",
+                data={"file_id": "testid1", "entity_id": entity_id},
+                files={"file": ("safe.txt", f, "text/plain")},
+                headers=auth_headers,
+            )
+        assert response.status_code == 400, (
+            f"entity_id traversal not blocked on /text with entity_id={entity_id!r}. "
+            f"Got status {response.status_code}: {response.text}"
+        )
+
+
 class TestEmbedPathTraversal:
     """CVE-2025-68414: /embed path traversal via filename."""
 

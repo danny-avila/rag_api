@@ -793,8 +793,9 @@ async def embed_file(
     known_type = None
 
     user_id = get_user_id(request, entity_id)
-    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    validated_file_path = validate_file_path(temp_base_path, file.filename)
+    validated_file_path = validate_file_path(
+        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
+    )
 
     if validated_file_path is None:
         logger.warning("Path validation failed for embed: %s", file.filename)
@@ -803,7 +804,7 @@ async def embed_file(
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
-    os.makedirs(temp_base_path, exist_ok=True)
+    os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
 
     await save_upload_file_async(file, validated_file_path)
 
@@ -1052,8 +1053,9 @@ async def extract_text_from_file(
     Returns the raw text content for text parsing purposes.
     """
     user_id = get_user_id(request, entity_id)
-    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    validated_temp_file_path = validate_file_path(temp_base_path, file.filename)
+    validated_temp_file_path = validate_file_path(
+        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
+    )
 
     if validated_temp_file_path is None:
         logger.warning("Path validation failed for text extraction: %s", file.filename)
@@ -1063,7 +1065,7 @@ async def extract_text_from_file(
         )
 
     # create base directory only if the file path is valid
-    os.makedirs(temp_base_path, exist_ok=True)
+    os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
 
     await save_upload_file_async(file, validated_temp_file_path)
 
