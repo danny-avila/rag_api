@@ -1,11 +1,12 @@
 # app/routes/document_routes.py
 import os
+from pathlib import Path
 import hashlib
 import traceback
 import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
-from typing import List, Iterable, TYPE_CHECKING
+from typing import List, Iterable, Optional, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
@@ -107,6 +108,19 @@ def save_upload_file_sync(file: UploadFile, temp_file_path: str) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save the uploaded file. Error: {str(e)}",
         )
+
+
+def validate_file_path(base_dir: str, file_path: str) -> Optional[str]:
+    """Validate that file_path resolves within base_dir. Returns resolved absolute path or None."""
+    if not file_path or not file_path.strip():
+        return None
+    try:
+        allowed = Path(base_dir).resolve()
+        requested = Path(os.path.join(base_dir, file_path)).resolve()
+        requested.relative_to(allowed)
+        return str(requested)
+    except (ValueError, RuntimeError, TypeError, OSError):
+        return None
 
 
 async def load_file_content(
@@ -702,8 +716,11 @@ async def store_data_in_vector_db(
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
-    # Check if the file exists
-    if not os.path.exists(document.filepath):
+    file_path = validate_file_path(RAG_UPLOAD_DIR, document.filepath)
+
+    # Check if the file exists and if it is within the allowed upload directory
+    if file_path is None or not os.path.exists(file_path):
+        logger.warning("Path validation failed for local embed: %s", document.filepath)
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
@@ -716,7 +733,7 @@ async def embed_local_file(
 
     try:
         loader, known_type, file_ext = get_loader(
-            document.filename, document.file_content_type, document.filepath
+            document.filename, document.file_content_type, file_path
         )
         data = await run_in_executor(request.app.state.thread_pool, loader.load)
 
@@ -776,17 +793,26 @@ async def embed_file(
     known_type = None
 
     user_id = get_user_id(request, entity_id)
-    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    os.makedirs(temp_base_path, exist_ok=True)
-    temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+    validated_file_path = validate_file_path(
+        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
+    )
 
-    await save_upload_file_async(file, temp_file_path)
+    if validated_file_path is None:
+        logger.warning("Path validation failed for embed: %s", file.filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
+
+    os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
+
+    await save_upload_file_async(file, validated_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,
-            temp_file_path,
+            validated_file_path,
             request.app.state.thread_pool,
         )
 
@@ -837,7 +863,7 @@ async def embed_file(
             detail=f"Error during file processing: {str(e)}",
         )
     finally:
-        await cleanup_temp_file_async(temp_file_path)
+        await cleanup_temp_file_async(validated_file_path)
 
     return {
         "status": response_status,
@@ -904,15 +930,27 @@ async def embed_file_upload(
     entity_id: str = Form(None),
 ):
     user_id = get_user_id(request, entity_id)
-    temp_file_path = os.path.join(RAG_UPLOAD_DIR, uploaded_file.filename)
 
-    await save_upload_file_async(uploaded_file, temp_file_path)
+    validated_temp_file_path = validate_file_path(
+        RAG_UPLOAD_DIR, uploaded_file.filename
+    )
+
+    if validated_temp_file_path is None:
+        logger.warning(
+            "Path validation failed for embed-upload: %s", uploaded_file.filename
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
+
+    await save_upload_file_async(uploaded_file, validated_temp_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             uploaded_file.filename,
             uploaded_file.content_type,
-            temp_file_path,
+            validated_temp_file_path,
             request.app.state.thread_pool,
         )
 
@@ -948,7 +986,7 @@ async def embed_file_upload(
             detail=f"Error during file processing: {str(e)}",
         )
     finally:
-        await cleanup_temp_file_async(temp_file_path)
+        await cleanup_temp_file_async(validated_temp_file_path)
 
     return {
         "status": True,
@@ -1015,17 +1053,27 @@ async def extract_text_from_file(
     Returns the raw text content for text parsing purposes.
     """
     user_id = get_user_id(request, entity_id)
-    temp_base_path = os.path.join(RAG_UPLOAD_DIR, user_id)
-    os.makedirs(temp_base_path, exist_ok=True)
-    temp_file_path = os.path.join(RAG_UPLOAD_DIR, user_id, file.filename)
+    validated_temp_file_path = validate_file_path(
+        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
+    )
 
-    await save_upload_file_async(file, temp_file_path)
+    if validated_temp_file_path is None:
+        logger.warning("Path validation failed for text extraction: %s", file.filename)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
+        )
+
+    # create base directory only if the file path is valid
+    os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
+
+    await save_upload_file_async(file, validated_temp_file_path)
 
     try:
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,
-            temp_file_path,
+            validated_temp_file_path,
             request.app.state.thread_pool,
         )
 
@@ -1064,4 +1112,4 @@ async def extract_text_from_file(
                 detail=f"Error during text extraction: {str(e)}",
             )
     finally:
-        await cleanup_temp_file_async(temp_file_path)
+        await cleanup_temp_file_async(validated_temp_file_path)

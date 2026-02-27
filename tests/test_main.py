@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 from concurrent.futures import ThreadPoolExecutor
 
 from main import app
+from app.routes import document_routes
 
 client = TestClient(app)
 
@@ -173,12 +174,15 @@ def test_query_embeddings_by_file_id(auth_headers):
 
 
 def test_embed_local_file(tmp_path, auth_headers, monkeypatch):
-    # Create a temporary file.
+    # Monkeypatch RAG_UPLOAD_DIR so the file is within the allowed directory.
+    monkeypatch.setattr(document_routes, "RAG_UPLOAD_DIR", str(tmp_path))
+
+    # Create a temporary file inside the patched upload dir.
     test_file = tmp_path / "test.txt"
     test_file.write_text("This is a test document.")
 
     data = {
-        "filepath": str(test_file),
+        "filepath": "test.txt",
         "filename": "test.txt",
         "file_content_type": "text/plain",
         "file_id": "testid1",
