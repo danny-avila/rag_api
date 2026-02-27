@@ -12,7 +12,7 @@ fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
 uvicorn==0.28.0
-pypdf==6.4.0
+pypdf==6.7.3
 unstructured==0.18.32
 markdown==3.8.2
 networkx==3.2.1
@@ -22,7 +22,7 @@ docx2txt==0.9
 pypandoc==1.15
 PyJWT==2.8.0
 asyncpg==0.29.0
-python-multipart==0.0.19
+python-multipart==0.0.22
 sentence_transformers==3.1.1
 aiofiles==24.1.0
 rapidocr-onnxruntime==1.4.4
@@ -32,7 +32,7 @@ langchain-mongodb==0.2.0
 langchain-ollama==0.3.3
 langchain-huggingface==0.1.0
 langchain-google-genai==2.1.10
-cryptography==45.0.5
+cryptography==46.0.5
 python-magic==0.4.27
 python-pptx==1.0.2
 xlrd==2.0.2
