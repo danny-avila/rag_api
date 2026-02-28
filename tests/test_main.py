@@ -279,3 +279,41 @@ def test_extract_text_from_file(tmp_path, auth_headers):
     assert json_data["file_id"] == "test_text_123"
     assert json_data["filename"] == "test_text_extraction.txt"
     assert json_data["known_type"] is True  # text files are known types
+
+def test_query_rerank(auth_headers):
+    # Successful reranking with string documents
+    data = {
+        "query": "I love you",
+        "docs": ["I hate you", "I really like you"],
+        "k": 1
+    }
+    response = client.post("/rerank", json=data, headers=auth_headers)
+    assert response.status_code == 200
+    json_data = response.json()
+    assert isinstance(json_data, list)
+    assert len(json_data) == 1
+    doc = json_data[0]
+    assert doc["text"] == "I really like you"
+
+    # Handling of the k parameter (top_k filtering)
+    data = {
+        "query": "I love you",
+        "docs": ["I hate you", "I really like you", "I love you too"],
+        "k": 2
+    }
+    response = client.post("/rerank", json=data, headers=auth_headers)
+    assert response.status_code == 200
+    json_data = response.json()
+    assert isinstance(json_data, list)
+    assert len(json_data) == 2
+    assert json_data[0]["text"] == "I really like you"
+    assert json_data[1]["text"] == "I love you too"
+
+    # Error handling for invalid inputs
+    data = {
+        "query": "I love you",
+        "docs": [123, 456],
+        "k": 1
+    }
+    response = client.post("/rerank", json=data, headers=auth_headers)
+    assert response.status_code == 422

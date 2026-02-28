@@ -8,6 +8,7 @@ import aiofiles.os
 from shutil import copyfileobj
 from typing import List, Iterable, Optional, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
+from rerankers import Reranker, Document as ReRankDocument
 from fastapi import (
     APIRouter,
     Request,
@@ -44,6 +45,7 @@ from app.models import (
     QueryRequestBody,
     DocumentResponse,
     QueryMultipleBody,
+    QueryMultipleDocs,
 )
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
@@ -55,7 +57,10 @@ from app.utils.document_loader import (
 from app.utils.health import is_health_ok
 
 router = APIRouter()
-
+reranker_instance = Reranker(
+    model_name=os.getenv("SIMPLE_RERANKER_MODEL_NAME", "ms-marco-MiniLM-L-12-v2"),
+    model_type=os.getenv("SIMPLE_RERANKER_MODEL_TYPE", "flashrank"),
+)
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
     """Calculate the number of batches needed to process total items."""
@@ -1034,6 +1039,43 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_ids,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/rerank")
+async def rerank_documents_by_query(request: Request, body: QueryMultipleDocs):
+    """
+    Rerank documents based on relevance to a query using a reranking model.
+
+    Args:
+        request: The FastAPI request object
+        body: Contains query string, list of documents, and optional k value
+
+    Returns:
+        List of ranked documents with their scores
+    """
+
+    try:
+        if not body.docs:
+            raise HTTPException(status_code=400, detail="docs list cannot be empty")
+        docs = []
+        for i, d in enumerate(body.docs):
+            docs.append(ReRankDocument(text=d, doc_id=i))
+
+        top_k = body.k
+
+        results = reranker_instance.rank(query=body.query, docs=docs)
+        items = results.top_k(top_k) if top_k else results
+
+        return [
+            {"text": getattr(r.document, "text", None), "score": r.score} for r in items
+        ]
+    except Exception as e:
+        logger.error(
+            "Error in reranking documents | Query: %s | Error: %s | Traceback: %s",
             body.query,
             str(e),
             traceback.format_exc(),
