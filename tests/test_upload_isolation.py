@@ -10,6 +10,7 @@ Validates:
 
 import hashlib
 import os
+from pathlib import Path
 import pytest
 
 from app.routes.document_routes import _make_unique_temp_path, generate_digest
@@ -31,8 +32,8 @@ class TestMakeUniqueTempPath:
         path_a = _make_unique_temp_path("user1", "report.pdf")
         path_b = _make_unique_temp_path("user2", "report.pdf")
         assert os.path.dirname(path_a) != os.path.dirname(path_b)
-        assert "/user1/" in path_a
-        assert "/user2/" in path_b
+        assert Path(path_a).parent.name == "user1"
+        assert Path(path_b).parent.name == "user2"
 
     def test_preserves_file_extension(self, monkeypatch, tmp_path):
         monkeypatch.setattr("app.routes.document_routes.RAG_UPLOAD_DIR", str(tmp_path))

@@ -128,12 +128,14 @@ def _make_unique_temp_path(user_id: str, filename: str) -> Optional[str]:
     """Build a unique temp file path under RAG_UPLOAD_DIR/{user_id}/ to prevent
     concurrent upload collisions. Returns a validated absolute path, or None if
     the raw filename would escape RAG_UPLOAD_DIR (path traversal rejection)."""
-    # Validate the raw filename first to reject traversal attempts
+    # Validate the raw filename to reject traversal attempts
     if validate_file_path(RAG_UPLOAD_DIR, os.path.join(user_id, filename)) is None:
         return None
+    # unique_name is stem + "_" + [0-9a-f]{32} + suffix — no path separators,
+    # so it cannot escape the directory validated above.
     p = Path(filename)
     unique_name = f"{p.stem}_{uuid.uuid4().hex}{p.suffix}"
-    return validate_file_path(RAG_UPLOAD_DIR, os.path.join(user_id, unique_name))
+    return str(Path(RAG_UPLOAD_DIR, user_id, unique_name).resolve())
 
 
 async def load_file_content(
@@ -809,9 +811,8 @@ async def embed_file(
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
-    os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
-
     try:
+        os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
         await save_upload_file_async(file, validated_file_path)
         data, known_type, file_ext = await load_file_content(
             file.filename,
@@ -946,9 +947,8 @@ async def embed_file_upload(
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
-    os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
-
     try:
+        os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
         await save_upload_file_async(uploaded_file, validated_temp_file_path)
         data, known_type, file_ext = await load_file_content(
             uploaded_file.filename,
@@ -1065,9 +1065,8 @@ async def extract_text_from_file(
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
-    os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
-
     try:
+        os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
         await save_upload_file_async(file, validated_temp_file_path)
         data, known_type, file_ext = await load_file_content(
             file.filename,
