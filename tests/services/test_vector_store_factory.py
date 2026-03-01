@@ -1,6 +1,9 @@
 """Tests for vector store factory shutdown and cleanup logic."""
 
+import asyncio
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.services.vector_store import factory
 from app.services.vector_store.factory import close_vector_store_connections
@@ -90,3 +93,25 @@ def test_get_vector_store_atlas_mongo_closes_previous_client():
             assert factory._mongo_client is mock_client_2
 
     factory._mongo_client = None
+
+
+def test_load_file_content_cleans_up_on_lazy_load_failure():
+    """cleanup_temp_encoding_file is called even when lazy_load() raises."""
+    from app.routes.document_routes import load_file_content
+
+    mock_loader = MagicMock()
+    mock_loader._temp_filepath = "/tmp/fake.csv"
+    mock_loader.lazy_load.side_effect = RuntimeError("disk error")
+
+    with patch(
+        "app.routes.document_routes.get_loader",
+        return_value=(mock_loader, True, "csv"),
+    ):
+        with patch(
+            "app.routes.document_routes.cleanup_temp_encoding_file"
+        ) as mock_cleanup:
+            with pytest.raises(RuntimeError, match="disk error"):
+                asyncio.run(
+                    load_file_content("f.csv", "text/csv", "/fake/path", executor=None)
+                )
+            mock_cleanup.assert_called_once_with(mock_loader)
