@@ -13,14 +13,9 @@ class AsyncPgVector(ExtendedPgVector):
     def _get_thread_pool(self):
         if self._thread_pool is None:
             try:
-                # Try to get the thread pool from FastAPI app state
-                import contextvars
-                from fastapi import Request
-
-                # This is a fallback - in practice, we'll pass the executor explicitly
                 loop = asyncio.get_running_loop()
                 self._thread_pool = getattr(loop, "_default_executor", None)
-            except:
+            except Exception:
                 pass
         return self._thread_pool
 
