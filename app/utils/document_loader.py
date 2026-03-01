@@ -4,7 +4,7 @@ import os
 import codecs
 import tempfile
 
-from typing import List, Optional
+from typing import Iterator, List, Optional
 import chardet
 
 from langchain_core.documents import Document
@@ -233,19 +233,22 @@ class SafePyPDFLoader:
         self.extract_images = extract_images
         self._temp_filepath = None  # For compatibility with cleanup function
 
-    def load(self) -> List[Document]:
-        """Load PDF documents with automatic fallback on image extraction errors."""
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazy load PDF documents with automatic fallback on image extraction errors."""
         loader = PyPDFLoader(self.filepath, extract_images=self.extract_images)
 
         try:
-            return loader.load()
+            yield from loader.lazy_load()
         except KeyError as e:
             if "/Filter" in str(e) and self.extract_images:
                 logger.warning(
                     f"PDF image extraction failed for {self.filepath}, falling back to text-only: {e}"
                 )
                 fallback_loader = PyPDFLoader(self.filepath, extract_images=False)
-                return fallback_loader.load()
+                yield from fallback_loader.lazy_load()
             else:
-                # Re-raise if it's a different error
                 raise
+
+    def load(self) -> List[Document]:
+        """Load PDF documents with automatic fallback on image extraction errors."""
+        return list(self.lazy_load())
