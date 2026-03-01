@@ -1,7 +1,6 @@
 from typing import Callable, Optional, List, Tuple, Dict, Any, TypeVar
 import asyncio
 from concurrent.futures import Executor
-from functools import partial
 from langchain_core.documents import Document
 from .extended_pg_vector import ExtendedPgVector
 
