@@ -260,9 +260,15 @@ def init_embeddings(provider, model):
             google_api_key=RAG_GOOGLE_API_KEY,
         )
     elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
-        from langchain_google_vertexai import VertexAIEmbeddings
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-        return VertexAIEmbeddings(model=model)
+        return GoogleGenerativeAIEmbeddings(
+            model=model,
+            google_api_key=RAG_GOOGLE_API_KEY or None,
+            vertexai=True,
+            project=get_env_variable("GOOGLE_CLOUD_PROJECT", None),
+            location=get_env_variable("GOOGLE_CLOUD_LOCATION", "us-central1"),
+        )
     elif provider == EmbeddingsProvider.BEDROCK:
         from langchain_aws import BedrockEmbeddings
 

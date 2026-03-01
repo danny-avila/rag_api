@@ -21,7 +21,6 @@ from fastapi import (
     status,
 )
 from langchain_core.documents import Document
-from langchain_core.runnables import run_in_executor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
 import asyncio
@@ -145,7 +144,8 @@ async def load_file_content(
     loader = None
     try:
         loader, known_type, file_ext = get_loader(filename, content_type, file_path)
-        data = await run_in_executor(executor, lambda: list(loader.lazy_load()))
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(executor, lambda: list(loader.lazy_load()))
         return data, known_type, file_ext
     finally:
         # Clean up temporary UTF-8 file if it was created for encoding conversion
@@ -751,7 +751,8 @@ async def embed_local_file(
         loader, known_type, file_ext = get_loader(
             document.filename, document.file_content_type, file_path
         )
-        data = await run_in_executor(
+        loop = asyncio.get_running_loop()
+        data = await loop.run_in_executor(
             request.app.state.thread_pool, lambda: list(loader.lazy_load())
         )
 
