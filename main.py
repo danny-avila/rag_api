@@ -20,10 +20,12 @@ from app.config import (
     VECTOR_DB_TYPE,
     LogMiddleware,
     logger,
+    vector_store,
 )
 from app.middleware import security_middleware
 from app.routes import document_routes, pgvector_routes
 from app.services.database import PSQLDatabase, ensure_vector_indexes
+from app.services.vector_store.factory import close_vector_store_connections
 
 
 @asynccontextmanager
@@ -54,6 +56,12 @@ async def lifespan(app: FastAPI):
             logger.info("asyncpg connection pool closed")
         except Exception as e:
             logger.warning("Failed to close asyncpg pool: %s", e)
+
+    # Close vector store connections (MongoDB client / SQLAlchemy engine)
+    try:
+        close_vector_store_connections(vector_store)
+    except Exception as e:
+        logger.warning("Failed to close vector store connections: %s", e)
 
     logger.info("Shutting down thread pool")
     app.state.thread_pool.shutdown(wait=True)
