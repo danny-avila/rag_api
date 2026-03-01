@@ -78,6 +78,9 @@ CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 # - Smaller batch size = lower memory, more DB round trips
 # - Larger batch size = higher memory, fewer DB round trips
 # - 0 = disable batching, process all at once
+#
+# Default of 500 is conservative and works well for most embedding providers.
+# Increase to 750 for higher throughput at the cost of higher peak memory.
 EMBEDDING_BATCH_SIZE = int(get_env_variable("EMBEDDING_BATCH_SIZE", "500"))
 
 # Maximum number of batches to buffer in memory during async processing.

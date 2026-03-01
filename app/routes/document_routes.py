@@ -1,5 +1,6 @@
 # app/routes/document_routes.py
 import os
+import uuid
 from pathlib import Path
 import hashlib
 import traceback
@@ -121,6 +122,18 @@ def validate_file_path(base_dir: str, file_path: str) -> Optional[str]:
         return str(requested)
     except (ValueError, RuntimeError, TypeError, OSError):
         return None
+
+
+def _make_unique_temp_path(user_id: str, filename: str) -> Optional[str]:
+    """Build a unique temp file path under RAG_UPLOAD_DIR/{user_id}/ to prevent
+    concurrent upload collisions. Returns a validated absolute path, or None if
+    the raw filename would escape RAG_UPLOAD_DIR (path traversal rejection)."""
+    # Validate the raw filename first to reject traversal attempts
+    if validate_file_path(RAG_UPLOAD_DIR, os.path.join(user_id, filename)) is None:
+        return None
+    p = Path(filename)
+    unique_name = f"{p.stem}_{uuid.uuid4().hex}{p.suffix}"
+    return validate_file_path(RAG_UPLOAD_DIR, os.path.join(user_id, unique_name))
 
 
 async def load_file_content(
@@ -787,9 +800,7 @@ async def embed_file(
     known_type = None
 
     user_id = get_user_id(request, entity_id)
-    validated_file_path = validate_file_path(
-        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
-    )
+    validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
         logger.warning("Path validation failed for embed: %s", file.filename)
@@ -800,9 +811,8 @@ async def embed_file(
 
     os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
 
-    await save_upload_file_async(file, validated_file_path)
-
     try:
+        await save_upload_file_async(file, validated_file_path)
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,
@@ -925,9 +935,7 @@ async def embed_file_upload(
 ):
     user_id = get_user_id(request, entity_id)
 
-    validated_temp_file_path = validate_file_path(
-        RAG_UPLOAD_DIR, os.path.join(user_id, uploaded_file.filename)
-    )
+    validated_temp_file_path = _make_unique_temp_path(user_id, uploaded_file.filename)
 
     if validated_temp_file_path is None:
         logger.warning(
@@ -940,9 +948,8 @@ async def embed_file_upload(
 
     os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
 
-    await save_upload_file_async(uploaded_file, validated_temp_file_path)
-
     try:
+        await save_upload_file_async(uploaded_file, validated_temp_file_path)
         data, known_type, file_ext = await load_file_content(
             uploaded_file.filename,
             uploaded_file.content_type,
@@ -1049,9 +1056,7 @@ async def extract_text_from_file(
     Returns the raw text content for text parsing purposes.
     """
     user_id = get_user_id(request, entity_id)
-    validated_temp_file_path = validate_file_path(
-        RAG_UPLOAD_DIR, os.path.join(user_id, file.filename)
-    )
+    validated_temp_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_temp_file_path is None:
         logger.warning("Path validation failed for text extraction: %s", file.filename)
@@ -1060,12 +1065,10 @@ async def extract_text_from_file(
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
-    # create base directory only if the file path is valid
     os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
 
-    await save_upload_file_async(file, validated_temp_file_path)
-
     try:
+        await save_upload_file_async(file, validated_temp_file_path)
         data, known_type, file_ext = await load_file_content(
             file.filename,
             file.content_type,

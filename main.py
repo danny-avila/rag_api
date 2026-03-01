@@ -48,9 +48,12 @@ async def lifespan(app: FastAPI):
 
     # Cleanup logic
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
-        logger.info("Closing asyncpg connection pool")
-        await PSQLDatabase.close_pool()
-        logger.info("asyncpg connection pool closed")
+        try:
+            logger.info("Closing asyncpg connection pool")
+            await PSQLDatabase.close_pool()
+            logger.info("asyncpg connection pool closed")
+        except Exception as e:
+            logger.warning("Failed to close asyncpg pool: %s", e)
 
     logger.info("Shutting down thread pool")
     app.state.thread_pool.shutdown(wait=True)
