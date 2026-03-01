@@ -35,9 +35,37 @@ async def ensure_vector_indexes():
 
         await conn.execute(
             f"""
-            CREATE INDEX IF NOT EXISTS idx_{table_name}_file_id 
+            CREATE INDEX IF NOT EXISTS idx_{table_name}_file_id
             ON {table_name} ((cmetadata->>'file_id'));
         """
+        )
+
+        # Migrate cmetadata from JSON to JSONB (idempotent — skipped if already JSONB)
+        await conn.execute(
+            """
+            DO $
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'langchain_pg_embedding'
+                      AND column_name = 'cmetadata'
+                      AND data_type = 'json'
+                ) THEN
+                    ALTER TABLE langchain_pg_embedding
+                        ALTER COLUMN cmetadata TYPE JSONB USING cmetadata::jsonb;
+                END IF;
+            END
+            $;
+            """
+        )
+
+        # GIN index on cmetadata for efficient JSONB filtering
+        await conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_cmetadata_gin
+            ON langchain_pg_embedding
+            USING gin (cmetadata jsonb_path_ops);
+            """
         )
 
         logger.info("Vector database indexes ensured")
