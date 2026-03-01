@@ -82,29 +82,27 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         encoding = detect_file_encoding(filepath)
 
         if encoding != "utf-8":
-            # For non-UTF-8 encodings, we need to convert the file first
-            # Create a temporary UTF-8 file
+            # For non-UTF-8 encodings, convert to UTF-8 using streaming
+            # to avoid holding the entire file in memory as a single string
             temp_file = None
             try:
                 with tempfile.NamedTemporaryFile(
                     mode="w", encoding="utf-8", suffix=".csv", delete=False
                 ) as temp_file:
-                    # Read the original file with detected encoding
                     with open(
                         filepath, "r", encoding=encoding, errors="replace"
                     ) as original_file:
-                        content = original_file.read()
-                        temp_file.write(content)
+                        while True:
+                            chunk = original_file.read(64 * 1024)
+                            if not chunk:
+                                break
+                            temp_file.write(chunk)
 
                     temp_filepath = temp_file.name
 
-                # Use the temporary UTF-8 file with CSVLoader
                 loader = CSVLoader(temp_filepath)
-
-                # Store the temp file path for cleanup
                 loader._temp_filepath = temp_filepath
             except Exception as e:
-                # If temp file was created but there was an error, clean it up
                 if temp_file and os.path.exists(temp_file.name):
                     os.unlink(temp_file.name)
                 raise e
