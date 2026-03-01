@@ -143,7 +143,7 @@ async def load_file_content(
 ) -> tuple:
     """Load file content using appropriate loader."""
     loader, known_type, file_ext = get_loader(filename, content_type, file_path)
-    data = await run_in_executor(executor, loader.load)
+    data = await run_in_executor(executor, lambda: list(loader.lazy_load()))
 
     # Clean up temporary UTF-8 file if it was created for encoding conversion
     cleanup_temp_encoding_file(loader)
@@ -744,7 +744,9 @@ async def embed_local_file(
         loader, known_type, file_ext = get_loader(
             document.filename, document.file_content_type, file_path
         )
-        data = await run_in_executor(request.app.state.thread_pool, loader.load)
+        data = await run_in_executor(
+            request.app.state.thread_pool, lambda: list(loader.lazy_load())
+        )
 
         # Clean up temporary UTF-8 file if it was created for encoding conversion
         cleanup_temp_encoding_file(loader)
