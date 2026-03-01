@@ -932,7 +932,7 @@ async def embed_file_upload(
     user_id = get_user_id(request, entity_id)
 
     validated_temp_file_path = validate_file_path(
-        RAG_UPLOAD_DIR, uploaded_file.filename
+        RAG_UPLOAD_DIR, os.path.join(user_id, uploaded_file.filename)
     )
 
     if validated_temp_file_path is None:
@@ -943,6 +943,8 @@ async def embed_file_upload(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
+
+    os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
 
     await save_upload_file_async(uploaded_file, validated_temp_file_path)
 
