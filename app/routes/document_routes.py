@@ -331,12 +331,12 @@ async def query_embeddings_by_file_id(
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": body.file_id},
+                filter={"file_id": {"$eq": body.file_id}},
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": body.file_id}
+                embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
             )
 
         if not documents:
