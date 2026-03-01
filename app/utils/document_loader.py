@@ -237,17 +237,27 @@ class SafePyPDFLoader:
         """Lazy load PDF documents with automatic fallback on image extraction errors."""
         loader = PyPDFLoader(self.filepath, extract_images=self.extract_images)
 
-        try:
+        if not self.extract_images:
+            # No image extraction: no fallback needed, stream directly
             yield from loader.lazy_load()
+            return
+
+        # extract_images=True: must collect eagerly so that a mid-stream
+        # KeyError doesn't leave already-yielded pages duplicated by the
+        # fallback (yield from + try/except would deliver partial + full).
+        try:
+            pages = list(loader.lazy_load())
         except KeyError as e:
-            if "/Filter" in str(e) and self.extract_images:
+            if "/Filter" in str(e):
                 logger.warning(
                     f"PDF image extraction failed for {self.filepath}, falling back to text-only: {e}"
                 )
                 fallback_loader = PyPDFLoader(self.filepath, extract_images=False)
-                yield from fallback_loader.lazy_load()
+                pages = list(fallback_loader.lazy_load())
             else:
+                # Re-raise if it's a different error
                 raise
+        yield from pages
 
     def load(self) -> List[Document]:
         """Load PDF documents with automatic fallback on image extraction errors."""
