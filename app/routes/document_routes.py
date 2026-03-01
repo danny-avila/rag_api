@@ -612,14 +612,8 @@ async def _process_documents_batched_sync(
     return all_ids
 
 
-def generate_digest(page_content: str):
-    try:
-        hash_obj = hashlib.md5(page_content.encode("utf-8"))
-    except UnicodeEncodeError:
-        hash_obj = hashlib.md5(
-            page_content.encode("utf-8", "ignore").decode("utf-8").encode("utf-8")
-        )
-    return hash_obj.hexdigest()
+def generate_digest(page_content: str) -> str:
+    return hashlib.md5(page_content.encode("utf-8", "ignore")).hexdigest()
 
 
 def _prepare_documents_sync(
