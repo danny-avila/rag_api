@@ -257,7 +257,7 @@ def init_embeddings(provider, model):
 
         return GoogleGenerativeAIEmbeddings(
             model=model,
-            google_api_key=RAG_GOOGLE_API_KEY,
+            google_api_key=RAG_GOOGLE_API_KEY or None,
         )
     elif provider == EmbeddingsProvider.GOOGLE_VERTEXAI:
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -312,7 +312,7 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.HUGGINGFACETEI:
         "EMBEDDINGS_MODEL", "http://huggingfacetei:3000"
     )
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_VERTEXAI:
-    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-004")
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "gemini-embedding-001")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.OLLAMA:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "nomic-embed-text")
 elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.GOOGLE_GENAI:
