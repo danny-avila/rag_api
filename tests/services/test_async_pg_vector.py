@@ -81,3 +81,15 @@ async def test_aadd_documents_passes_args(store):
         result = await store.aadd_documents(docs, ids=["id1"])
     mock.assert_called_once_with(docs, ids=["id1"])
     assert result == ["id1"]
+
+
+@pytest.mark.asyncio
+async def test_run_in_executor_converts_stop_iteration(store):
+    """StopIteration can't be set on an asyncio.Future — verify it becomes RuntimeError."""
+
+    def raises_stop():
+        raise StopIteration("exhausted")
+
+    with patch.object(ExtendedPgVector, "get_all_ids", side_effect=raises_stop):
+        with pytest.raises(RuntimeError):
+            await store.get_all_ids()
