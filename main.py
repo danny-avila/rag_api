@@ -79,17 +79,10 @@ if debug_mode:
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    body = await request.body()
-    logger.debug(f"Validation error occurred")
-    logger.debug(f"Raw request body: {body.decode()}")
-    logger.debug(f"Validation errors: {exc.errors()}")
+    logger.debug("Validation error: %s", exc.errors())
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": exc.errors(),
-            "body": body.decode(),
-            "message": "Request validation failed",
-        },
+        content={"detail": exc.errors(), "message": "Request validation failed"},
     )
 
 
