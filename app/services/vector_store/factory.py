@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from pymongo import MongoClient
 from langchain_core.embeddings import Embeddings
@@ -21,6 +21,11 @@ def get_vector_store(
     mode: str = "sync",
     search_index: Optional[str] = None,
 ):
+    """Create a vector store instance for the given mode.
+
+    Note: For 'atlas-mongo' mode, the MongoClient is stored at module level
+    so it can be closed on shutdown via close_vector_store_connections().
+    """
     global _mongo_client
 
     if mode == "sync":
@@ -36,6 +41,8 @@ def get_vector_store(
             collection_name=collection_name,
         )
     elif mode == "atlas-mongo":
+        if _mongo_client is not None:
+            _mongo_client.close()
         _mongo_client = MongoClient(connection_string)
         mongo_db = _mongo_client.get_database()
         mong_collection = mongo_db[collection_name]
@@ -48,8 +55,13 @@ def get_vector_store(
         )
 
 
-def close_vector_store_connections(vector_store) -> None:
-    """Close connections held by the vector store and its backing clients."""
+def close_vector_store_connections(vector_store: Any) -> None:
+    """Close connections held by the vector store and its backing clients.
+
+    Closes the module-level MongoClient (if atlas-mongo mode was used) and
+    disposes the SQLAlchemy engine on the vector store (if pgvector mode).
+    Safe to call multiple times.
+    """
     global _mongo_client
 
     # Close MongoDB client if one was created

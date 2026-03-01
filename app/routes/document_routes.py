@@ -142,13 +142,15 @@ async def load_file_content(
     filename: str, content_type: str, file_path: str, executor
 ) -> tuple:
     """Load file content using appropriate loader."""
-    loader, known_type, file_ext = get_loader(filename, content_type, file_path)
-    data = await run_in_executor(executor, lambda: list(loader.lazy_load()))
-
-    # Clean up temporary UTF-8 file if it was created for encoding conversion
-    cleanup_temp_encoding_file(loader)
-
-    return data, known_type, file_ext
+    loader = None
+    try:
+        loader, known_type, file_ext = get_loader(filename, content_type, file_path)
+        data = await run_in_executor(executor, lambda: list(loader.lazy_load()))
+        return data, known_type, file_ext
+    finally:
+        # Clean up temporary UTF-8 file if it was created for encoding conversion
+        if loader is not None:
+            cleanup_temp_encoding_file(loader)
 
 
 def extract_text_from_documents(documents: List[Document], file_ext: str) -> str:
@@ -408,9 +410,13 @@ async def _process_documents_async_pipeline(
     if total_chunks == 0:
         return []
 
-    # Create bounded queues for producer-consumer pattern
+    # Create queues for producer-consumer pattern
+    # embedding_queue is bounded to limit document data held in memory.
+    # results_queue is unbounded — it holds only small UUID lists, and the
+    # drain loop runs after gather(), so bounding it would deadlock when
+    # num_batches > maxsize.
     embedding_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)
-    results_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)
+    results_queue = asyncio.Queue()
     all_ids = []
 
     num_batches = calculate_num_batches(total_chunks, EMBEDDING_BATCH_SIZE)
