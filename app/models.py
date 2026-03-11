@@ -42,3 +42,8 @@ class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
+
+
+class DeleteDocumentsBody(BaseModel):
+    entity_id: Optional[str] = None
+    file_ids: List[str] = []

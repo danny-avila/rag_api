@@ -123,11 +123,17 @@ class ExtendedPgVector(PGVector):
             results = session.query(self.EmbeddingStore.custom_id).all()
             return [result[0] for result in results if result[0] is not None]
 
-    def get_filtered_ids(self, ids: list[str]) -> list[str]:
+    def get_filtered_ids(
+        self, ids: list[str], user_id: Optional[str] = None
+    ) -> list[str]:
         with Session(self._bind) as session:
             query = session.query(self.EmbeddingStore.custom_id).filter(
                 self.EmbeddingStore.custom_id.in_(ids)
             )
+            if user_id is not None:
+                query = query.filter(
+                    self.EmbeddingStore.cmetadata["user_id"].astext == user_id
+                )
             results = query.all()
             return [result[0] for result in results if result[0] is not None]
 
@@ -145,7 +151,10 @@ class ExtendedPgVector(PGVector):
             ]
 
     def _delete_multiple(
-        self, ids: Optional[list[str]] = None, collection_only: bool = False
+        self,
+        ids: Optional[list[str]] = None,
+        collection_only: bool = False,
+        user_id: Optional[str] = None,
     ) -> None:
         with Session(self._bind) as session:
             if ids is not None:
@@ -163,5 +172,9 @@ class ExtendedPgVector(PGVector):
                         self.EmbeddingStore.collection_id == collection.uuid
                     )
                 stmt = stmt.where(self.EmbeddingStore.custom_id.in_(ids))
+                if user_id is not None:
+                    stmt = stmt.where(
+                        self.EmbeddingStore.cmetadata["user_id"].astext == user_id
+                    )
                 session.execute(stmt)
             session.commit()

@@ -23,7 +23,7 @@ class AsyncPgVector(ExtendedPgVector):
 
     @staticmethod
     async def _run_in_executor(
-        executor: Executor | None,
+        executor:  Optional[Executor],
         func: Callable[..., T],
         *args: Any,
         **kwargs: Any,
@@ -48,9 +48,13 @@ class AsyncPgVector(ExtendedPgVector):
         executor = executor or self._get_thread_pool()
         return await self._run_in_executor(executor, super().get_all_ids)
 
-    async def get_filtered_ids(self, ids: list[str], executor=None) -> list[str]:
+    async def get_filtered_ids(
+        self, ids: list[str], user_id: Optional[str] = None, executor=None
+    ) -> list[str]:
         executor = executor or self._get_thread_pool()
-        return await self._run_in_executor(executor, super().get_filtered_ids, ids)
+        return await self._run_in_executor(
+            executor, super().get_filtered_ids, ids, user_id=user_id
+        )
 
     async def get_documents_by_ids(
         self, ids: list[str], executor=None
@@ -62,11 +66,12 @@ class AsyncPgVector(ExtendedPgVector):
         self,
         ids: Optional[list[str]] = None,
         collection_only: bool = False,
+        user_id: Optional[str] = None,
         executor=None,
     ) -> None:
         executor = executor or self._get_thread_pool()
         await self._run_in_executor(
-            executor, self._delete_multiple, ids, collection_only
+            executor, self._delete_multiple, ids, collection_only, user_id=user_id
         )
 
     async def asimilarity_search_with_score_by_vector(

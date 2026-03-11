@@ -44,6 +44,7 @@ from app.models import (
     QueryRequestBody,
     DocumentResponse,
     QueryMultipleBody,
+    DeleteDocumentsBody,
 )
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
@@ -267,14 +268,24 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
 
 
 @router.delete("/documents")
-async def delete_documents(request: Request, document_ids: List[str] = Body(...)):
+async def delete_documents(
+    body: DeleteDocumentsBody,
+    request: Request,
+):
+    document_ids = body.file_ids
+    user_id = body.entity_id
+
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                document_ids, executor=request.app.state.thread_pool
+                document_ids,
+                user_id=user_id,
+                executor=request.app.state.thread_pool,
             )
             await vector_store.delete(
-                ids=document_ids, executor=request.app.state.thread_pool
+                ids=document_ids,
+                user_id=user_id,
+                executor=request.app.state.thread_pool,
             )
         else:
             existing_ids = vector_store.get_filtered_ids(document_ids)
@@ -331,7 +342,10 @@ async def query_embeddings_by_file_id(
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$eq": body.file_id}},
+                filter={
+                    "file_id": {"$eq": body.file_id},
+                    "user_id": {"$eq": user_authorized}
+                },
                 executor=request.app.state.thread_pool,
             )
         else:
