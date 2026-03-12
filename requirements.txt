@@ -38,3 +38,4 @@ xlrd==2.0.2
 pydantic>=2.10.6,<3
 chardet==5.2.0
 tenacity>=9.0.0
+msoffcrypto-tool>=6.0.0
