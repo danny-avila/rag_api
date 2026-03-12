@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+from collections import defaultdict
 from typing import Optional, Any, Dict, List, Union
 from sqlalchemy import event
 from sqlalchemy import delete
@@ -149,6 +150,27 @@ class ExtendedPgVector(PGVector):
                 for result in results
                 if result.custom_id in ids
             ]
+
+    def get_documents_grouped_by_file_id(self, user_id: str) -> dict[str, list[Document]]:
+        with Session(self._bind) as session:
+            results = (
+                session.query(self.EmbeddingStore)
+                .filter(
+                    self.EmbeddingStore.cmetadata["user_id"].astext == user_id
+                )
+                .all()
+            )
+            grouped = defaultdict(list)
+            for result in results:
+                file_id = result.custom_id
+                if file_id is not None:
+                    grouped[file_id].append(
+                        Document(
+                            page_content=result.document,
+                            metadata=result.cmetadata or {},
+                        )
+                    )
+            return dict(grouped)
 
     def _delete_multiple(
         self,

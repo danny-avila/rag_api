@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 from app.config import (
     logger,
     vector_store,
+    llm,
     RAG_UPLOAD_DIR,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
@@ -45,7 +46,9 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
     DeleteDocumentsBody,
+    FileSummary,
 )
+from app.services.summarization import summarize_files
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
     get_loader,
@@ -1136,3 +1139,55 @@ async def extract_text_from_file(
             )
     finally:
         await cleanup_temp_file_async(validated_temp_file_path)
+
+
+@router.get("/summarize/{entity_id}")
+async def summarize_entity_files(request: Request, entity_id: str):
+    """Retrieve all documents for an entity, group by file_id, and summarize each file."""
+    if llm is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LLM provider not configured. Set LLM_PROVIDER env var.",
+        )
+
+    user_id = get_user_id(request, entity_id)
+
+    try:
+        if isinstance(vector_store, AsyncPgVector):
+            grouped_docs = await vector_store.get_documents_grouped_by_file_id(
+                user_id=user_id, executor=request.app.state.thread_pool
+            )
+        else:
+            grouped_docs = vector_store.get_documents_grouped_by_file_id(
+                user_id=user_id
+            )
+
+        if not grouped_docs:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No documents found for entity {entity_id}",
+            )
+
+        loop = asyncio.get_running_loop()
+        summaries = await loop.run_in_executor(
+            request.app.state.thread_pool,
+            summarize_files,
+            llm,
+            grouped_docs,
+        )
+
+        return {
+            "entity_id": entity_id,
+            "file_count": len(grouped_docs),
+            "summaries": summaries,
+        }
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        logger.error(
+            "Error summarizing files for entity %s | Error: %s | Traceback: %s",
+            entity_id,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
