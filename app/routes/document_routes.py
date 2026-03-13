@@ -11,6 +11,7 @@ from typing import List, Iterable, Optional, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Request,
     UploadFile,
     HTTPException,
@@ -51,7 +52,7 @@ from app.models import (
     FileSummary,
     DocumentOwnerType,
 )
-from app.services.summarization import summarize_files, summarize_file_chunks
+from app.services.summarization import summarize_files
 from app.services.summary_store import (
     upsert_file_summary,
     get_summaries_by_user,
@@ -714,9 +715,7 @@ async def store_data_in_vector_db(
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
-    document_owner_type: Optional[DocumentOwnerType] = None,
-    llm_instance=None,
-) -> bool:
+) -> dict:
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
     docs = await loop.run_in_executor(
@@ -752,28 +751,7 @@ async def store_data_in_vector_db(
                     docs, file_id, vector_store, executor
                 )
 
-        # After successful embed, generate summary for KNOWLEDGE documents
-        if (
-            document_owner_type == DocumentOwnerType.KNOWLEDGE
-            and llm_instance is not None
-            and VECTOR_DB_TYPE == VectorDBType.PGVECTOR
-        ):
-            try:
-                summary = await loop.run_in_executor(
-                    executor, summarize_file_chunks, llm_instance, docs
-                )
-                await upsert_file_summary(file_id, user_id, summary, len(docs))
-                logger.info(
-                    "Pre-computed summary for file %s (%d chunks)", file_id, len(docs)
-                )
-            except Exception as summary_err:
-                logger.warning(
-                    "Failed to generate summary for file %s: %s (embeddings preserved)",
-                    file_id,
-                    summary_err,
-                )
-
-        return {"message": "Documents added successfully", "ids": ids}
+        return {"message": "Documents added successfully", "ids": ids, "docs": docs}
 
     except Exception as e:
         logger.error(
@@ -860,9 +838,42 @@ async def embed_local_file(
             cleanup_temp_encoding_file(loader)
 
 
+async def _generate_summary_background(
+    file_id: str,
+    user_id: str,
+    docs: List[Document],
+    executor,
+    llm_instance,
+) -> None:
+    """Generate and persist a file summary in the background (non-blocking)."""
+    try:
+        loop = asyncio.get_running_loop()
+        summary = await loop.run_in_executor(
+            executor,
+            summarize_files,
+            llm_instance,
+            {file_id: docs},
+        )
+        if summary:
+            s = summary[0]
+            await upsert_file_summary(file_id, user_id, s["summary"], s["chunk_count"])
+            logger.info(
+                "Background summary completed for file %s (%d chunks)",
+                file_id,
+                s["chunk_count"],
+            )
+    except Exception as e:
+        logger.warning(
+            "Background summary failed for file %s: %s (embeddings preserved)",
+            file_id,
+            e,
+        )
+
+
 @router.post("/embed")
 async def embed_file(
     request: Request,
+    background_tasks: BackgroundTasks,
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
@@ -898,8 +909,6 @@ async def embed_file(
             user_id=user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
-            document_owner_type=document_owner_type,
-            llm_instance=llm,
         )
 
         if not result:
@@ -919,6 +928,23 @@ async def embed_file(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unspecified error occurred.",
                 )
+
+        # Schedule summary generation as a background task (non-blocking)
+        if (
+            document_owner_type == DocumentOwnerType.KNOWLEDGE
+            and llm is not None
+            and VECTOR_DB_TYPE == VectorDBType.PGVECTOR
+            and "docs" in result
+        ):
+            background_tasks.add_task(
+                _generate_summary_background,
+                file_id,
+                user_id,
+                result["docs"],
+                request.app.state.thread_pool,
+                llm,
+            )
+
     except HTTPException as http_exc:
         response_status = False
         response_message = f"HTTP Exception: {http_exc.detail}"

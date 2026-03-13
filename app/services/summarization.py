@@ -15,17 +15,15 @@ REDUCE_PROMPT = ChatPromptTemplate.from_template(
 
 
 def summarize_file_chunks(llm, documents: list[Document]) -> str:
-    """Summarize a list of document chunks using map-reduce."""
+    """Summarize a list of document chunks using map-reduce with parallel batch processing."""
     map_chain = MAP_PROMPT | llm | StrOutputParser()
 
     if len(documents) == 1:
         return map_chain.invoke({"text": documents[0].page_content})
 
-    # Map: summarize each chunk
-    chunk_summaries = []
-    for doc in documents:
-        summary = map_chain.invoke({"text": doc.page_content})
-        chunk_summaries.append(summary)
+    # Map: summarize all chunks in parallel using batch
+    inputs = [{"text": doc.page_content} for doc in documents]
+    chunk_summaries = map_chain.batch(inputs)
 
     # Reduce: combine all summaries
     reduce_chain = REDUCE_PROMPT | llm | StrOutputParser()
