@@ -53,3 +53,8 @@ class FileSummary(BaseModel):
     file_id: str
     summary: str
     chunk_count: int
+
+
+class DocumentOwnerType(Enum):
+    AGENT = "AGENT"
+    KNOWLEDGE = "KNOWLEDGE"

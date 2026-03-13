@@ -88,6 +88,33 @@ async def ensure_vector_indexes():
         logger.info("Vector database indexes ensured")
 
 
+async def ensure_file_summaries_table():
+    """Create the file_summaries table if it does not exist. Idempotent."""
+    pool = await PSQLDatabase.get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS file_summaries (
+                id SERIAL PRIMARY KEY,
+                file_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (file_id, user_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_file_summaries_user_id
+            ON file_summaries (user_id);
+
+            CREATE INDEX IF NOT EXISTS idx_file_summaries_file_id
+            ON file_summaries (file_id);
+            """
+        )
+        logger.info("file_summaries table ensured")
+
+
 async def pg_health_check() -> bool:
     try:
         pool = await PSQLDatabase.get_pool()

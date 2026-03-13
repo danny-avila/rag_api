@@ -38,6 +38,8 @@ from app.config import (
     CHUNK_OVERLAP,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MAX_QUEUE_SIZE,
+    VECTOR_DB_TYPE,
+    VectorDBType,
 )
 from app.constants import ERROR_MESSAGES
 from app.models import (
@@ -47,8 +49,14 @@ from app.models import (
     QueryMultipleBody,
     DeleteDocumentsBody,
     FileSummary,
+    DocumentOwnerType,
 )
-from app.services.summarization import summarize_files
+from app.services.summarization import summarize_files, summarize_file_chunks
+from app.services.summary_store import (
+    upsert_file_summary,
+    get_summaries_by_user,
+    delete_summaries_by_file_ids,
+)
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
     get_loader,
@@ -296,6 +304,17 @@ async def delete_documents(
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
+
+        # Delete cached summaries for the removed files
+        if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+            try:
+                await delete_summaries_by_file_ids(document_ids, user_id=user_id)
+            except Exception as summary_err:
+                logger.warning(
+                    "Failed to delete summaries for file_ids %s: %s",
+                    document_ids,
+                    summary_err,
+                )
 
         file_count = len(document_ids)
         return {
@@ -695,6 +714,8 @@ async def store_data_in_vector_db(
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
+    document_owner_type: Optional[DocumentOwnerType] = None,
+    llm_instance=None,
 ) -> bool:
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
@@ -729,6 +750,27 @@ async def store_data_in_vector_db(
                 # Fallback to batched processing for sync vector stores
                 ids = await _process_documents_batched_sync(
                     docs, file_id, vector_store, executor
+                )
+
+        # After successful embed, generate summary for KNOWLEDGE documents
+        if (
+            document_owner_type == DocumentOwnerType.KNOWLEDGE
+            and llm_instance is not None
+            and VECTOR_DB_TYPE == VectorDBType.PGVECTOR
+        ):
+            try:
+                summary = await loop.run_in_executor(
+                    executor, summarize_file_chunks, llm_instance, docs
+                )
+                await upsert_file_summary(file_id, user_id, summary, len(docs))
+                logger.info(
+                    "Pre-computed summary for file %s (%d chunks)", file_id, len(docs)
+                )
+            except Exception as summary_err:
+                logger.warning(
+                    "Failed to generate summary for file %s: %s (embeddings preserved)",
+                    file_id,
+                    summary_err,
                 )
 
         return {"message": "Documents added successfully", "ids": ids}
@@ -824,6 +866,7 @@ async def embed_file(
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
+    document_owner_type: Optional[DocumentOwnerType] = Form(DocumentOwnerType.AGENT)
 ):
     response_status = True
     response_message = "File processed successfully."
@@ -855,6 +898,8 @@ async def embed_file(
             user_id=user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            document_owner_type=document_owner_type,
+            llm_instance=llm,
         )
 
         if not result:
@@ -1153,6 +1198,16 @@ async def summarize_entity_files(request: Request, entity_id: str):
     user_id = get_user_id(request, entity_id)
 
     try:
+        # Try to load cached summaries first (PGVector only)
+        cached_summaries = []
+        cached_file_ids = set()
+        if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+            try:
+                cached_summaries = await get_summaries_by_user(user_id)
+                cached_file_ids = {s["file_id"] for s in cached_summaries}
+            except Exception as cache_err:
+                logger.warning("Failed to load cached summaries: %s", cache_err)
+
         if isinstance(vector_store, AsyncPgVector):
             grouped_docs = await vector_store.get_documents_grouped_by_file_id(
                 user_id=user_id, executor=request.app.state.thread_pool
@@ -1168,13 +1223,45 @@ async def summarize_entity_files(request: Request, entity_id: str):
                 detail=f"No documents found for entity {entity_id}",
             )
 
-        loop = asyncio.get_running_loop()
-        summaries = await loop.run_in_executor(
-            request.app.state.thread_pool,
-            summarize_files,
-            llm,
-            grouped_docs,
-        )
+        # Build results: use cached summaries where available, compute on-the-fly for the rest
+        summaries = []
+        files_to_summarize = {}
+
+        for file_id, docs in grouped_docs.items():
+            if file_id in cached_file_ids:
+                cached = next(s for s in cached_summaries if s["file_id"] == file_id)
+                summaries.append({
+                    "file_id": file_id,
+                    "summary": cached["summary"],
+                    "chunk_count": cached["chunk_count"],
+                })
+            else:
+                files_to_summarize[file_id] = docs
+
+        # Compute on-the-fly summaries for files without cache
+        if files_to_summarize:
+            loop = asyncio.get_running_loop()
+            on_the_fly = await loop.run_in_executor(
+                request.app.state.thread_pool,
+                summarize_files,
+                llm,
+                files_to_summarize,
+            )
+            summaries.extend(on_the_fly)
+
+            # Persist newly computed summaries to DB for future requests
+            if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+                for s in on_the_fly:
+                    try:
+                        await upsert_file_summary(
+                            s["file_id"], user_id, s["summary"], s["chunk_count"]
+                        )
+                    except Exception as persist_err:
+                        logger.warning(
+                            "Failed to persist summary for file %s: %s",
+                            s["file_id"],
+                            persist_err,
+                        )
 
         return {
             "entity_id": entity_id,
