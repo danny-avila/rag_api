@@ -1244,10 +1244,11 @@ async def summarize_entity_files(request: Request, entity_id: str):
             )
 
         if not grouped_docs:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No documents found for entity {entity_id}",
-            )
+            return {
+                "entity_id": entity_id,
+                "file_count": 0,
+                "summaries": [],
+            }
 
         # Build results: use cached summaries where available, compute on-the-fly for the rest
         summaries = []
