@@ -1301,7 +1301,10 @@ async def summarize_entity_files(
             s["summary"] for s in summaries if s.get("summary")
         )
         if combined_summary_text:
-            summary_documents = [Document(page_content=combined_summary_text)]
+            summary_documents = [Document(
+                page_content=combined_summary_text,
+                metadata={"source": entity_id},
+            )]
             result = await store_data_in_vector_db(
                 data=summary_documents,
                 file_id=file_id,
