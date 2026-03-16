@@ -1212,9 +1212,14 @@ async def extract_text_from_file(
         await cleanup_temp_file_async(validated_temp_file_path)
 
 
-@router.get("/summarize/{entity_id}")
-async def summarize_entity_files(request: Request, entity_id: str):
-    """Retrieve all documents for an entity, group by file_id, and summarize each file."""
+@router.post("/summarize/{entity_id}")
+async def summarize_entity_files(
+    request: Request,
+    entity_id: str,
+    file_id: str = Form(...),
+):
+    """Retrieve all documents for an entity, group by file_id, summarize each file,
+    and embed the combined summary into the vector store under the given file_id."""
     if llm is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1254,16 +1259,16 @@ async def summarize_entity_files(request: Request, entity_id: str):
         summaries = []
         files_to_summarize = {}
 
-        for file_id, docs in grouped_docs.items():
-            if file_id in cached_file_ids:
-                cached = next(s for s in cached_summaries if s["file_id"] == file_id)
+        for fid, docs in grouped_docs.items():
+            if fid in cached_file_ids:
+                cached = next(s for s in cached_summaries if s["file_id"] == fid)
                 summaries.append({
-                    "file_id": file_id,
+                    "file_id": fid,
                     "summary": cached["summary"],
                     "chunk_count": cached["chunk_count"],
                 })
             else:
-                files_to_summarize[file_id] = docs
+                files_to_summarize[fid] = docs
 
         # Compute on-the-fly summaries for files without cache
         if files_to_summarize:
@@ -1290,8 +1295,35 @@ async def summarize_entity_files(request: Request, entity_id: str):
                             persist_err,
                         )
 
+        # Embed the combined summary text into the vector store under the provided file_id
+        combined_summary_text = "\n\n".join(
+            s["summary"] for s in summaries if s.get("summary")
+        )
+        if combined_summary_text:
+            summary_documents = [Document(page_content=combined_summary_text)]
+            result = await store_data_in_vector_db(
+                data=summary_documents,
+                file_id=file_id,
+                user_id=user_id,
+                clean_content=False,
+                executor=request.app.state.thread_pool,
+            )
+            if not result or "error" in result:
+                error_detail = result.get("error", "Unknown error") if result else "No result"
+                logger.error(
+                    "Failed to embed summary for entity %s | file_id: %s | Error: %s",
+                    entity_id,
+                    file_id,
+                    error_detail,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Summary generated but embedding failed: {error_detail}",
+                )
+
         return {
             "entity_id": entity_id,
+            "file_id": file_id,
             "file_count": len(grouped_docs),
             "summaries": summaries,
         }
