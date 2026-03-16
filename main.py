@@ -24,7 +24,7 @@ from app.config import (
 )
 from app.middleware import security_middleware
 from app.routes import document_routes, pgvector_routes
-from app.services.database import PSQLDatabase, ensure_vector_indexes
+from app.services.database import PSQLDatabase, ensure_vector_indexes, ensure_file_summaries_table
 from app.services.vector_store.factory import close_vector_store_connections
 
 
@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         await PSQLDatabase.get_pool()  # Initialize the pool
         await ensure_vector_indexes()
+        await ensure_file_summaries_table()
 
     yield
 

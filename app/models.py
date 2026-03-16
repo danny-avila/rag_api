@@ -47,3 +47,14 @@ class QueryMultipleBody(BaseModel):
 class DeleteDocumentsBody(BaseModel):
     entity_id: Optional[str] = None
     file_ids: List[str] = []
+
+
+class FileSummary(BaseModel):
+    file_id: str
+    summary: str
+    chunk_count: int
+
+
+class DocumentOwnerType(Enum):
+    AGENT = "AGENT"
+    KNOWLEDGE = "KNOWLEDGE"

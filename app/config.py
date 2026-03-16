@@ -357,6 +357,42 @@ else:
 
 retriever = vector_store.as_retriever()
 
+## LLM
+
+LLM_PROVIDER = get_env_variable("LLM_PROVIDER", "openai")
+LLM_MODEL = get_env_variable("LLM_MODEL", "gpt-4o-mini")
+LLM_TEMPERATURE = float(get_env_variable("LLM_TEMPERATURE", "0"))
+
+
+def init_llm(provider, model, temperature):
+    if provider == "openai":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            api_key=RAG_OPENAI_API_KEY,
+            base_url=RAG_OPENAI_BASEURL,
+        )
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=model,
+            temperature=temperature,
+            base_url=OLLAMA_BASE_URL,
+        )
+    else:
+        return None
+
+
+llm = init_llm(LLM_PROVIDER, LLM_MODEL, LLM_TEMPERATURE)
+
+if llm:
+    logger.info(f"Initialized LLM: provider={LLM_PROVIDER}, model={LLM_MODEL}")
+else:
+    logger.info("No LLM provider configured (LLM_PROVIDER not set)")
+
 known_source_ext = [
     "go",
     "py",
