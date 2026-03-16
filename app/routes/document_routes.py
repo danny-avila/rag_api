@@ -1217,6 +1217,7 @@ async def summarize_entity_files(
     request: Request,
     entity_id: str,
     file_id: str = Form(...),
+    knowledge_id: str = Form(...),
 ):
     """Retrieve all documents for an entity, group by file_id, summarize each file,
     and embed the combined summary into the vector store under the given file_id."""
@@ -1304,7 +1305,7 @@ async def summarize_entity_files(
             result = await store_data_in_vector_db(
                 data=summary_documents,
                 file_id=file_id,
-                user_id=user_id,
+                user_id=knowledge_id,
                 clean_content=False,
                 executor=request.app.state.thread_pool,
             )
