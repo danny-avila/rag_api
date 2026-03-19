@@ -605,7 +605,7 @@ async def _process_documents_batched_sync(
             batch_result_ids = await loop.run_in_executor(
                 executor,
                 lambda docs=batch_documents, ids=batch_ids: vector_store.add_documents(
-                    documents=docs, ids=ids
+                    docs, ids=ids
                 ),
             )
             all_ids.extend(batch_result_ids)
