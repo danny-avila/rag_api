@@ -7,7 +7,7 @@ import traceback
 import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
-from typing import List, Iterable, Optional, TYPE_CHECKING
+from typing import List, Iterable, Optional, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
@@ -27,6 +27,7 @@ import asyncio
 
 if TYPE_CHECKING:
     from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from app.services.vector_store.atlas_mongo_vector import AtlasMongoVector
     from langchain_community.vectorstores.pgvector import PGVector as PgVector
 
 from app.config import (
@@ -554,7 +555,7 @@ async def _process_documents_async_pipeline(
 async def _process_documents_batched_sync(
     documents: List[Document],
     file_id: str,
-    vector_store: "PgVector",
+    vector_store: Union["PgVector", "AtlasMongoVector"],
     executor: "ThreadPoolExecutor",
 ) -> List[str]:
     """
@@ -563,7 +564,7 @@ async def _process_documents_batched_sync(
     Args:
         documents: List of Document objects to process
         file_id: Unique identifier for the file being processed
-        vector_store: Synchronous PgVector instance for document storage
+        vector_store: Synchronous vector store instance (ExtendedPgVector or AtlasMongoVector)
         executor: ThreadPoolExecutor for running sync operations
 
     Returns:
@@ -605,7 +606,7 @@ async def _process_documents_batched_sync(
             batch_result_ids = await loop.run_in_executor(
                 executor,
                 lambda docs=batch_documents, ids=batch_ids: vector_store.add_documents(
-                    documents=docs, ids=ids
+                    docs, ids=ids
                 ),
             )
             all_ids.extend(batch_result_ids)

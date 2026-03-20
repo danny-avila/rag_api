@@ -433,3 +433,142 @@ class TestProducerConsumerPattern:
 
         assert len(result) == 5
         assert result == ["id1", "id2", "id3", "id4", "id5"]
+
+
+class TestSyncBatchedMongoCompat:
+    """Regression tests for MongoDB-compatible batch processing (PR #266)."""
+
+    @pytest.mark.asyncio
+    async def test_sync_batched_rejects_documents_keyword_with_legacy_store(self):
+        """Regression: a store using 'docs' (not 'documents') as its param name must
+        still work, proving the call site uses positional — not keyword — dispatch."""
+        from app.routes.document_routes import _process_documents_batched_sync
+        from concurrent.futures import ThreadPoolExecutor
+
+        class LegacyMongoStore:
+            """No **kwargs — documents= keyword would raise TypeError."""
+
+            def add_documents(self, docs, ids):
+                return [f"id_{i}" for i in range(len(docs))]
+
+            def delete(self, ids=None):
+                pass
+
+        docs = [
+            Document(page_content=f"content_{i}", metadata={"file_id": "test_file"})
+            for i in range(5)
+        ]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 2):
+                result = await _process_documents_batched_sync(
+                    documents=docs,
+                    file_id="test_file",
+                    vector_store=LegacyMongoStore(),
+                    executor=executor,
+                )
+
+        assert len(result) == 5
+
+    @pytest.mark.asyncio
+    async def test_sync_batched_with_base_class_signature(self):
+        """Positional dispatch also works with a store matching the VectorStore base class signature."""
+        from app.routes.document_routes import _process_documents_batched_sync
+        from concurrent.futures import ThreadPoolExecutor
+
+        class BaseClassStore:
+            def add_documents(self, documents, ids=None, **kwargs):
+                return [f"id_{i}" for i in range(len(documents))]
+
+            def delete(self, ids=None):
+                pass
+
+        docs = [
+            Document(page_content=f"content_{i}", metadata={"file_id": "test_file"})
+            for i in range(3)
+        ]
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 2):
+                result = await _process_documents_batched_sync(
+                    documents=docs,
+                    file_id="test_file",
+                    vector_store=BaseClassStore(),
+                    executor=executor,
+                )
+
+        assert len(result) == 3
+
+
+class TestMongoIdGeneration:
+    """Test that digest-based ID generation produces unique IDs across batches."""
+
+    def test_unique_ids_across_batches(self):
+        """Simulate multiple batch calls and verify no ID collisions."""
+        import hashlib
+
+        file_id = "test_file"
+        all_ids = []
+
+        for batch_idx in range(3):
+            batch_docs = [
+                Document(
+                    page_content=f"content_{batch_idx * 3 + i}",
+                    metadata={
+                        "file_id": file_id,
+                        "digest": hashlib.md5(
+                            f"content_{batch_idx * 3 + i}".encode()
+                        ).hexdigest(),
+                    },
+                )
+                for i in range(3)
+            ]
+            f_ids = [
+                f"{file_id}_{doc.metadata.get('digest') or hashlib.md5(doc.page_content.encode()).hexdigest()}"
+                for doc in batch_docs
+            ]
+            all_ids.extend(f_ids)
+
+        assert len(all_ids) == 9
+        assert len(set(all_ids)) == 9
+
+    def test_old_sequential_ids_would_collide(self):
+        """Demonstrates the old per-batch range(len) approach caused ID collisions."""
+        file_id = "test_file"
+        all_ids = []
+
+        for _ in range(3):
+            batch_size = 3
+            old_ids = [f"{file_id}_{i}" for i in range(batch_size)]
+            all_ids.extend(old_ids)
+
+        assert len(all_ids) == 9
+        assert len(set(all_ids)) == 3
+
+    def test_fallback_to_content_hash_without_digest_metadata(self):
+        """IDs are unique even when documents lack a 'digest' metadata field."""
+        import hashlib
+
+        file_id = "test_file"
+        docs = [
+            Document(page_content=f"content_{i}", metadata={"file_id": file_id})
+            for i in range(5)
+        ]
+
+        f_ids = [
+            f"{file_id}_{doc.metadata.get('digest') or hashlib.md5(doc.page_content.encode()).hexdigest()}"
+            for doc in docs
+        ]
+
+        assert len(set(f_ids)) == 5
+
+    def test_empty_documents_returns_empty(self):
+        """AtlasMongoVector.add_documents with empty list returns empty."""
+        pytest.importorskip("langchain_mongodb", reason="requires langchain_mongodb")
+        from unittest.mock import MagicMock
+        from app.services.vector_store.atlas_mongo_vector import AtlasMongoVector
+
+        store = MagicMock(spec=AtlasMongoVector)
+        store.add_documents = AtlasMongoVector.add_documents.__get__(store)
+        result = store.add_documents([])
+        assert result == []

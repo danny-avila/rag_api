@@ -14,19 +14,22 @@ os.environ["DSN"] = "dummy://"
 # Do this *before* importing any app modules.
 from langchain_community.vectorstores.pgvector import PGVector
 
+
 def dummy_post_init(self):
     # Skip extension creation
     pass
+
 
 AsyncPgVector.__post_init__ = dummy_post_init
 PGVector.__post_init__ = dummy_post_init
 
 from langchain_core.documents import Document
 
+
 class DummyVectorStore:
     def get_all_ids(self) -> list[str]:
         return ["testid1", "testid2"]
-    
+
     def get_filtered_ids(self, ids) -> list[str]:
         dummy_ids = ["testid1", "testid2"]
         return [id for id in dummy_ids if id in ids]
@@ -40,14 +43,17 @@ class DummyVectorStore:
     def similarity_search_with_score_by_vector(self, embedding, k: int, filter: dict):
         doc = Document(
             page_content="Queried content",
-            metadata={"file_id": filter.get("file_id", "testid1"), "user_id": "testuser"},
+            metadata={
+                "file_id": filter.get("file_id", "testid1"),
+                "user_id": "testuser",
+            },
         )
         return [(doc, 0.9)]
 
-    def add_documents(self, docs, ids):
+    def add_documents(self, documents, ids=None, **kwargs):
         return ids
 
-    async def aadd_documents(self, docs, ids):
+    async def aadd_documents(self, documents, ids=None, **kwargs):
         return ids
 
     async def delete(self, ids=None, collection_only: bool = False):
