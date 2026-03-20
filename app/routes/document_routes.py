@@ -554,7 +554,7 @@ async def _process_documents_async_pipeline(
 async def _process_documents_batched_sync(
     documents: List[Document],
     file_id: str,
-    vector_store: "PgVector",
+    vector_store,
     executor: "ThreadPoolExecutor",
 ) -> List[str]:
     """
@@ -563,7 +563,7 @@ async def _process_documents_batched_sync(
     Args:
         documents: List of Document objects to process
         file_id: Unique identifier for the file being processed
-        vector_store: Synchronous PgVector instance for document storage
+        vector_store: Synchronous vector store instance (ExtendedPgVector or AtlasMongoVector)
         executor: ThreadPoolExecutor for running sync operations
 
     Returns:
