@@ -28,6 +28,7 @@ class EmbeddingsProvider(Enum):
     BEDROCK = "bedrock"
     GOOGLE_GENAI = "google_genai"
     GOOGLE_VERTEXAI = "vertexai"
+    DATABRICKS = "databricks"
 
 
 def get_env_variable(
@@ -287,6 +288,12 @@ def init_embeddings(provider, model):
             model_id=model,
             region_name=AWS_DEFAULT_REGION,
         )
+    elif provider == EmbeddingsProvider.DATABRICKS:
+        from databricks_langchain import DatabricksEmbeddings
+
+        return DatabricksEmbeddings(
+            endpoint=model,
+        )
     else:
         raise ValueError(f"Unsupported embeddings provider: {provider}")
 
@@ -322,6 +329,8 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
         "EMBEDDINGS_MODEL", "amazon.titan-embed-text-v1"
     )
     AWS_DEFAULT_REGION = get_env_variable("AWS_DEFAULT_REGION", "us-east-1")
+elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.DATABRICKS:
+    EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "databricks-bge-large-en")
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 

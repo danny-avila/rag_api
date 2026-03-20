@@ -104,6 +104,7 @@ The following environment variables are required to run the application:
     - ollama: "nomic-embed-text"
     - bedrock: "amazon.titan-embed-text-v1"
     - google_genai: "gemini-embedding-001"
+    - databricks: "databricks-bge-large-en"
 - `RAG_AZURE_OPENAI_API_VERSION`: (Optional) Default is `2023-05-15`. The version of the Azure OpenAI API.
 - `RAG_AZURE_OPENAI_API_KEY`: (Optional) The API key for Azure OpenAI service.
     - Note: `AZURE_OPENAI_API_KEY` will work but `RAG_AZURE_OPENAI_API_KEY` will override it in order to not conflict with LibreChat setting.
@@ -122,6 +123,8 @@ The following environment variables are required to run the application:
 - `GOOGLE_APPLICATION_CREDENTIALS`: (Optional) needed for Google VertexAI embeddings. This should be a path to a service account credential file in JSON format.
 - `GOOGLE_CLOUD_PROJECT`: (Optional) Google Cloud project ID, needed for VertexAI embeddings.
 - `GOOGLE_CLOUD_LOCATION`: (Optional) Google Cloud region for VertexAI embeddings. Defaults to `us-central1`.
+- `DATABRICKS_HOST`: (Optional) Databricks workspace hostname needed for Databricks embeddings.
+- `DATABRICKS_TOKEN`: (Optional) Databricks personal access token needed for Dataricks embeddings.
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
