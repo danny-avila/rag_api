@@ -34,4 +34,4 @@ boto3>=1.42.42,<2
 chardet==5.2.0
 langchain-ollama==1.0.1
 tenacity>=9.0.0
-msoffcrypto-tool>=6.0.0
+msoffcrypto-tool>=6.0.0,<7
