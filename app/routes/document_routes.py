@@ -7,7 +7,7 @@ import traceback
 import aiofiles
 import aiofiles.os
 from shutil import copyfileobj
-from typing import List, Iterable, Optional, TYPE_CHECKING
+from typing import List, Iterable, Optional, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
@@ -27,6 +27,7 @@ import asyncio
 
 if TYPE_CHECKING:
     from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from app.services.vector_store.atlas_mongo_vector import AtlasMongoVector
     from langchain_community.vectorstores.pgvector import PGVector as PgVector
 
 from app.config import (
@@ -554,7 +555,7 @@ async def _process_documents_async_pipeline(
 async def _process_documents_batched_sync(
     documents: List[Document],
     file_id: str,
-    vector_store,
+    vector_store: Union["PgVector", "AtlasMongoVector"],
     executor: "ThreadPoolExecutor",
 ) -> List[str]:
     """

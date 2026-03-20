@@ -17,6 +17,9 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
         ids: Optional[List[str]] = None,
         **kwargs,
     ) -> List[str]:
+        """Caller-supplied ``ids`` are intentionally ignored; IDs are derived from
+        each document's content digest to ensure cross-batch uniqueness within a file.
+        """
         if not documents:
             return []
         file_id = documents[0].metadata["file_id"]

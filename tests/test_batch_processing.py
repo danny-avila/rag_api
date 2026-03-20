@@ -439,16 +439,17 @@ class TestSyncBatchedMongoCompat:
     """Regression tests for MongoDB-compatible batch processing (PR #266)."""
 
     @pytest.mark.asyncio
-    async def test_sync_batched_positional_dispatch(self):
-        """add_documents must be called in a way that works with both PgVector and AtlasMongoVector."""
+    async def test_sync_batched_rejects_documents_keyword_with_legacy_store(self):
+        """Regression: a store using 'docs' (not 'documents') as its param name must
+        still work, proving the call site uses positional — not keyword — dispatch."""
         from app.routes.document_routes import _process_documents_batched_sync
         from concurrent.futures import ThreadPoolExecutor
 
-        class StrictDocumentsStore:
-            """Accepts 'documents' (base class name) but rejects 'docs' as keyword."""
+        class LegacyMongoStore:
+            """No **kwargs — documents= keyword would raise TypeError."""
 
-            def add_documents(self, documents, ids=None, **kwargs):
-                return [f"id_{i}" for i in range(len(documents))]
+            def add_documents(self, docs, ids):
+                return [f"id_{i}" for i in range(len(docs))]
 
             def delete(self, ids=None):
                 pass
@@ -463,21 +464,21 @@ class TestSyncBatchedMongoCompat:
                 result = await _process_documents_batched_sync(
                     documents=docs,
                     file_id="test_file",
-                    vector_store=StrictDocumentsStore(),
+                    vector_store=LegacyMongoStore(),
                     executor=executor,
                 )
 
         assert len(result) == 5
 
     @pytest.mark.asyncio
-    async def test_sync_batched_positional_dispatch_legacy_param_name(self):
-        """Positional dispatch works even if the store still uses 'docs' as param name."""
+    async def test_sync_batched_with_base_class_signature(self):
+        """Positional dispatch also works with a store matching the VectorStore base class signature."""
         from app.routes.document_routes import _process_documents_batched_sync
         from concurrent.futures import ThreadPoolExecutor
 
-        class LegacyParamStore:
-            def add_documents(self, docs, ids):
-                return [f"id_{i}" for i in range(len(docs))]
+        class BaseClassStore:
+            def add_documents(self, documents, ids=None, **kwargs):
+                return [f"id_{i}" for i in range(len(documents))]
 
             def delete(self, ids=None):
                 pass
@@ -492,7 +493,7 @@ class TestSyncBatchedMongoCompat:
                 result = await _process_documents_batched_sync(
                     documents=docs,
                     file_id="test_file",
-                    vector_store=LegacyParamStore(),
+                    vector_store=BaseClassStore(),
                     executor=executor,
                 )
 
@@ -562,8 +563,12 @@ class TestMongoIdGeneration:
         assert len(set(f_ids)) == 5
 
     def test_empty_documents_returns_empty(self):
-        """add_documents with empty list returns empty."""
-        documents = []
-        if not documents:
-            result = []
+        """AtlasMongoVector.add_documents with empty list returns empty."""
+        pytest.importorskip("langchain_mongodb", reason="requires langchain_mongodb")
+        from unittest.mock import MagicMock
+        from app.services.vector_store.atlas_mongo_vector import AtlasMongoVector
+
+        store = MagicMock(spec=AtlasMongoVector)
+        store.add_documents = AtlasMongoVector.add_documents.__get__(store)
+        result = store.add_documents([])
         assert result == []
