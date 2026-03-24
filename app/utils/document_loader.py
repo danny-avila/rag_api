@@ -69,7 +69,7 @@ def cleanup_temp_encoding_file(loader) -> None:
 
 
 def get_loader(filename: str, file_content_type: str, filepath: str):
-    """Get the appropriate document loader based on file type and\or content type."""
+    """Get the appropriate document loader based on file type and/or content type."""
     file_ext = filename.split(".")[-1].lower()
     known_type = True
 
