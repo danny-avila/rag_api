@@ -123,6 +123,7 @@ The following environment variables are required to run the application:
 - `GOOGLE_CLOUD_PROJECT`: (Optional) Google Cloud project ID, needed for VertexAI embeddings.
 - `GOOGLE_CLOUD_LOCATION`: (Optional) Google Cloud region for VertexAI embeddings. Defaults to `us-central1`.
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
+- `PGVECTOR_HALFVEC_DIMENSIONS`: (Optional) Set to the embedding dimensions (e.g., `3072`) to enable halfvec HNSW indexing. See [Vector Index for High-Dimensional Embeddings](#vector-index-for-high-dimensional-embeddings).
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
@@ -203,6 +204,17 @@ db.getCollection("<COLLECTION_NAME>").createIndex({ file_id: 1 })
 
 Replace `<COLLECTION_NAME>` with the same collection used by the RAG API. This ensures lookups remain fast even as the number of embedded documents grows.
 
+
+### Vector Index for High-Dimensional Embeddings
+
+Models like `text-embedding-3-large` produce 3072-dimension vectors. pgvector HNSW indexes only support up to 2000 dimensions for `vector`, but up to 4000 for `halfvec`. Set `PGVECTOR_HALFVEC_DIMENSIONS=3072` and create a matching index:
+
+```sql
+CREATE INDEX CONCURRENTLY idx_embedding_halfvec_cosine
+  ON langchain_pg_embedding
+  USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+```
 
 ### Proxy Configuration
 
