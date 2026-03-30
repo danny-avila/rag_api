@@ -2,12 +2,27 @@ import os
 import time
 import logging
 from typing import Optional, Any, Dict, List, Union
+
+import sqlalchemy
 from sqlalchemy import event
-from sqlalchemy import delete
+from sqlalchemy import delete, literal_column
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from langchain_core.documents import Document
 from langchain_community.vectorstores.pgvector import PGVector
+
+logger = logging.getLogger(__name__)
+
+HALFVEC_DIMENSIONS = os.getenv("PGVECTOR_HALFVEC_DIMENSIONS")
+if HALFVEC_DIMENSIONS:
+    HALFVEC_DIMENSIONS = int(HALFVEC_DIMENSIONS)
+    logger.info(
+        "Halfvec query mode enabled with %d dimensions. "
+        "Ensure a matching HNSW index exists: "
+        "CREATE INDEX ... USING hnsw ((embedding::halfvec(%d)) halfvec_cosine_ops)",
+        HALFVEC_DIMENSIONS,
+        HALFVEC_DIMENSIONS,
+    )
 
 
 class ExtendedPgVector(PGVector):
@@ -117,6 +132,50 @@ class ExtendedPgVector(PGVector):
                 logger.info("-" * 50)
 
         ExtendedPgVector._query_logging_setup = True
+
+    def _query_collection(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        filter: Optional[Dict[str, str]] = None,
+    ) -> List[Any]:
+        if not HALFVEC_DIMENSIONS:
+            return super()._query_collection(embedding=embedding, k=k, filter=filter)
+
+        dims = HALFVEC_DIMENSIONS
+
+        with Session(self._bind) as session:
+            collection = self.get_collection(session)
+            if not collection:
+                raise ValueError("Collection not found")
+
+            filter_by = [self.EmbeddingStore.collection_id == collection.uuid]
+            if filter:
+                if self.use_jsonb:
+                    filter_clauses = self._create_filter_clause(filter)
+                    if filter_clauses is not None:
+                        filter_by.append(filter_clauses)
+                else:
+                    filter_clauses = self._create_filter_clause_json_deprecated(filter)
+                    filter_by.extend(filter_clauses)
+
+            embedding_str = "[" + ",".join(str(float(v)) for v in embedding) + "]"
+            distance_expr = literal_column(
+                f"embedding::halfvec({dims}) <=> '{embedding_str}'::halfvec({dims})"
+            ).label("distance")
+
+            results: List[Any] = (
+                session.query(self.EmbeddingStore, distance_expr)
+                .filter(*filter_by)
+                .order_by(sqlalchemy.asc("distance"))
+                .join(
+                    self.CollectionStore,
+                    self.EmbeddingStore.collection_id == self.CollectionStore.uuid,
+                )
+                .limit(k)
+                .all()
+            )
+            return results
 
     def get_all_ids(self) -> list[str]:
         with Session(self._bind) as session:
