@@ -5,7 +5,7 @@ from typing import Optional, Any, Dict, List, Union
 
 import sqlalchemy
 from sqlalchemy import event
-from sqlalchemy import delete, literal_column
+from sqlalchemy import delete, literal_column, text
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from langchain_core.documents import Document
@@ -163,6 +163,13 @@ class ExtendedPgVector(PGVector):
             distance_expr = literal_column(
                 f"embedding::halfvec({dims}) <=> '{embedding_str}'::halfvec({dims})"
             ).label("distance")
+
+            # When a metadata filter is present, disable index scans so
+            # PostgreSQL uses the GIN/B-tree index for the WHERE clause
+            # instead of the HNSW index for ORDER BY.  HNSW is approximate
+            # and may return 0 rows when few rows match the filter.
+            if filter:
+                session.execute(text("SET LOCAL enable_indexscan = off"))
 
             results: List[Any] = (
                 session.query(self.EmbeddingStore, distance_expr)
