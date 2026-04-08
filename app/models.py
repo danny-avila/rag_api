@@ -38,6 +38,11 @@ class CleanupMethod(str, Enum):
     full = "full"
 
 
+class QueryByEntityBody(BaseModel):
+    query: str
+    k: int = 4
+
+
 class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]

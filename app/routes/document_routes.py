@@ -46,6 +46,7 @@ from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
     QueryRequestBody,
+    QueryByEntityBody,
     DocumentResponse,
     QueryMultipleBody,
     DeleteDocumentsBody,
@@ -418,6 +419,52 @@ async def query_embeddings_by_file_id(
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_id,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/query/{entity_id}")
+async def query_embeddings_by_entity_id(
+    entity_id: str,
+    body: QueryByEntityBody,
+    request: Request,
+):
+    try:
+        embedding = get_cached_query_embedding(body.query)
+
+        if isinstance(vector_store, AsyncPgVector):
+            documents = await vector_store.asimilarity_search_with_score_by_vector(
+                embedding,
+                k=body.k,
+                filter={"user_id": {"$eq": entity_id}},
+                executor=request.app.state.thread_pool,
+            )
+        else:
+            documents = vector_store.similarity_search_with_score_by_vector(
+                embedding,
+                k=body.k,
+                filter={"user_id": {"$eq": entity_id}},
+            )
+
+        if not documents:
+            return []
+
+        return documents
+
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_entity_id | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
+    except Exception as e:
+        logger.error(
+            "Error in query by entity | Entity ID: %s | Query: %s | Error: %s | Traceback: %s",
+            entity_id,
             body.query,
             str(e),
             traceback.format_exc(),
