@@ -50,7 +50,7 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
     DeleteDocumentsBody,
-    FileSummary,
+    DocumentOriginType,
     DocumentOwnerType,
 )
 from app.services.summarization import summarize_files
@@ -287,25 +287,32 @@ async def delete_documents(
 ):
     document_ids = body.file_ids
     user_id = body.entity_id
+    document_origin_type = body.document_origin_type
 
     try:
+        origin_type_value = document_origin_type.value if document_origin_type else None
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
                 document_ids,
                 user_id=user_id,
+                document_origin_type=origin_type_value,
                 executor=request.app.state.thread_pool,
             )
             await vector_store.delete(
                 ids=document_ids,
                 user_id=user_id,
+                document_origin_type=origin_type_value,
                 executor=request.app.state.thread_pool,
             )
         else:
             existing_ids = vector_store.get_filtered_ids(document_ids)
             vector_store.delete(ids=document_ids)
 
-        if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
+        if document_ids:
+            if not all(id in existing_ids for id in document_ids):
+                raise HTTPException(status_code=404, detail="One or more IDs not found")
+        else:
+            document_ids = list(set(existing_ids))
 
         # Delete cached summaries for the removed files
         if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
@@ -726,6 +733,7 @@ def _prepare_documents_sync(
     file_id: str,
     user_id: str,
     clean_content: bool,
+    document_origin_type: str = DocumentOriginType.ORGANIC.value,
 ) -> List[Document]:
     """
     Synchronous document preparation - runs in executor to avoid blocking event loop.
@@ -749,6 +757,7 @@ def _prepare_documents_sync(
                 "file_id": file_id,
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
+                "document_origin_type": document_origin_type,
                 **(doc.metadata or {}),
             },
         )
@@ -762,6 +771,7 @@ async def store_data_in_vector_db(
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
+    document_origin_type: str = DocumentOriginType.ORGANIC.value,
 ) -> dict:
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
@@ -772,6 +782,7 @@ async def store_data_in_vector_db(
         file_id,
         user_id,
         clean_content,
+        document_origin_type,
     )
 
     try:
@@ -924,7 +935,8 @@ async def embed_file(
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
-    document_owner_type: Optional[DocumentOwnerType] = Form(DocumentOwnerType.AGENT)
+    document_owner_type: Optional[DocumentOwnerType] = Form(DocumentOwnerType.AGENT),
+    document_origin_type: DocumentOriginType = Form(DocumentOriginType.ORGANIC)
 ):
     response_status = True
     response_message = "File processed successfully."
@@ -956,6 +968,7 @@ async def embed_file(
             user_id=user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            document_origin_type=document_origin_type.value,
         )
 
         if not result:

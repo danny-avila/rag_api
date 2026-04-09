@@ -49,11 +49,11 @@ class AsyncPgVector(ExtendedPgVector):
         return await self._run_in_executor(executor, super().get_all_ids)
 
     async def get_filtered_ids(
-        self, ids: list[str], user_id: Optional[str] = None, executor=None
+        self, ids: list[str], user_id: Optional[str] = None, document_origin_type: Optional[str] = None, executor=None
     ) -> list[str]:
         executor = executor or self._get_thread_pool()
         return await self._run_in_executor(
-            executor, super().get_filtered_ids, ids, user_id=user_id
+            executor, super().get_filtered_ids, ids, user_id=user_id, document_origin_type=document_origin_type
         )
 
     async def get_documents_by_ids(
@@ -75,11 +75,12 @@ class AsyncPgVector(ExtendedPgVector):
         ids: Optional[list[str]] = None,
         collection_only: bool = False,
         user_id: Optional[str] = None,
+        document_origin_type: Optional[str] = None,
         executor=None,
     ) -> None:
         executor = executor or self._get_thread_pool()
         await self._run_in_executor(
-            executor, self._delete_multiple, ids, collection_only, user_id=user_id
+            executor, self._delete_multiple, ids, collection_only, user_id=user_id, document_origin_type=document_origin_type
         )
 
     async def asimilarity_search_with_score_by_vector(
