@@ -291,6 +291,10 @@ async def delete_documents(
 
     try:
         origin_type_value = document_origin_type.value if document_origin_type else None
+        logger.info(
+            "[delete_documents] request [user_id=%s][file_ids=%s][document_origin_type=%s]",
+            user_id, document_ids, origin_type_value,
+        )
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
                 document_ids,
@@ -313,6 +317,11 @@ async def delete_documents(
                 raise HTTPException(status_code=404, detail="One or more IDs not found")
         else:
             document_ids = list(set(existing_ids))
+
+        logger.info(
+            "[delete_documents] matched [existing_ids=%d][to_delete=%d]",
+            len(existing_ids), len(document_ids),
+        )
 
         # Delete cached summaries for the removed files
         if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
@@ -439,6 +448,10 @@ async def query_embeddings_by_entity_id(
     body: QueryByEntityBody,
     request: Request,
 ):
+    logger.info(
+        "[query_embeddings_by_entity_id] request [entity_id=%s][query=%r][k=%d]",
+        entity_id, body.query, body.k,
+    )
     try:
         embedding = get_cached_query_embedding(body.query)
 
@@ -455,6 +468,11 @@ async def query_embeddings_by_entity_id(
                 k=body.k,
                 filter={"user_id": {"$eq": entity_id}},
             )
+
+        logger.info(
+            "[query_embeddings_by_entity_id] results [entity_id=%s][documents_found=%d]",
+            entity_id, len(documents),
+        )
 
         if not documents:
             return []
@@ -943,6 +961,10 @@ async def embed_file(
     known_type = None
 
     user_id = get_user_id(request, entity_id)
+    logger.info(
+        "[embed_file] request [file_id=%s][filename=%s][user_id=%s][owner_type=%s][origin_type=%s]",
+        file_id, file.filename, user_id, document_owner_type, document_origin_type,
+    )
     validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
@@ -978,7 +1000,13 @@ async def embed_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
-        elif "error" in result:
+
+        logger.info(
+            "[embed_file] stored [file_id=%s][chunks=%d]",
+            file_id, len(result.get("docs", [])),
+        )
+
+        if "error" in result:
             response_status = False
             response_message = "Failed to process/store the file data."
             if isinstance(result["error"], str):
@@ -1288,6 +1316,10 @@ async def summarize_entity_files(
         )
 
     user_id = get_user_id(request, entity_id)
+    logger.info(
+        "[summarize_entity_files] request [entity_id=%s][user_id=%s][file_id=%s][knowledge_id=%s]",
+        entity_id, user_id, file_id, knowledge_id,
+    )
 
     try:
         # Try to load cached summaries first (PGVector only)
@@ -1310,11 +1342,18 @@ async def summarize_entity_files(
             )
 
         if not grouped_docs:
+            logger.info("[summarize_entity_files] no documents found [entity_id=%s]", entity_id)
             return {
                 "entity_id": entity_id,
                 "file_count": 0,
                 "summaries": [],
             }
+
+        logger.info(
+            "[summarize_entity_files] documents loaded [entity_id=%s][total_files=%d][cached=%d][to_compute=%d]",
+            entity_id, len(grouped_docs), len(cached_file_ids),
+            sum(1 for fid in grouped_docs if fid not in cached_file_ids),
+        )
 
         # Build results: use cached summaries where available, compute on-the-fly for the rest
         summaries = []
