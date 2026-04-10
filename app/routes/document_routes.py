@@ -752,6 +752,7 @@ def _prepare_documents_sync(
     user_id: str,
     clean_content: bool,
     document_origin_type: str = DocumentOriginType.ORGANIC.value,
+    filename: str = None,
 ) -> List[Document]:
     """
     Synchronous document preparation - runs in executor to avoid blocking event loop.
@@ -776,6 +777,7 @@ def _prepare_documents_sync(
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
                 "document_origin_type": document_origin_type,
+                **({"filename": filename} if filename else {}),
                 **(doc.metadata or {}),
             },
         )
@@ -790,6 +792,7 @@ async def store_data_in_vector_db(
     clean_content: bool = False,
     executor=None,
     document_origin_type: str = DocumentOriginType.ORGANIC.value,
+    filename: str = None,
 ) -> dict:
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
@@ -801,6 +804,7 @@ async def store_data_in_vector_db(
         user_id,
         clean_content,
         document_origin_type,
+        filename,
     )
 
     try:
@@ -875,6 +879,7 @@ async def embed_local_file(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            filename=document.filename,
         )
 
         if result:
@@ -991,6 +996,7 @@ async def embed_file(
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
             document_origin_type=document_origin_type.value,
+            filename=file.filename,
         )
 
         if not result:
@@ -1150,6 +1156,7 @@ async def embed_file_upload(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            filename=uploaded_file.filename,
         )
 
         if not result:
