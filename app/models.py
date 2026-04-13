@@ -38,15 +38,15 @@ class CleanupMethod(str, Enum):
     full = "full"
 
 
+class QueryByEntityBody(BaseModel):
+    query: str
+    k: int = 4
+
+
 class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
-
-
-class DeleteDocumentsBody(BaseModel):
-    entity_id: Optional[str] = None
-    file_ids: List[str] = []
 
 
 class FileSummary(BaseModel):
@@ -58,3 +58,14 @@ class FileSummary(BaseModel):
 class DocumentOwnerType(Enum):
     AGENT = "AGENT"
     KNOWLEDGE = "KNOWLEDGE"
+
+
+class DocumentOriginType(Enum):
+    ORGANIC = "ORGANIC"
+    SHAREPOINT = "SHAREPOINT"
+
+
+class DeleteDocumentsBody(BaseModel):
+    entity_id: Optional[str] = None
+    file_ids: List[str] = []
+    document_origin_type: Optional[DocumentOriginType] = None

@@ -95,6 +95,11 @@ if debug_mode:
     app.include_router(router=pgvector_routes.router)
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.debug("Validation error: %s", exc.errors())

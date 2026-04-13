@@ -125,15 +125,19 @@ class ExtendedPgVector(PGVector):
             return [result[0] for result in results if result[0] is not None]
 
     def get_filtered_ids(
-        self, ids: list[str], user_id: Optional[str] = None
+        self, ids: list[str], user_id: Optional[str] = None, document_origin_type: Optional[str] = None
     ) -> list[str]:
         with Session(self._bind) as session:
-            query = session.query(self.EmbeddingStore.custom_id).filter(
-                self.EmbeddingStore.custom_id.in_(ids)
-            )
+            query = session.query(self.EmbeddingStore.custom_id)
+            if ids:
+                query = query.filter(self.EmbeddingStore.custom_id.in_(ids))
             if user_id is not None:
                 query = query.filter(
                     self.EmbeddingStore.cmetadata["user_id"].astext == user_id
+                )
+            if document_origin_type is not None:
+                query = query.filter(
+                    self.EmbeddingStore.cmetadata["document_origin_type"].astext == document_origin_type
                 )
             results = query.all()
             return [result[0] for result in results if result[0] is not None]
@@ -177,26 +181,31 @@ class ExtendedPgVector(PGVector):
         ids: Optional[list[str]] = None,
         collection_only: bool = False,
         user_id: Optional[str] = None,
+        document_origin_type: Optional[str] = None,
     ) -> None:
         with Session(self._bind) as session:
-            if ids is not None:
-                self.logger.debug(
-                    "Trying to delete vectors by ids (represented by the model "
-                    "using the custom ids field)"
+            self.logger.debug(
+                "Trying to delete vectors by ids (represented by the model "
+                "using the custom ids field)"
+            )
+            stmt = delete(self.EmbeddingStore)
+            if collection_only:
+                collection = self.get_collection(session)
+                if not collection:
+                    self.logger.warning("Collection not found")
+                    return
+                stmt = stmt.where(
+                    self.EmbeddingStore.collection_id == collection.uuid
                 )
-                stmt = delete(self.EmbeddingStore)
-                if collection_only:
-                    collection = self.get_collection(session)
-                    if not collection:
-                        self.logger.warning("Collection not found")
-                        return
-                    stmt = stmt.where(
-                        self.EmbeddingStore.collection_id == collection.uuid
-                    )
+            if ids:
                 stmt = stmt.where(self.EmbeddingStore.custom_id.in_(ids))
-                if user_id is not None:
-                    stmt = stmt.where(
-                        self.EmbeddingStore.cmetadata["user_id"].astext == user_id
-                    )
-                session.execute(stmt)
+            if user_id is not None:
+                stmt = stmt.where(
+                    self.EmbeddingStore.cmetadata["user_id"].astext == user_id
+                )
+            if document_origin_type is not None:
+                stmt = stmt.where(
+                    self.EmbeddingStore.cmetadata["document_origin_type"].astext == document_origin_type
+                )
+            session.execute(stmt)
             session.commit()

@@ -46,10 +46,11 @@ from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
     QueryRequestBody,
+    QueryByEntityBody,
     DocumentResponse,
     QueryMultipleBody,
     DeleteDocumentsBody,
-    FileSummary,
+    DocumentOriginType,
     DocumentOwnerType,
 )
 from app.services.summarization import summarize_files
@@ -286,25 +287,41 @@ async def delete_documents(
 ):
     document_ids = body.file_ids
     user_id = body.entity_id
+    document_origin_type = body.document_origin_type
 
     try:
+        origin_type_value = document_origin_type.value if document_origin_type else None
+        logger.info(
+            "[delete_documents] request [user_id=%s][file_ids=%s][document_origin_type=%s]",
+            user_id, document_ids, origin_type_value,
+        )
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
                 document_ids,
                 user_id=user_id,
+                document_origin_type=origin_type_value,
                 executor=request.app.state.thread_pool,
             )
             await vector_store.delete(
                 ids=document_ids,
                 user_id=user_id,
+                document_origin_type=origin_type_value,
                 executor=request.app.state.thread_pool,
             )
         else:
             existing_ids = vector_store.get_filtered_ids(document_ids)
             vector_store.delete(ids=document_ids)
 
-        if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
+        if document_ids:
+            if not all(id in existing_ids for id in document_ids):
+                raise HTTPException(status_code=404, detail="One or more IDs not found")
+        else:
+            document_ids = list(set(existing_ids))
+
+        logger.info(
+            "[delete_documents] matched [existing_ids=%d][to_delete=%d]",
+            len(existing_ids), len(document_ids),
+        )
 
         # Delete cached summaries for the removed files
         if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
@@ -418,6 +435,61 @@ async def query_embeddings_by_file_id(
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_id,
+            body.query,
+            str(e),
+            traceback.format_exc(),
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/query/{entity_id}")
+async def query_embeddings_by_entity_id(
+    entity_id: str,
+    body: QueryByEntityBody,
+    request: Request,
+):
+    logger.info(
+        "[query_embeddings_by_entity_id] request [entity_id=%s][query=%r][k=%d]",
+        entity_id, body.query, body.k,
+    )
+    try:
+        embedding = get_cached_query_embedding(body.query)
+
+        if isinstance(vector_store, AsyncPgVector):
+            documents = await vector_store.asimilarity_search_with_score_by_vector(
+                embedding,
+                k=body.k,
+                filter={"user_id": {"$eq": entity_id}},
+                executor=request.app.state.thread_pool,
+            )
+        else:
+            documents = vector_store.similarity_search_with_score_by_vector(
+                embedding,
+                k=body.k,
+                filter={"user_id": {"$eq": entity_id}},
+            )
+
+        logger.info(
+            "[query_embeddings_by_entity_id] results [entity_id=%s][documents_found=%d]",
+            entity_id, len(documents),
+        )
+
+        if not documents:
+            return []
+
+        return documents
+
+    except HTTPException as http_exc:
+        logger.error(
+            "HTTP Exception in query_embeddings_by_entity_id | Status: %d | Detail: %s",
+            http_exc.status_code,
+            http_exc.detail,
+        )
+        raise http_exc
+    except Exception as e:
+        logger.error(
+            "Error in query by entity | Entity ID: %s | Query: %s | Error: %s | Traceback: %s",
+            entity_id,
             body.query,
             str(e),
             traceback.format_exc(),
@@ -679,6 +751,8 @@ def _prepare_documents_sync(
     file_id: str,
     user_id: str,
     clean_content: bool,
+    document_origin_type: str = DocumentOriginType.ORGANIC.value,
+    filename: str = None,
 ) -> List[Document]:
     """
     Synchronous document preparation - runs in executor to avoid blocking event loop.
@@ -702,6 +776,8 @@ def _prepare_documents_sync(
                 "file_id": file_id,
                 "user_id": user_id,
                 "digest": generate_digest(doc.page_content),
+                "document_origin_type": document_origin_type,
+                **({"filename": filename} if filename else {}),
                 **(doc.metadata or {}),
             },
         )
@@ -715,6 +791,8 @@ async def store_data_in_vector_db(
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
+    document_origin_type: str = DocumentOriginType.ORGANIC.value,
+    filename: str = None,
 ) -> dict:
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
@@ -725,6 +803,8 @@ async def store_data_in_vector_db(
         file_id,
         user_id,
         clean_content,
+        document_origin_type,
+        filename,
     )
 
     try:
@@ -799,6 +879,7 @@ async def embed_local_file(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            filename=document.filename,
         )
 
         if result:
@@ -877,13 +958,18 @@ async def embed_file(
     file_id: str = Form(...),
     file: UploadFile = File(...),
     entity_id: str = Form(None),
-    document_owner_type: Optional[DocumentOwnerType] = Form(DocumentOwnerType.AGENT)
+    document_owner_type: Optional[DocumentOwnerType] = Form(DocumentOwnerType.AGENT),
+    document_origin_type: DocumentOriginType = Form(DocumentOriginType.ORGANIC)
 ):
     response_status = True
     response_message = "File processed successfully."
     known_type = None
 
     user_id = get_user_id(request, entity_id)
+    logger.info(
+        "[embed_file] request [file_id=%s][filename=%s][user_id=%s][owner_type=%s][origin_type=%s]",
+        file_id, file.filename, user_id, document_owner_type, document_origin_type,
+    )
     validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
@@ -909,6 +995,8 @@ async def embed_file(
             user_id=user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            document_origin_type=document_origin_type.value,
+            filename=file.filename,
         )
 
         if not result:
@@ -918,7 +1006,13 @@ async def embed_file(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
-        elif "error" in result:
+
+        logger.info(
+            "[embed_file] stored [file_id=%s][chunks=%d]",
+            file_id, len(result.get("docs", [])),
+        )
+
+        if "error" in result:
             response_status = False
             response_message = "Failed to process/store the file data."
             if isinstance(result["error"], str):
@@ -1062,6 +1156,7 @@ async def embed_file_upload(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            filename=uploaded_file.filename,
         )
 
         if not result:
@@ -1228,6 +1323,10 @@ async def summarize_entity_files(
         )
 
     user_id = get_user_id(request, entity_id)
+    logger.info(
+        "[summarize_entity_files] request [entity_id=%s][user_id=%s][file_id=%s][knowledge_id=%s]",
+        entity_id, user_id, file_id, knowledge_id,
+    )
 
     try:
         # Try to load cached summaries first (PGVector only)
@@ -1250,11 +1349,18 @@ async def summarize_entity_files(
             )
 
         if not grouped_docs:
+            logger.info("[summarize_entity_files] no documents found [entity_id=%s]", entity_id)
             return {
                 "entity_id": entity_id,
                 "file_count": 0,
                 "summaries": [],
             }
+
+        logger.info(
+            "[summarize_entity_files] documents loaded [entity_id=%s][total_files=%d][cached=%d][to_compute=%d]",
+            entity_id, len(grouped_docs), len(cached_file_ids),
+            sum(1 for fid in grouped_docs if fid not in cached_file_ids),
+        )
 
         # Build results: use cached summaries where available, compute on-the-fly for the rest
         summaries = []
