@@ -7,7 +7,11 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from langchain_core.documents import Document
-from langchain_community.vectorstores.pgvector import PGVector
+from langchain_community.vectorstores.pgvector import (
+    PGVector,
+    COMPARISONS_TO_NATIVE,
+    SUPPORTED_OPERATORS,
+)
 
 
 class ExtendedPgVector(PGVector):
@@ -117,6 +121,56 @@ class ExtendedPgVector(PGVector):
                 logger.info("-" * 50)
 
         ExtendedPgVector._query_logging_setup = True
+
+    def _handle_field_filter(self, field: str, value: Any) -> Any:
+        """Override LangChain's filter to avoid jsonb_path_match() for equality ops.
+
+        LangChain's default _handle_field_filter uses func.jsonb_path_match() for
+        $eq/$ne/$lt/$gt etc. That function-call predicate cannot use B-tree expression
+        indexes like (cmetadata->>'file_id') or GIN jsonb_path_ops indexes, forcing
+        PostgreSQL into sequential scans on large tables.
+
+        This override rewrites $eq and $ne to use the ->>' astext operator instead,
+        producing WHERE (cmetadata->>'field') = 'value' which hits expression indexes.
+        All other operators ($lt, $gt, $in, $between, etc.) delegate to the parent.
+        """
+        if not isinstance(field, str):
+            raise ValueError(
+                f"field should be a string but got: {type(field)} with value: {field}"
+            )
+        if field.startswith("$"):
+            raise ValueError(
+                f"Invalid filter condition. Expected a field but got an operator: {field}"
+            )
+        if not field.isidentifier():
+            raise ValueError(
+                f"Invalid field name: {field}. Expected a valid identifier."
+            )
+
+        if isinstance(value, dict):
+            if len(value) != 1:
+                raise ValueError(
+                    "Invalid filter condition. Expected a value which "
+                    "is a dictionary with a single key that corresponds to an operator "
+                    f"but got a dictionary with {len(value)} keys. The first few "
+                    f"keys are: {list(value.keys())[:3]}"
+                )
+            operator, filter_value = list(value.items())[0]
+            if operator not in SUPPORTED_OPERATORS:
+                raise ValueError(
+                    f"Invalid operator: {operator}. "
+                    f"Expected one of {SUPPORTED_OPERATORS}"
+                )
+        else:
+            operator = "$eq"
+            filter_value = value
+
+        if operator == "$eq":
+            return self.EmbeddingStore.cmetadata[field].astext == str(filter_value)
+        elif operator == "$ne":
+            return self.EmbeddingStore.cmetadata[field].astext != str(filter_value)
+
+        return super()._handle_field_filter(field, value)
 
     def get_all_ids(self) -> list[str]:
         with Session(self._bind) as session:
