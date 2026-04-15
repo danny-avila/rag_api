@@ -32,14 +32,21 @@ jobs:
           pip install -r requirements.txt
           pip install -r test_requirements.txt
 
-      - name: Run tests and generate report
+      - name: Run unit tests
         env:
           OPENAI_API_KEY: test_key
         run: |
-          pytest --maxfail=1 --disable-warnings --junitxml=test-results.xml
+          pytest --maxfail=1 --disable-warnings --junitxml=test-results-unit.xml
+
+      - name: Run integration tests (pgvector container)
+        env:
+          OPENAI_API_KEY: test_key
+        run: |
+          pytest -m integration --maxfail=3 --disable-warnings --junitxml=test-results-integration.xml
 
       - name: Upload test results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: test-results.xml
+          path: test-results-*.xml
