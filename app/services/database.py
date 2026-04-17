@@ -42,10 +42,10 @@ async def ensure_vector_indexes():
         """
         )
 
-        # Expression index for (cmetadata->>'file_id') text queries.
-        # NOTE: After the JSONB migration, LangChain generates @> containment
-        # queries served by ix_cmetadata_gin instead. Consider dropping this
-        # index in a follow-up once JSONB filtering is confirmed stable.
+        # Expression index for (cmetadata->>'file_id') — critical for query
+        # performance. ExtendedPgVector overrides LangChain's default
+        # jsonb_path_match() to emit cmetadata->>'file_id' = ... which uses
+        # this B-tree index for fast equality lookups.
         await conn.execute(
             f"""
             CREATE INDEX IF NOT EXISTS idx_{table_name}_file_id
