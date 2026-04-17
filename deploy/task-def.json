@@ -18,7 +18,7 @@
       "environment": [
         {
           "name": "EMBEDDINGS_PROVIDER",
-          "value": "openai"
+          "value": "vertexai"
         },
         {
           "name": "POSTGRES_USER",
@@ -34,7 +34,7 @@
         },
         {
           "name": "EMBEDDINGS_MODEL",
-          "value": "text-embedding-3-small"
+          "value": "gemini-embedding-2-preview"
         },
         {
           "name": "WORKERS",
@@ -67,6 +67,10 @@
         {
           "name": "RAG_OPENAI_API_KEY",
           "valueFrom": "arn:aws:secretsmanager:us-east-1:861208159576:secret:PROD-AI-CORE-API-Secrets-1QSV55:RAG_OPENAI_API_KEY::"
+        },
+        {
+          "name": "RAG_GOOGLE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:861208159576:secret:PROD-AI-CORE-API-Secrets-1QSV55:GOOGLE_KEY::"
         }
       ],
       "logConfiguration": {
