@@ -139,12 +139,23 @@ def _make_unique_temp_path(user_id: str, filename: str) -> Optional[str]:
 
 
 async def load_file_content(
-    filename: str, content_type: str, file_path: str, executor
+    filename: str,
+    content_type: str,
+    file_path: str,
+    executor,
+    raw_text: bool = False,
 ) -> tuple:
-    """Load file content using appropriate loader."""
+    """Load file content using appropriate loader.
+
+    Pass ``raw_text=True`` when the caller wants verbatim file contents (e.g.
+    the ``/text`` endpoint) so text-formatted files are not semantically
+    parsed.
+    """
     loader = None
     try:
-        loader, known_type, file_ext = get_loader(filename, content_type, file_path)
+        loader, known_type, file_ext = get_loader(
+            filename, content_type, file_path, raw_text=raw_text
+        )
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(executor, lambda: list(loader.lazy_load()))
         return data, known_type, file_ext
@@ -1085,6 +1096,7 @@ async def extract_text_from_file(
             file.content_type,
             validated_temp_file_path,
             request.app.state.thread_pool,
+            raw_text=True,
         )
 
         # Extract text content from loaded documents

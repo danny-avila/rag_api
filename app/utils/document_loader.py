@@ -68,10 +68,32 @@ def cleanup_temp_encoding_file(loader) -> None:
             logger.warning(f"Failed to remove temporary UTF-8 file: {e}")
 
 
-def get_loader(filename: str, file_content_type: str, filepath: str):
-    """Get the appropriate document loader based on file type and\or content type."""
+def get_loader(
+    filename: str,
+    file_content_type: str,
+    filepath: str,
+    raw_text: bool = False,
+):
+    """Get the appropriate document loader based on file type and\or content type.
+
+    When ``raw_text`` is True, text-formatted files (e.g. Markdown) are loaded
+    verbatim with :class:`TextLoader` so their original formatting is
+    preserved. This is intended for the ``/text`` endpoint, where the caller
+    wants the raw file contents. The embedding path should keep the default
+    (``raw_text=False``) so semantic loaders continue to strip formatting for
+    better vector search quality.
+    """
     file_ext = filename.split(".")[-1].lower()
     known_type = True
+
+    is_markdown = file_ext == "md" or file_content_type in [
+        "text/markdown",
+        "text/x-markdown",
+        "application/markdown",
+        "application/x-markdown",
+    ]
+    if raw_text and is_markdown:
+        return TextLoader(filepath, autodetect_encoding=True), True, file_ext
 
     # File Content Type reference:
     # ref.: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/MIME_types/Common_types
