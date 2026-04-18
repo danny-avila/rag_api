@@ -249,3 +249,32 @@ def test_get_loader_raw_text_leaves_pdf_alone(tmp_path):
 
     assert isinstance(loader, SafePyPDFLoader)
     assert file_ext == "pdf"
+
+
+@pytest.mark.parametrize(
+    "filename, expected_loader_name",
+    [
+        ("doc.pdf", "SafePyPDFLoader"),
+        ("report.docx", "Docx2txtLoader"),
+        ("book.epub", "UnstructuredEPubLoader"),
+        ("data.xlsx", "UnstructuredExcelLoader"),
+        ("slides.pptx", "UnstructuredPowerPointLoader"),
+    ],
+)
+def test_get_loader_raw_text_respects_binary_extensions_over_markdown_mime(
+    tmp_path, filename, expected_loader_name
+):
+    """A markdown Content-Type must not override a known binary extension.
+
+    Some clients send conflicting multipart content types. For an upload named
+    `doc.pdf` with Content-Type `text/markdown`, the PDF loader still has to
+    win — otherwise a binary file is read as UTF-8 text.
+    """
+    file_path = tmp_path / filename
+    file_path.write_text("placeholder binary content")
+
+    loader, _, _ = get_loader(
+        filename, "text/markdown", str(file_path), raw_text=True
+    )
+
+    assert type(loader).__name__ == expected_loader_name

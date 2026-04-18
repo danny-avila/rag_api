@@ -24,6 +24,14 @@ from langchain_community.document_loaders import (
 )
 
 
+# Extensions that identify binary file formats handled by dedicated loaders.
+# Used to prevent a conflicting multipart Content-Type (e.g. ``text/markdown``)
+# from hijacking these files into a text loader.
+_BINARY_FILE_EXTENSIONS = frozenset(
+    {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "epub"}
+)
+
+
 def detect_file_encoding(filepath: str) -> str:
     """
     Detect the encoding of a file using BOM markers and chardet for broader support.
@@ -86,15 +94,6 @@ def get_loader(
     file_ext = filename.split(".")[-1].lower()
     known_type = True
 
-    is_markdown = file_ext == "md" or file_content_type in [
-        "text/markdown",
-        "text/x-markdown",
-        "application/markdown",
-        "application/x-markdown",
-    ]
-    if raw_text and is_markdown:
-        return TextLoader(filepath, autodetect_encoding=True), True, file_ext
-
     # File Content Type reference:
     # ref.: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/MIME_types/Common_types
     if file_ext == "pdf" or file_content_type == "application/pdf":
@@ -143,13 +142,20 @@ def get_loader(
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ]:
         loader = UnstructuredPowerPointLoader(filepath)
-    elif file_ext == "md" or file_content_type in [
-        "text/markdown",
-        "text/x-markdown",
-        "application/markdown",
-        "application/x-markdown",
-    ]:
-        loader = UnstructuredMarkdownLoader(filepath)
+    elif file_ext == "md" or (
+        file_content_type
+        in [
+            "text/markdown",
+            "text/x-markdown",
+            "application/markdown",
+            "application/x-markdown",
+        ]
+        and file_ext not in _BINARY_FILE_EXTENSIONS
+    ):
+        if raw_text:
+            loader = TextLoader(filepath, autodetect_encoding=True)
+        else:
+            loader = UnstructuredMarkdownLoader(filepath)
     elif file_ext == "epub" or file_content_type == "application/epub+zip":
         loader = UnstructuredEPubLoader(filepath)
     elif file_ext in ["doc", "docx"] or file_content_type in [
