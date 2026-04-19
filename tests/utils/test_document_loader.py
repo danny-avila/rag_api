@@ -2,7 +2,13 @@ import os
 from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.utils.document_loader import get_loader, clean_text, process_documents
+from langchain_community.document_loaders import (
+    TextLoader,
+    UnstructuredMarkdownLoader,
+)
 from langchain_core.documents import Document
 
 
@@ -153,7 +159,6 @@ def test_safe_pdf_loader_fallback_via_load():
 def test_safe_pdf_loader_non_filter_error_propagates():
     """KeyError that isn't /Filter should propagate, not silently fallback."""
     from app.utils.document_loader import SafePyPDFLoader
-    import pytest
 
     def bad_gen():
         raise KeyError("SomeOtherKey")
@@ -167,3 +172,109 @@ def test_safe_pdf_loader_non_filter_error_propagates():
 
         with pytest.raises(KeyError, match="SomeOtherKey"):
             list(loader.lazy_load())
+
+
+MARKDOWN_SAMPLE = (
+    "# Heading\n\n"
+    "**bold** and *italic* text with a [link](https://example.com).\n\n"
+    "- item 1\n"
+    "- item 2\n\n"
+    "> a blockquote\n"
+)
+
+
+def test_get_loader_markdown_embed_uses_unstructured(tmp_path):
+    """Default (embedding) path must keep UnstructuredMarkdownLoader for .md."""
+    file_path = tmp_path / "notes.md"
+    file_path.write_text(MARKDOWN_SAMPLE, encoding="utf-8")
+
+    loader, known_type, file_ext = get_loader(
+        "notes.md", "text/markdown", str(file_path)
+    )
+
+    assert isinstance(loader, UnstructuredMarkdownLoader)
+    assert known_type is True
+    assert file_ext == "md"
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "text/markdown",
+        "text/x-markdown",
+        "application/markdown",
+        "application/x-markdown",
+    ],
+)
+def test_get_loader_markdown_raw_text_uses_text_loader(tmp_path, content_type):
+    """/text path (raw_text=True) must load .md verbatim so formatting survives."""
+    file_path = tmp_path / "notes.md"
+    file_path.write_text(MARKDOWN_SAMPLE, encoding="utf-8")
+
+    loader, known_type, file_ext = get_loader(
+        "notes.md", content_type, str(file_path), raw_text=True
+    )
+
+    assert isinstance(loader, TextLoader)
+    assert known_type is True
+    assert file_ext == "md"
+
+    docs = loader.load()
+    assert len(docs) == 1
+    assert docs[0].page_content == MARKDOWN_SAMPLE
+
+
+def test_get_loader_markdown_raw_text_by_extension_only(tmp_path):
+    """Extension-based detection must still kick in when content type is generic."""
+    file_path = tmp_path / "README.md"
+    file_path.write_text(MARKDOWN_SAMPLE, encoding="utf-8")
+
+    loader, _, _ = get_loader(
+        "README.md", "application/octet-stream", str(file_path), raw_text=True
+    )
+
+    assert isinstance(loader, TextLoader)
+
+
+def test_get_loader_raw_text_leaves_pdf_alone(tmp_path):
+    """raw_text must not disturb binary formats — PDF still uses the PDF loader."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    file_path = tmp_path / "doc.pdf"
+    file_path.write_text("not a real pdf")
+
+    loader, _, file_ext = get_loader(
+        "doc.pdf", "application/pdf", str(file_path), raw_text=True
+    )
+
+    assert isinstance(loader, SafePyPDFLoader)
+    assert file_ext == "pdf"
+
+
+@pytest.mark.parametrize(
+    "filename, expected_loader_name",
+    [
+        ("doc.pdf", "SafePyPDFLoader"),
+        ("report.docx", "Docx2txtLoader"),
+        ("book.epub", "UnstructuredEPubLoader"),
+        ("data.xlsx", "UnstructuredExcelLoader"),
+        ("slides.pptx", "UnstructuredPowerPointLoader"),
+    ],
+)
+def test_get_loader_raw_text_respects_binary_extensions_over_markdown_mime(
+    tmp_path, filename, expected_loader_name
+):
+    """A markdown Content-Type must not override a known binary extension.
+
+    Some clients send conflicting multipart content types. For an upload named
+    `doc.pdf` with Content-Type `text/markdown`, the PDF loader still has to
+    win — otherwise a binary file is read as UTF-8 text.
+    """
+    file_path = tmp_path / filename
+    file_path.write_text("placeholder binary content")
+
+    loader, _, _ = get_loader(
+        filename, "text/markdown", str(file_path), raw_text=True
+    )
+
+    assert type(loader).__name__ == expected_loader_name

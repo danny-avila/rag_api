@@ -24,6 +24,14 @@ from langchain_community.document_loaders import (
 )
 
 
+# Extensions that identify binary file formats handled by dedicated loaders.
+# Used to prevent a conflicting multipart Content-Type (e.g. ``text/markdown``)
+# from hijacking these files into a text loader.
+_BINARY_FILE_EXTENSIONS = frozenset(
+    {"pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "epub"}
+)
+
+
 def detect_file_encoding(filepath: str) -> str:
     """
     Detect the encoding of a file using BOM markers and chardet for broader support.
@@ -68,8 +76,21 @@ def cleanup_temp_encoding_file(loader) -> None:
             logger.warning(f"Failed to remove temporary UTF-8 file: {e}")
 
 
-def get_loader(filename: str, file_content_type: str, filepath: str):
-    """Get the appropriate document loader based on file type and\or content type."""
+def get_loader(
+    filename: str,
+    file_content_type: str,
+    filepath: str,
+    raw_text: bool = False,
+):
+    """Get the appropriate document loader based on file type and\or content type.
+
+    When ``raw_text`` is True, text-formatted files (e.g. Markdown) are loaded
+    verbatim with :class:`TextLoader` so their original formatting is
+    preserved. This is intended for the ``/text`` endpoint, where the caller
+    wants the raw file contents. The embedding path should keep the default
+    (``raw_text=False``) so semantic loaders continue to strip formatting for
+    better vector search quality.
+    """
     file_ext = filename.split(".")[-1].lower()
     known_type = True
 
@@ -121,13 +142,20 @@ def get_loader(filename: str, file_content_type: str, filepath: str):
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ]:
         loader = UnstructuredPowerPointLoader(filepath)
-    elif file_ext == "md" or file_content_type in [
-        "text/markdown",
-        "text/x-markdown",
-        "application/markdown",
-        "application/x-markdown",
-    ]:
-        loader = UnstructuredMarkdownLoader(filepath)
+    elif file_ext == "md" or (
+        file_content_type
+        in [
+            "text/markdown",
+            "text/x-markdown",
+            "application/markdown",
+            "application/x-markdown",
+        ]
+        and file_ext not in _BINARY_FILE_EXTENSIONS
+    ):
+        if raw_text:
+            loader = TextLoader(filepath, autodetect_encoding=True)
+        else:
+            loader = UnstructuredMarkdownLoader(filepath)
     elif file_ext == "epub" or file_content_type == "application/epub+zip":
         loader = UnstructuredEPubLoader(filepath)
     elif file_ext in ["doc", "docx"] or file_content_type in [
