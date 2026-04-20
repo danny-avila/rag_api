@@ -1,7 +1,7 @@
 langchain==1.2.15
 langchain-community==0.4.1
-langchain-openai==1.1.13
-langchain-core==1.2.30
+langchain-openai==1.1.14
+langchain-core==1.2.31
 langchain-google-genai==4.2.2
 sqlalchemy==2.0.41
 python-dotenv==1.1.1
@@ -9,7 +9,7 @@ fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
 uvicorn==0.28.0
-pypdf==6.9.1
+pypdf==6.10.2
 unstructured==0.18.32
 markdown==3.8.2
 networkx==3.2.1
@@ -19,13 +19,13 @@ docx2txt==0.9
 pypandoc==1.15
 PyJWT==2.12.1
 asyncpg==0.29.0
-python-multipart==0.0.22
+python-multipart==0.0.26
 aiofiles==24.1.0
 rapidocr-onnxruntime==1.4.4
 opencv-python-headless==4.9.0.80
 pymongo>=4.12.0,<5
 langchain-mongodb==0.11.0
-cryptography==46.0.5
+cryptography==46.0.7
 python-magic==0.4.27
 python-pptx==1.0.2
 xlrd==2.0.2
