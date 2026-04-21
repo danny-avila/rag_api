@@ -54,6 +54,12 @@ from app.utils.document_loader import (
     cleanup_temp_encoding_file,
     maybe_enrich_with_webhook,
 )
+from app.utils.visual_embed import (
+    embed_text_query,
+    maybe_embed_visuals,
+    similarity_search_visual,
+)
+from app.config import VISUAL_EMBED_URL, VISUAL_QUERY_TOP_K
 from app.utils.health import is_health_ok
 
 router = APIRouter()
@@ -317,6 +323,37 @@ def get_cached_query_embedding(query: str):
     return vector_store.embedding_function.embed_query(query)
 
 
+async def _fetch_visual_matches_for_file_ids(
+    request: Request, query: str, file_ids: List[str]
+) -> list:
+    """Cross-modal retrieval: text query → CLIP-text vector → pgvector
+    similarity on ``visual_chunks``. Soft-fails on any error (returns []) so
+    a broken sidecar never breaks the main query path."""
+    if not VISUAL_EMBED_URL or not file_ids:
+        return []
+    try:
+        loop = asyncio.get_running_loop()
+        query_embedding = await loop.run_in_executor(
+            request.app.state.thread_pool, embed_text_query, query
+        )
+    except Exception as exc:
+        logger.warning("visual retrieval: text embed failed: %s", exc)
+        return []
+    try:
+        from app.services.database import PSQLDatabase
+
+        pool = await PSQLDatabase.get_pool()
+        return await similarity_search_visual(
+            pool=pool,
+            query_embedding=query_embedding,
+            file_ids=file_ids,
+            k=VISUAL_QUERY_TOP_K,
+        )
+    except Exception as exc:
+        logger.warning("visual retrieval: similarity search failed: %s", exc)
+        return []
+
+
 @router.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -347,6 +384,11 @@ async def query_embeddings_by_file_id(
             )
 
         if not documents:
+            if body.include_visual:
+                visual = await _fetch_visual_matches_for_file_ids(
+                    request, body.query, [body.file_id]
+                )
+                return {"chunks": authorized_documents, "visual_matches": visual}
             return authorized_documents
 
         document, score = documents[0]
@@ -375,6 +417,11 @@ async def query_embeddings_by_file_id(
                     f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
                 )
 
+        if body.include_visual:
+            visual = await _fetch_visual_matches_for_file_ids(
+                request, body.query, [body.file_id]
+            )
+            return {"chunks": authorized_documents, "visual_matches": visual}
         return authorized_documents
 
     except HTTPException as http_exc:
@@ -777,6 +824,15 @@ async def embed_local_file(
             executor=request.app.state.thread_pool,
         )
 
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=file_path,
+            file_id=document.file_id,
+            file_ext=file_ext,
+            user_id=user_id,
+            executor=request.app.state.thread_pool,
+        )
+
         if result:
             return {
                 "status": True,
@@ -850,6 +906,15 @@ async def embed_file(
             file_id=file_id,
             user_id=user_id,
             clean_content=file_ext == "pdf",
+            executor=request.app.state.thread_pool,
+        )
+
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=validated_file_path,
+            file_id=file_id,
+            file_ext=file_ext,
+            user_id=user_id,
             executor=request.app.state.thread_pool,
         )
 
@@ -989,6 +1054,15 @@ async def embed_file_upload(
             executor=request.app.state.thread_pool,
         )
 
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=validated_temp_file_path,
+            file_id=file_id,
+            file_ext=file_ext,
+            user_id=user_id,
+            executor=request.app.state.thread_pool,
+        )
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1042,6 +1116,14 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
+
+        if body.include_visual:
+            visual = await _fetch_visual_matches_for_file_ids(
+                request, body.query, body.file_ids
+            )
+            # When include_visual is True, we must not 404 just because the
+            # text path came back empty — visual matches might still be useful.
+            return {"chunks": documents, "visual_matches": visual}
 
         # Ensure documents list is not empty
         if not documents:

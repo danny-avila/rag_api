@@ -103,6 +103,22 @@ PRE_EXTRACTION_WEBHOOK_TIMEOUT = int(
     get_env_variable("PRE_EXTRACTION_WEBHOOK_TIMEOUT", "60")
 )
 
+# Optional multimodal-RAG visual pipeline. When VISUAL_EMBED_URL is set, each
+# ingested PDF is rendered to page PNGs via pdftoppm and each page is sent to
+# the CLIP embed sidecar; the resulting vectors are stored in the
+# `visual_chunks` pgvector table for retrieval. All steps soft-fail: if
+# pdftoppm, the sidecar, or the DB is unreachable, the text ingest path still
+# succeeds.
+VISUAL_EMBED_URL = get_env_variable("VISUAL_EMBED_URL", "")
+# Text-query endpoint of the same CLIP sidecar. Empty → derive from
+# VISUAL_EMBED_URL by swapping /embed/image for /embed/text.
+VISUAL_TEXT_EMBED_URL = get_env_variable("VISUAL_TEXT_EMBED_URL", "")
+VISUAL_PAGE_DPI = int(get_env_variable("VISUAL_PAGE_DPI", "100"))
+VISUAL_STORAGE_ROOT = get_env_variable("VISUAL_STORAGE_ROOT", "/var/rag-visual")
+VISUAL_EMBED_TIMEOUT = int(get_env_variable("VISUAL_EMBED_TIMEOUT", "30"))
+VISUAL_SCORE_THRESHOLD = float(get_env_variable("VISUAL_SCORE_THRESHOLD", "0.25"))
+VISUAL_QUERY_TOP_K = int(get_env_variable("VISUAL_QUERY_TOP_K", "3"))
+
 if POSTGRES_USE_UNIX_SOCKET:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"
 else:

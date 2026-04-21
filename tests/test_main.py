@@ -173,6 +173,83 @@ def test_query_embeddings_by_file_id(auth_headers):
         assert doc["page_content"] == "Queried content"
 
 
+def test_query_include_visual_wraps_response(auth_headers, monkeypatch):
+    """include_visual=True returns {chunks, visual_matches} and calls the visual helper."""
+
+    async def fake_visual(request, query, file_ids):
+        assert file_ids == ["testid1"]
+        return [
+            {
+                "file_id": "testid1",
+                "page_number": 2,
+                "image_path": "/var/rag-visual/testid1/page-2.png",
+                "score": 0.87,
+            }
+        ]
+
+    monkeypatch.setattr(
+        document_routes, "_fetch_visual_matches_for_file_ids", fake_visual
+    )
+
+    data = {
+        "query": "Wie ist das Layout auf Seite 2?",
+        "file_id": "testid1",
+        "k": 4,
+        "entity_id": "testuser",
+        "include_visual": True,
+    }
+    response = client.post("/query", json=data, headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, dict)
+    assert "chunks" in body and "visual_matches" in body
+    assert body["visual_matches"][0]["page_number"] == 2
+    assert body["visual_matches"][0]["score"] == 0.87
+
+
+def test_query_include_visual_when_text_empty(auth_headers, monkeypatch):
+    """When the text index returns nothing but include_visual=True,
+    the response still wraps and ships the visual hits (no 404)."""
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    async def no_docs(self, embedding, k, filter=None, executor=None):
+        return []
+
+    monkeypatch.setattr(
+        AsyncPgVector, "asimilarity_search_with_score_by_vector", no_docs
+    )
+
+    async def fake_visual(request, query, file_ids):
+        return [
+            {
+                "file_id": "testid1",
+                "page_number": 1,
+                "image_path": "/x/p1.png",
+                "score": 0.42,
+            }
+        ]
+
+    monkeypatch.setattr(
+        document_routes, "_fetch_visual_matches_for_file_ids", fake_visual
+    )
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "q",
+            "file_id": "testid1",
+            "k": 4,
+            "entity_id": "testuser",
+            "include_visual": True,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chunks"] == []
+    assert body["visual_matches"][0]["score"] == 0.42
+
+
 def test_embed_local_file(tmp_path, auth_headers, monkeypatch):
     # Monkeypatch RAG_UPLOAD_DIR so the file is within the allowed directory.
     monkeypatch.setattr(document_routes, "RAG_UPLOAD_DIR", str(tmp_path))
