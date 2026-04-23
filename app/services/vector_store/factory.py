@@ -34,13 +34,16 @@ def _build_search_path(schemas: List[str]) -> str:
 
 
 def _verify_schemas_exist(connection_string: str, schemas: List[str]) -> None:
-    """Raise if any requested schema doesn't exist in the target database.
+    """Raise if any requested schema is missing or lacks USAGE/CREATE for the
+    connecting role.
 
     Silent fallback is worse than failing fast here: PostgreSQL resolves
     unqualified CREATE TABLE against the first schema in search_path where
-    the role has CREATE privileges, so a typo in POSTGRES_SCHEMA would
-    land the pgvector tables in `public` instead of the intended namespace,
-    silently defeating the isolation this feature is meant to provide.
+    the role has CREATE privileges. A typo or a privilege gap on the target
+    schema would therefore land the pgvector tables in `public` (the next
+    entry in the search_path appended by _build_search_path) instead of the
+    intended namespace, silently defeating the isolation this feature is
+    meant to provide.
     """
     from sqlalchemy import create_engine, text
 
@@ -49,19 +52,35 @@ def _verify_schemas_exist(connection_string: str, schemas: List[str]) -> None:
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
-                    "SELECT schema_name FROM information_schema.schemata "
-                    "WHERE schema_name = ANY(:names)"
+                    "SELECT s.schema_name, "
+                    "       has_schema_privilege(s.schema_name, 'USAGE') AS has_usage, "
+                    "       has_schema_privilege(s.schema_name, 'CREATE') AS has_create "
+                    "FROM information_schema.schemata s "
+                    "WHERE s.schema_name = ANY(:names)"
                 ),
                 {"names": schemas},
             ).fetchall()
-            existing = {r[0] for r in rows}
-            missing = [s for s in schemas if s not in existing]
+            found = {row[0]: (row[1], row[2]) for row in rows}
+
+            missing = [s for s in schemas if s not in found]
+            no_usage = [s for s in schemas if s in found and not found[s][0]]
+            no_create = [s for s in schemas if s in found and not found[s][1]]
+
+            problems = []
             if missing:
+                problems.append(f"does not exist: {missing!r}")
+            if no_usage:
+                problems.append(f"role lacks USAGE on: {no_usage!r}")
+            if no_create:
+                problems.append(f"role lacks CREATE on: {no_create!r}")
+
+            if problems:
+                target = (missing or no_usage or no_create)[0]
                 raise ValueError(
-                    f"POSTGRES_SCHEMA: schema(s) {missing!r} do not exist. "
-                    "Create them out-of-band first (e.g. "
-                    f"`CREATE SCHEMA IF NOT EXISTS {missing[0]}; "
-                    f"GRANT USAGE, CREATE ON SCHEMA {missing[0]} TO <app_user>;`)."
+                    "POSTGRES_SCHEMA: " + "; ".join(problems) + ". "
+                    "Create/grant out-of-band first (e.g. "
+                    f"`CREATE SCHEMA IF NOT EXISTS {target}; "
+                    f"GRANT USAGE, CREATE ON SCHEMA {target} TO <app_user>;`)."
                 )
     finally:
         engine.dispose()
