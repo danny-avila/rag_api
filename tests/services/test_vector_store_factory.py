@@ -142,6 +142,50 @@ def test_get_vector_store_propagates_create_extension_false():
         assert kwargs.get("create_extension") is False
 
 
+def test_get_vector_store_defaults_enable_pool_pre_ping():
+    """Default engine_args must enable pool_pre_ping — the back-compat-safe
+    default that prevents dead-connection errors on remote Postgres."""
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store("conn", mock_embeddings, "coll", mode="async")
+        _, kwargs = MockPG.call_args
+        engine_args = kwargs.get("engine_args")
+        assert engine_args == {"pool_pre_ping": True}
+
+
+def test_get_vector_store_can_disable_pool_pre_ping():
+    """pool_pre_ping=False must be propagated — the escape hatch for callers
+    that want to avoid the per-checkout SELECT 1 overhead."""
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", pool_pre_ping=False
+        )
+        _, kwargs = MockPG.call_args
+        assert kwargs.get("engine_args") == {"pool_pre_ping": False}
+
+
+def test_get_vector_store_propagates_pool_recycle():
+    """pool_recycle>0 must appear in engine_args; pool_recycle<=0 must be
+    omitted so SQLAlchemy falls back to its own default (no recycling)."""
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", pool_recycle=1800
+        )
+        _, kwargs = MockPG.call_args
+        engine_args = kwargs.get("engine_args")
+        assert engine_args == {"pool_pre_ping": True, "pool_recycle": 1800}
+
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", pool_recycle=-1
+        )
+        _, kwargs = MockPG.call_args
+        assert "pool_recycle" not in kwargs.get("engine_args", {})
+
+
 def test_load_file_content_cleans_up_on_lazy_load_failure():
     """cleanup_temp_encoding_file is called even when lazy_load() raises."""
     from app.routes.document_routes import load_file_content
