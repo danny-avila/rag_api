@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 from app.config import (
     logger,
     vector_store,
+    VECTOR_DB_TYPE,
+    VectorDBType,
     RAG_UPLOAD_DIR,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
@@ -41,16 +43,33 @@ from app.config import (
     RAG_DISTANCE_THRESHOLD,
 )
 
+# Warn once at import time if the user set a threshold under Atlas, where
+# the score direction is inverted (Atlas vectorSearchScore: higher = better)
+# and naive `score <= threshold` would keep the *weaker* matches. We scope
+# the filter to pgvector only until we grow a first-class "min similarity"
+# semantic for Atlas.
+if (
+    RAG_DISTANCE_THRESHOLD is not None
+    and VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
+):
+    logger.warning(
+        "RAG_DISTANCE_THRESHOLD is set but VECTOR_DB_TYPE=atlas-mongo; "
+        "Atlas returns similarity scores (higher = better) which would "
+        "invert the filter semantics, so the threshold will be ignored."
+    )
+
 
 def _apply_distance_threshold(documents):
     """Drop (doc, score) tuples whose distance exceeds RAG_DISTANCE_THRESHOLD.
 
-    The score returned by similarity_search_with_score_by_vector is a
-    distance (lower = more similar), so results above the threshold are
-    the *less* relevant ones we want to discard. No-op when the env var
-    is unset.
+    Only applied for pgvector, where similarity_search_with_score_by_vector
+    returns a distance (lower = more similar). Skipped for Atlas because its
+    score is a similarity (higher = better) and applying the same comparison
+    would keep the weakest matches and drop the strongest.
     """
     if RAG_DISTANCE_THRESHOLD is None:
+        return documents
+    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         return documents
     return [(doc, score) for doc, score in documents if score <= RAG_DISTANCE_THRESHOLD]
 from app.constants import ERROR_MESSAGES
