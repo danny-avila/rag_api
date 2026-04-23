@@ -34,16 +34,23 @@ def _build_search_path(schemas: List[str]) -> str:
 
 
 def _verify_schemas_exist(connection_string: str, schemas: List[str]) -> None:
-    """Raise if any requested schema is missing or lacks USAGE/CREATE for the
-    connecting role.
+    """Raise if the POSTGRES_SCHEMA config won't let the app write to the
+    target schema or read types from its fallbacks.
+
+    schemas[0] is the write target — the schema pgvector's tables will land
+    in — so the role needs USAGE + CREATE there. schemas[1:] are read-only
+    search_path fallbacks for type/function resolution (e.g. an `extensions`
+    schema that holds the `vector` type), so USAGE alone is sufficient; a
+    role with CREATE here is fine too, but demanding it would reject the
+    common least-privilege setup where writes are intentionally confined to
+    the target schema.
 
     Silent fallback is worse than failing fast here: PostgreSQL resolves
     unqualified CREATE TABLE against the first schema in search_path where
-    the role has CREATE privileges. A typo or a privilege gap on the target
-    schema would therefore land the pgvector tables in `public` (the next
-    entry in the search_path appended by _build_search_path) instead of the
-    intended namespace, silently defeating the isolation this feature is
-    meant to provide.
+    the role has CREATE privileges, so a typo or a missing grant on the
+    target would land the pgvector tables in `public` (the entry appended
+    by _build_search_path) instead of the intended namespace, silently
+    defeating the isolation this feature is meant to provide.
     """
     from sqlalchemy import create_engine, text
 
@@ -62,25 +69,36 @@ def _verify_schemas_exist(connection_string: str, schemas: List[str]) -> None:
             ).fetchall()
             found = {row[0]: (row[1], row[2]) for row in rows}
 
+            target_schema = schemas[0]
+            fallback_schemas = schemas[1:]
+
             missing = [s for s in schemas if s not in found]
+            # USAGE is required on every listed schema (target to write,
+            # fallbacks to look up types/functions at query time).
             no_usage = [s for s in schemas if s in found and not found[s][0]]
-            no_create = [s for s in schemas if s in found and not found[s][1]]
+            # CREATE is only required on the target schema — the fallback
+            # entries exist solely to make type resolution work.
+            no_create_target = (
+                [target_schema]
+                if target_schema in found and not found[target_schema][1]
+                else []
+            )
 
             problems = []
             if missing:
                 problems.append(f"does not exist: {missing!r}")
             if no_usage:
                 problems.append(f"role lacks USAGE on: {no_usage!r}")
-            if no_create:
-                problems.append(f"role lacks CREATE on: {no_create!r}")
+            if no_create_target:
+                problems.append(f"role lacks CREATE on target: {no_create_target!r}")
 
             if problems:
-                target = (missing or no_usage or no_create)[0]
+                hint_target = (missing or no_usage or no_create_target)[0]
                 raise ValueError(
                     "POSTGRES_SCHEMA: " + "; ".join(problems) + ". "
                     "Create/grant out-of-band first (e.g. "
-                    f"`CREATE SCHEMA IF NOT EXISTS {target}; "
-                    f"GRANT USAGE, CREATE ON SCHEMA {target} TO <app_user>;`)."
+                    f"`CREATE SCHEMA IF NOT EXISTS {hint_target}; "
+                    f"GRANT USAGE, CREATE ON SCHEMA {hint_target} TO <app_user>;`)."
                 )
     finally:
         engine.dispose()
