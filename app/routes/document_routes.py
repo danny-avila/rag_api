@@ -56,10 +56,16 @@ from app.utils.document_loader import (
 )
 from app.utils.visual_embed import (
     embed_text_query,
+    fetch_visual_chunks_for_pages,
     maybe_embed_visuals,
     similarity_search_visual,
 )
-from app.config import VISUAL_EMBED_URL, VISUAL_QUERY_TOP_K
+from app.config import (
+    VISUAL_EMBED_URL,
+    VISUAL_QUERY_TOP_K,
+    VISUAL_TEXT_COUPLED,
+    VISUAL_TEXT_COUPLED_MAX_PAGES,
+)
 from app.utils.health import is_health_ok
 
 router = APIRouter()
@@ -323,14 +329,91 @@ def get_cached_query_embedding(query: str):
     return vector_store.embedding_function.embed_query(query)
 
 
+def _pages_by_file_from_text_docs(text_documents) -> dict:
+    """Extract {file_id: [page_number, ...]} from text similarity_search results.
+
+    Preserves rank order (earliest text hit → first page in the list) and
+    dedupes within each file. Chunks without a ``page_number`` (e.g. pre-
+    Phase-3 embeddings) are silently skipped.
+    """
+    pages_by_file: dict = {}
+    if not text_documents:
+        return pages_by_file
+    for entry in text_documents:
+        doc = entry[0] if isinstance(entry, tuple) else entry
+        metadata = getattr(doc, "metadata", None) or {}
+        file_id = metadata.get("file_id")
+        page_number = metadata.get("page_number")
+        if not file_id or page_number is None:
+            continue
+        try:
+            page_number = int(page_number)
+        except (TypeError, ValueError):
+            continue
+        bucket = pages_by_file.setdefault(file_id, [])
+        if page_number not in bucket:
+            bucket.append(page_number)
+    return pages_by_file
+
+
 async def _fetch_visual_matches_for_file_ids(
-    request: Request, query: str, file_ids: List[str]
+    request: Request,
+    query: str,
+    file_ids: List[str],
+    text_documents: Optional[list] = None,
 ) -> list:
-    """Cross-modal retrieval: text query → CLIP-text vector → pgvector
-    similarity on ``visual_chunks``. Soft-fails on any error (returns []) so
-    a broken sidecar never breaks the main query path."""
+    """Cross-modal retrieval for /query's visual_matches field.
+
+    Two signals are merged when ``VISUAL_TEXT_COUPLED`` is enabled:
+
+      1. **Primary** — text-page-coupling: use the pages of the text-search
+         hits (per file_id) to look up visual_chunks directly. Fixes the
+         CLIP-weights-text-inside-images bias: a page whose headline matches
+         the query outranks the page with the actually-relevant photo.
+      2. **Secondary** — CLIP cross-modal: text query embedded via the CLIP
+         text encoder, nearest neighbours in ``visual_chunks``. Keeps
+         visually-relevant pages that the text pipeline missed.
+
+    Dedup is by (file_id, page_number); primary wins. Soft-fails on any
+    error (returns []) so a broken sidecar never breaks the main query path.
+    """
     if not VISUAL_EMBED_URL or not file_ids:
         return []
+
+    results: list = []
+    seen: set = set()
+
+    # Primary signal: text-page-coupling.
+    if VISUAL_TEXT_COUPLED:
+        try:
+            from app.services.database import PSQLDatabase
+
+            pool = await PSQLDatabase.get_pool()
+            pages_by_file = _pages_by_file_from_text_docs(text_documents)
+            for file_id, pages in pages_by_file.items():
+                if file_id not in file_ids:
+                    continue
+                capped = pages[:VISUAL_TEXT_COUPLED_MAX_PAGES]
+                rows = await fetch_visual_chunks_for_pages(
+                    pool=pool, file_id=file_id, page_numbers=capped
+                )
+                # Preserve text-rank order by reindexing from ``capped``.
+                by_page = {r["page_number"]: r for r in rows}
+                for page in capped:
+                    row = by_page.get(page)
+                    if not row:
+                        continue
+                    key = (row["file_id"], row["page_number"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Synthetic score above VISUAL_SCORE_THRESHOLD so downstream
+                    # filters treat text-coupled hits as top-tier.
+                    results.append({**row, "score": 1.0, "source": "text_coupled"})
+        except Exception as exc:
+            logger.warning("visual retrieval: text-page-coupling failed: %s", exc)
+
+    # Secondary signal: CLIP cross-modal.
     try:
         loop = asyncio.get_running_loop()
         query_embedding = await loop.run_in_executor(
@@ -338,12 +421,12 @@ async def _fetch_visual_matches_for_file_ids(
         )
     except Exception as exc:
         logger.warning("visual retrieval: text embed failed: %s", exc)
-        return []
+        return results
     try:
         from app.services.database import PSQLDatabase
 
         pool = await PSQLDatabase.get_pool()
-        return await similarity_search_visual(
+        clip_hits = await similarity_search_visual(
             pool=pool,
             query_embedding=query_embedding,
             file_ids=file_ids,
@@ -351,7 +434,15 @@ async def _fetch_visual_matches_for_file_ids(
         )
     except Exception as exc:
         logger.warning("visual retrieval: similarity search failed: %s", exc)
-        return []
+        return results
+
+    for hit in clip_hits:
+        key = (hit["file_id"], hit["page_number"])
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({**hit, "source": "clip"})
+    return results
 
 
 @router.post("/query")
@@ -386,7 +477,7 @@ async def query_embeddings_by_file_id(
         if not documents:
             if body.include_visual:
                 visual = await _fetch_visual_matches_for_file_ids(
-                    request, body.query, [body.file_id]
+                    request, body.query, [body.file_id], text_documents=documents
                 )
                 return {"chunks": authorized_documents, "visual_matches": visual}
             return authorized_documents
@@ -419,7 +510,10 @@ async def query_embeddings_by_file_id(
 
         if body.include_visual:
             visual = await _fetch_visual_matches_for_file_ids(
-                request, body.query, [body.file_id]
+                request,
+                body.query,
+                [body.file_id],
+                text_documents=authorized_documents,
             )
             return {"chunks": authorized_documents, "visual_matches": visual}
         return authorized_documents
@@ -1119,7 +1213,7 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
 
         if body.include_visual:
             visual = await _fetch_visual_matches_for_file_ids(
-                request, body.query, body.file_ids
+                request, body.query, body.file_ids, text_documents=documents
             )
             # When include_visual is True, we must not 404 just because the
             # text path came back empty — visual matches might still be useful.

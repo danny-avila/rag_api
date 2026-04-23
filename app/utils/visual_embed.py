@@ -153,6 +153,41 @@ async def persist_visual_chunk(
         )
 
 
+async def fetch_visual_chunks_for_pages(
+    pool,
+    file_id: str,
+    page_numbers: List[int],
+) -> List[dict]:
+    """Lookup rows from ``visual_chunks`` by explicit (file_id, page_number).
+
+    Used by the text-page-coupling path: the text pipeline has already
+    identified the relevant pages, and we attach the visuals of those pages
+    regardless of CLIP score. Missing pages are simply absent from the result.
+    """
+    if not page_numbers:
+        return []
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT file_id, page_number, image_path
+              FROM visual_chunks
+             WHERE file_id = $1
+               AND page_number = ANY($2::int[])
+             ORDER BY page_number
+            """,
+            file_id,
+            list(page_numbers),
+        )
+    return [
+        {
+            "file_id": r["file_id"],
+            "page_number": r["page_number"],
+            "image_path": r["image_path"],
+        }
+        for r in rows
+    ]
+
+
 async def similarity_search_visual(
     pool,
     query_embedding: List[float],

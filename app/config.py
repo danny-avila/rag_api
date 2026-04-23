@@ -118,6 +118,16 @@ VISUAL_STORAGE_ROOT = get_env_variable("VISUAL_STORAGE_ROOT", "/var/rag-visual")
 VISUAL_EMBED_TIMEOUT = int(get_env_variable("VISUAL_EMBED_TIMEOUT", "30"))
 VISUAL_SCORE_THRESHOLD = float(get_env_variable("VISUAL_SCORE_THRESHOLD", "0.25"))
 VISUAL_QUERY_TOP_K = int(get_env_variable("VISUAL_QUERY_TOP_K", "3"))
+# Text-to-visual-page-coupling (Phase 4). When True, /query uses the pages of
+# the text-search hits as the primary source of visual_matches, with CLIP
+# cross-modal retrieval as a secondary signal. Rationale: CLIP-style models
+# weight text-inside-images, so a page with a matching headline can outrank
+# the page with the actually-relevant photo. The text pipeline already knows
+# which pages are relevant — couple the visuals to that decision.
+VISUAL_TEXT_COUPLED = get_env_variable("VISUAL_TEXT_COUPLED", "true").lower() == "true"
+VISUAL_TEXT_COUPLED_MAX_PAGES = int(
+    get_env_variable("VISUAL_TEXT_COUPLED_MAX_PAGES", "4")
+)
 
 if POSTGRES_USE_UNIX_SOCKET:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"

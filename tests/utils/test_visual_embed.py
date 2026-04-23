@@ -251,6 +251,55 @@ def test_similarity_search_visual_drops_low_scores(enabled_visual):
     assert results[0]["score"] == pytest.approx(0.9)
 
 
+def test_fetch_visual_chunks_for_pages_returns_only_requested_pages(enabled_visual):
+    """Direct lookup by (file_id, page_number). DB returns subset; helper
+    passes them through unchanged (order is SQL-imposed — ORDER BY page_number)."""
+    pool = FakePool()
+    pool.fetch_result = [
+        {"file_id": "f1", "page_number": 5, "image_path": "/x/f1/p-05.png"},
+        {"file_id": "f1", "page_number": 8, "image_path": "/x/f1/p-08.png"},
+        {"file_id": "f1", "page_number": 12, "image_path": "/x/f1/p-12.png"},
+    ]
+    results = asyncio.run(
+        enabled_visual.fetch_visual_chunks_for_pages(
+            pool=pool, file_id="f1", page_numbers=[5, 8, 12]
+        )
+    )
+    assert [r["page_number"] for r in results] == [5, 8, 12]
+    assert all(r["file_id"] == "f1" for r in results)
+    assert "score" not in results[0]  # helper does not synthesize a score
+
+    # Verify the SQL params: file_id + int[] of page numbers.
+    assert len(pool.fetched) == 1
+    args = pool.fetched[0]["args"]
+    assert args[0] == "f1"
+    assert list(args[1]) == [5, 8, 12]
+
+
+def test_fetch_visual_chunks_for_pages_returns_empty_for_missing_pages(enabled_visual):
+    """If the DB has no rows for the requested pages (e.g. visual ingest
+    soft-failed for that file), the helper returns an empty list — the
+    caller treats that as 'no visuals for these pages' and moves on."""
+    pool = FakePool()
+    pool.fetch_result = []
+    results = asyncio.run(
+        enabled_visual.fetch_visual_chunks_for_pages(
+            pool=pool, file_id="f-missing", page_numbers=[1, 2, 3]
+        )
+    )
+    assert results == []
+
+    # Empty input short-circuits — no DB call at all.
+    pool2 = FakePool()
+    results2 = asyncio.run(
+        enabled_visual.fetch_visual_chunks_for_pages(
+            pool=pool2, file_id="f1", page_numbers=[]
+        )
+    )
+    assert results2 == []
+    assert pool2.fetched == []
+
+
 def test_similarity_search_visual_empty_files_returns_empty(enabled_visual):
     pool = FakePool()
     results = asyncio.run(
