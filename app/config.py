@@ -304,12 +304,17 @@ EMBEDDINGS_PROVIDER = EmbeddingsProvider(
     get_env_variable("EMBEDDINGS_PROVIDER", EmbeddingsProvider.OPENAI.value).lower()
 )
 
-_embeddings_dimensions_raw = get_env_variable("EMBEDDINGS_DIMENSIONS", None)
-EMBEDDINGS_DIMENSIONS = (
-    int(_embeddings_dimensions_raw)
-    if _embeddings_dimensions_raw not in (None, "")
-    else None
-)
+# Only parse EMBEDDINGS_DIMENSIONS for providers that honor it (OpenAI / Azure).
+# Parsing unconditionally at import would turn an unrelated stale env var
+# (e.g. EMBEDDINGS_DIMENSIONS=foo left over from an OpenAI deployment) into a
+# hard boot failure under bedrock / hf / ollama / etc., even though those
+# providers silently ignore the value.
+EMBEDDINGS_DIMENSIONS = None
+
+if EMBEDDINGS_PROVIDER in (EmbeddingsProvider.OPENAI, EmbeddingsProvider.AZURE):
+    _embeddings_dimensions_raw = get_env_variable("EMBEDDINGS_DIMENSIONS", None)
+    if _embeddings_dimensions_raw not in (None, ""):
+        EMBEDDINGS_DIMENSIONS = int(_embeddings_dimensions_raw)
 
 if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
