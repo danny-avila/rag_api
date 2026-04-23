@@ -48,9 +48,15 @@ from app.config import (
 # and naive `score <= threshold` would keep the *weaker* matches. We scope
 # the filter to pgvector only until we grow a first-class "min similarity"
 # semantic for Atlas.
+#
+# Inspect the raw env var here rather than the parsed RAG_DISTANCE_THRESHOLD:
+# the parser in app.config deliberately skips the float() cast under Atlas
+# (so non-numeric stale values don't break startup), which means the parsed
+# value is always None for Atlas — and relying on it would suppress the
+# warning we want operators to see.
 if (
-    RAG_DISTANCE_THRESHOLD is not None
-    and VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
+    VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
+    and os.getenv("RAG_DISTANCE_THRESHOLD") not in (None, "")
 ):
     logger.warning(
         "RAG_DISTANCE_THRESHOLD is set but VECTOR_DB_TYPE=atlas-mongo; "
