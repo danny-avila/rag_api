@@ -21,6 +21,8 @@ def get_vector_store(
     mode: str = "sync",
     search_index: Optional[str] = None,
     create_extension: bool = True,
+    pool_pre_ping: bool = True,
+    pool_recycle: int = -1,
 ):
     """Create a vector store instance for the given mode.
 
@@ -30,8 +32,19 @@ def get_vector_store(
     Set create_extension=False when the Postgres user lacks superuser
     privileges and the `vector` extension is already installed out-of-band
     (e.g. managed Postgres services like RDS, Azure Database for PostgreSQL).
+
+    pool_pre_ping issues a SELECT 1 before handing out a pooled connection,
+    so stale/dead connections (e.g. dropped by a remote server or middlebox
+    idle timeout) are detected and replaced instead of surfacing as a query
+    error. pool_recycle<=0 disables periodic recycling (SQLAlchemy default);
+    set a positive number of seconds when the server enforces an idle or
+    max-lifetime limit.
     """
     global _mongo_client
+
+    engine_args: dict = {"pool_pre_ping": pool_pre_ping}
+    if pool_recycle > 0:
+        engine_args["pool_recycle"] = pool_recycle
 
     if mode == "sync":
         return ExtendedPgVector(
@@ -40,6 +53,7 @@ def get_vector_store(
             collection_name=collection_name,
             use_jsonb=True,
             create_extension=create_extension,
+            engine_args=engine_args,
         )
     elif mode == "async":
         return AsyncPgVector(
@@ -48,6 +62,7 @@ def get_vector_store(
             collection_name=collection_name,
             use_jsonb=True,
             create_extension=create_extension,
+            engine_args=engine_args,
         )
     elif mode == "atlas-mongo":
         if _mongo_client is not None:

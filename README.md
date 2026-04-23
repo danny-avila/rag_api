@@ -78,6 +78,8 @@ The following environment variables are required to run the application:
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
 - `PGVECTOR_CREATE_EXTENSION`: (Optional) Set to "False" to skip the `CREATE EXTENSION IF NOT EXISTS vector` call on startup. Default is "True". Use this when the `vector` extension is already installed on a managed Postgres (e.g. RDS, Azure Database for PostgreSQL) and the application user is not a superuser.
+- `PG_POOL_PRE_PING`: (Optional) Set to "False" to disable SQLAlchemy's pre-ping check. Default is "True". When enabled, the connection pool issues a lightweight `SELECT 1` before handing out a pooled connection, so stale connections dropped by a remote server or middlebox idle timeout are transparently replaced instead of surfacing as query errors. Recommended for any deployment that connects to a remote PostgreSQL instance (managed Postgres, connections that traverse a load balancer, etc.).
+- `PG_POOL_RECYCLE`: (Optional) Maximum age in seconds of a pooled connection before it is recycled. Default is "-1" (disabled). Set to a positive value when the server enforces a hard idle or max-lifetime limit (e.g. "1800" for a 30-minute cap).
 - `RAG_HOST`: (Optional) The hostname or IP address where the API server will run. Defaults to "0.0.0.0"
 - `RAG_PORT`: (Optional) The port number where the API server will run. Defaults to port 8000.
 - `JWT_SECRET`: (Optional) The secret key used for verifying JWT tokens for requests.
