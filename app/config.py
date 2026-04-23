@@ -59,6 +59,9 @@ POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
 POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
 DB_HOST = get_env_variable("DB_HOST", "db")
 DB_PORT = get_env_variable("DB_PORT", "5432")
+PGVECTOR_CREATE_EXTENSION = get_env_variable(
+    "PGVECTOR_CREATE_EXTENSION", "True"
+).lower() in ("true", "1", "yes", "on")
 COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
@@ -336,6 +339,7 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         embeddings=embeddings,
         collection_name=COLLECTION_NAME,
         mode="async",
+        create_extension=PGVECTOR_CREATE_EXTENSION,
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     # Backward compatability check
