@@ -113,6 +113,35 @@ def test_get_vector_store_async_passes_use_jsonb():
         assert kwargs.get("use_jsonb") is True
 
 
+def test_get_vector_store_defaults_create_extension_true():
+    """PgVector must default to create_extension=True for back-compat."""
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store("conn", mock_embeddings, "coll", mode="async")
+        _, kwargs = MockPG.call_args
+        assert kwargs.get("create_extension") is True
+
+
+def test_get_vector_store_propagates_create_extension_false():
+    """create_extension=False must reach the underlying PGVector — the escape
+    hatch for managed Postgres where the app user can't CREATE EXTENSION."""
+    with patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", create_extension=False
+        )
+        _, kwargs = MockPG.call_args
+        assert kwargs.get("create_extension") is False
+
+    with patch("app.services.vector_store.factory.ExtendedPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="sync", create_extension=False
+        )
+        _, kwargs = MockPG.call_args
+        assert kwargs.get("create_extension") is False
+
+
 def test_load_file_content_cleans_up_on_lazy_load_failure():
     """cleanup_temp_encoding_file is called even when lazy_load() raises."""
     from app.routes.document_routes import load_file_content
