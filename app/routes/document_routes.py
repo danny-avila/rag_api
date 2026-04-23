@@ -38,7 +38,21 @@ from app.config import (
     CHUNK_OVERLAP,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MAX_QUEUE_SIZE,
+    RAG_DISTANCE_THRESHOLD,
 )
+
+
+def _apply_distance_threshold(documents):
+    """Drop (doc, score) tuples whose distance exceeds RAG_DISTANCE_THRESHOLD.
+
+    The score returned by similarity_search_with_score_by_vector is a
+    distance (lower = more similar), so results above the threshold are
+    the *less* relevant ones we want to discard. No-op when the env var
+    is unset.
+    """
+    if RAG_DISTANCE_THRESHOLD is None:
+        return documents
+    return [(doc, score) for doc, score in documents if score <= RAG_DISTANCE_THRESHOLD]
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -350,6 +364,8 @@ async def query_embeddings_by_file_id(
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
             )
+
+        documents = _apply_distance_threshold(documents)
 
         if not documents:
             return authorized_documents
@@ -1041,6 +1057,8 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
+
+        documents = _apply_distance_threshold(documents)
 
         # Ensure documents list is not empty
         if not documents:
