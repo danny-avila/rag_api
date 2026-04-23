@@ -218,11 +218,11 @@ RAG_CHECK_EMBEDDING_CTX_LENGTH = True if env_value == "true" else False
 ## Embeddings
 
 
-def init_embeddings(provider, model):
+def init_embeddings(provider, model, dimensions=None):
     if provider == EmbeddingsProvider.OPENAI:
         from langchain_openai import OpenAIEmbeddings
 
-        return OpenAIEmbeddings(
+        kwargs = dict(
             model=model,
             api_key=RAG_OPENAI_API_KEY,
             openai_api_base=RAG_OPENAI_BASEURL,
@@ -230,10 +230,13 @@ def init_embeddings(provider, model):
             chunk_size=EMBEDDINGS_CHUNK_SIZE,
             check_embedding_ctx_length=RAG_CHECK_EMBEDDING_CTX_LENGTH,
         )
+        if dimensions is not None:
+            kwargs["dimensions"] = dimensions
+        return OpenAIEmbeddings(**kwargs)
     elif provider == EmbeddingsProvider.AZURE:
         from langchain_openai import AzureOpenAIEmbeddings
 
-        return AzureOpenAIEmbeddings(
+        kwargs = dict(
             azure_deployment=model,
             api_key=RAG_AZURE_OPENAI_API_KEY,
             azure_endpoint=RAG_AZURE_OPENAI_ENDPOINT,
@@ -241,6 +244,9 @@ def init_embeddings(provider, model):
             chunk_size=EMBEDDINGS_CHUNK_SIZE,
             check_embedding_ctx_length=RAG_CHECK_EMBEDDING_CTX_LENGTH,
         )
+        if dimensions is not None:
+            kwargs["dimensions"] = dimensions
+        return AzureOpenAIEmbeddings(**kwargs)
     elif provider == EmbeddingsProvider.HUGGINGFACE:
         from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -298,6 +304,13 @@ EMBEDDINGS_PROVIDER = EmbeddingsProvider(
     get_env_variable("EMBEDDINGS_PROVIDER", EmbeddingsProvider.OPENAI.value).lower()
 )
 
+_embeddings_dimensions_raw = get_env_variable("EMBEDDINGS_DIMENSIONS", None)
+EMBEDDINGS_DIMENSIONS = (
+    int(_embeddings_dimensions_raw)
+    if _embeddings_dimensions_raw not in (None, "")
+    else None
+)
+
 if EMBEDDINGS_PROVIDER == EmbeddingsProvider.OPENAI:
     EMBEDDINGS_MODEL = get_env_variable("EMBEDDINGS_MODEL", "text-embedding-3-small")
     # 1000 is the default chunk size for OpenAI, but this causes API rate limits to be hit
@@ -328,7 +341,9 @@ elif EMBEDDINGS_PROVIDER == EmbeddingsProvider.BEDROCK:
 else:
     raise ValueError(f"Unsupported embeddings provider: {EMBEDDINGS_PROVIDER}")
 
-embeddings = init_embeddings(EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL)
+embeddings = init_embeddings(
+    EMBEDDINGS_PROVIDER, EMBEDDINGS_MODEL, dimensions=EMBEDDINGS_DIMENSIONS
+)
 
 logger.info(f"Initialized embeddings of type: {type(embeddings)}")
 
