@@ -222,12 +222,15 @@ GOOGLE_APPLICATION_CREDENTIALS = get_env_variable("GOOGLE_APPLICATION_CREDENTIAL
 env_value = get_env_variable("RAG_CHECK_EMBEDDING_CTX_LENGTH", "True").lower()
 RAG_CHECK_EMBEDDING_CTX_LENGTH = True if env_value == "true" else False
 
-_distance_threshold_raw = get_env_variable("RAG_DISTANCE_THRESHOLD", None)
-RAG_DISTANCE_THRESHOLD = (
-    float(_distance_threshold_raw)
-    if _distance_threshold_raw not in (None, "")
-    else None
-)
+# Only parse RAG_DISTANCE_THRESHOLD when it will actually be applied (pgvector).
+# Under atlas-mongo the setting is documented as ignored, so parsing it
+# unconditionally would turn a stale/non-numeric value into a hard boot failure
+# for an unrelated backend.
+RAG_DISTANCE_THRESHOLD = None
+if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+    _distance_threshold_raw = get_env_variable("RAG_DISTANCE_THRESHOLD", None)
+    if _distance_threshold_raw not in (None, ""):
+        RAG_DISTANCE_THRESHOLD = float(_distance_threshold_raw)
 
 ## Embeddings
 
