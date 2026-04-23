@@ -6,7 +6,7 @@ langchain-aws==1.4.3
 langchain-text-splitters==1.1.2
 boto3>=1.42.42,<2
 sqlalchemy==2.0.41
-python-dotenv==1.1.1
+python-dotenv==1.2.2
 fastapi==0.115.12
 psycopg2-binary==2.9.9
 pgvector==0.2.5
