@@ -20,11 +20,16 @@ def get_vector_store(
     collection_name: str,
     mode: str = "sync",
     search_index: Optional[str] = None,
+    create_extension: bool = True,
 ):
     """Create a vector store instance for the given mode.
 
     Note: For 'atlas-mongo' mode, the MongoClient is stored at module level
     so it can be closed on shutdown via close_vector_store_connections().
+
+    Set create_extension=False when the Postgres user lacks superuser
+    privileges and the `vector` extension is already installed out-of-band
+    (e.g. managed Postgres services like RDS, Azure Database for PostgreSQL).
     """
     global _mongo_client
 
@@ -34,6 +39,7 @@ def get_vector_store(
             embedding_function=embeddings,
             collection_name=collection_name,
             use_jsonb=True,
+            create_extension=create_extension,
         )
     elif mode == "async":
         return AsyncPgVector(
@@ -41,6 +47,7 @@ def get_vector_store(
             embedding_function=embeddings,
             collection_name=collection_name,
             use_jsonb=True,
+            create_extension=create_extension,
         )
     elif mode == "atlas-mongo":
         if _mongo_client is not None:

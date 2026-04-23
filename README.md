@@ -77,6 +77,7 @@ The following environment variables are required to run the application:
 - `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
+- `PGVECTOR_CREATE_EXTENSION`: (Optional) Set to "False" to skip the `CREATE EXTENSION IF NOT EXISTS vector` call on startup. Default is "True". Use this when the `vector` extension is already installed on a managed Postgres (e.g. RDS, Azure Database for PostgreSQL) and the application user is not a superuser.
 - `RAG_HOST`: (Optional) The hostname or IP address where the API server will run. Defaults to "0.0.0.0"
 - `RAG_PORT`: (Optional) The port number where the API server will run. Defaults to port 8000.
 - `JWT_SECRET`: (Optional) The secret key used for verifying JWT tokens for requests.
