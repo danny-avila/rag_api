@@ -90,6 +90,45 @@ EMBEDDING_MAX_QUEUE_SIZE = int(get_env_variable("EMBEDDING_MAX_QUEUE_SIZE", "3")
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
+# Optional pre-extraction webhook: when text extraction returns pages averaging
+# fewer than PRE_EXTRACTION_WEBHOOK_MIN_CHARS characters, the file is POSTed to
+# PRE_EXTRACTION_WEBHOOK_URL. The webhook is expected to respond with
+# `{"text": "...", "provider": "..."}` and that text replaces the original
+# extraction. Disabled when the URL is empty (the default).
+PRE_EXTRACTION_WEBHOOK_URL = get_env_variable("PRE_EXTRACTION_WEBHOOK_URL", "")
+PRE_EXTRACTION_WEBHOOK_MIN_CHARS = int(
+    get_env_variable("PRE_EXTRACTION_WEBHOOK_MIN_CHARS", "100")
+)
+PRE_EXTRACTION_WEBHOOK_TIMEOUT = int(
+    get_env_variable("PRE_EXTRACTION_WEBHOOK_TIMEOUT", "60")
+)
+
+# Optional multimodal-RAG visual pipeline. When VISUAL_EMBED_URL is set, each
+# ingested PDF is rendered to page PNGs via pdftoppm and each page is sent to
+# the CLIP embed sidecar; the resulting vectors are stored in the
+# `visual_chunks` pgvector table for retrieval. All steps soft-fail: if
+# pdftoppm, the sidecar, or the DB is unreachable, the text ingest path still
+# succeeds.
+VISUAL_EMBED_URL = get_env_variable("VISUAL_EMBED_URL", "")
+# Text-query endpoint of the same CLIP sidecar. Empty → derive from
+# VISUAL_EMBED_URL by swapping /embed/image for /embed/text.
+VISUAL_TEXT_EMBED_URL = get_env_variable("VISUAL_TEXT_EMBED_URL", "")
+VISUAL_PAGE_DPI = int(get_env_variable("VISUAL_PAGE_DPI", "100"))
+VISUAL_STORAGE_ROOT = get_env_variable("VISUAL_STORAGE_ROOT", "/var/rag-visual")
+VISUAL_EMBED_TIMEOUT = int(get_env_variable("VISUAL_EMBED_TIMEOUT", "30"))
+VISUAL_SCORE_THRESHOLD = float(get_env_variable("VISUAL_SCORE_THRESHOLD", "0.25"))
+VISUAL_QUERY_TOP_K = int(get_env_variable("VISUAL_QUERY_TOP_K", "3"))
+# Text-to-visual-page-coupling (Phase 4). When True, /query uses the pages of
+# the text-search hits as the primary source of visual_matches, with CLIP
+# cross-modal retrieval as a secondary signal. Rationale: CLIP-style models
+# weight text-inside-images, so a page with a matching headline can outrank
+# the page with the actually-relevant photo. The text pipeline already knows
+# which pages are relevant — couple the visuals to that decision.
+VISUAL_TEXT_COUPLED = get_env_variable("VISUAL_TEXT_COUPLED", "true").lower() == "true"
+VISUAL_TEXT_COUPLED_MAX_PAGES = int(
+    get_env_variable("VISUAL_TEXT_COUPLED_MAX_PAGES", "4")
+)
+
 if POSTGRES_USE_UNIX_SOCKET:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"
 else:

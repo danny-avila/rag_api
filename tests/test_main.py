@@ -173,6 +173,317 @@ def test_query_embeddings_by_file_id(auth_headers):
         assert doc["page_content"] == "Queried content"
 
 
+def test_query_include_visual_wraps_response(auth_headers, monkeypatch):
+    """include_visual=True returns {chunks, visual_matches} and calls the visual helper."""
+
+    async def fake_visual(request, query, file_ids, text_documents=None):
+        assert file_ids == ["testid1"]
+        return [
+            {
+                "file_id": "testid1",
+                "page_number": 2,
+                "image_path": "/var/rag-visual/testid1/page-2.png",
+                "score": 0.87,
+            }
+        ]
+
+    monkeypatch.setattr(
+        document_routes, "_fetch_visual_matches_for_file_ids", fake_visual
+    )
+
+    data = {
+        "query": "Wie ist das Layout auf Seite 2?",
+        "file_id": "testid1",
+        "k": 4,
+        "entity_id": "testuser",
+        "include_visual": True,
+    }
+    response = client.post("/query", json=data, headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, dict)
+    assert "chunks" in body and "visual_matches" in body
+    assert body["visual_matches"][0]["page_number"] == 2
+    assert body["visual_matches"][0]["score"] == 0.87
+
+
+def test_query_include_visual_when_text_empty(auth_headers, monkeypatch):
+    """When the text index returns nothing but include_visual=True,
+    the response still wraps and ships the visual hits (no 404)."""
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    async def no_docs(self, embedding, k, filter=None, executor=None):
+        return []
+
+    monkeypatch.setattr(
+        AsyncPgVector, "asimilarity_search_with_score_by_vector", no_docs
+    )
+
+    async def fake_visual(request, query, file_ids, text_documents=None):
+        return [
+            {
+                "file_id": "testid1",
+                "page_number": 1,
+                "image_path": "/x/p1.png",
+                "score": 0.42,
+            }
+        ]
+
+    monkeypatch.setattr(
+        document_routes, "_fetch_visual_matches_for_file_ids", fake_visual
+    )
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "q",
+            "file_id": "testid1",
+            "k": 4,
+            "entity_id": "testuser",
+            "include_visual": True,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["chunks"] == []
+    assert body["visual_matches"][0]["score"] == 0.42
+
+
+def _patch_visual_merge_deps(
+    monkeypatch,
+    *,
+    text_pages_for_file: dict,
+    clip_hits: list,
+    coupled_visuals: dict = None,
+    text_coupled: bool = True,
+    max_pages: int = 4,
+):
+    """Helper: wire the dependencies of ``_fetch_visual_matches_for_file_ids``
+    for the merge-logic tests below.
+
+    ``text_pages_for_file``: {file_id: [page, …]} — what text-search returns
+    as (Document, score) with page_number metadata.
+    ``coupled_visuals``: {file_id: [{page_number, image_path}, …]} — what the
+    visual_chunks DB has for those pages. If None, derive from text_pages.
+    ``clip_hits``: list of CLIP-retrieved dicts (pages, scores).
+    """
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+    from app.routes import document_routes
+    from app.utils import visual_embed
+
+    if coupled_visuals is None:
+        coupled_visuals = {
+            fid: [
+                {"file_id": fid, "page_number": p, "image_path": f"/x/{fid}/p-{p}.png"}
+                for p in pages
+            ]
+            for fid, pages in text_pages_for_file.items()
+        }
+
+    async def fake_text_search(self, embedding, k, filter=None, executor=None):
+        wanted = None
+        if filter:
+            eq = filter.get("file_id", {})
+            if isinstance(eq, dict):
+                wanted = eq.get("$eq") or eq.get("$in")
+            else:
+                wanted = eq
+        file_ids = [wanted] if isinstance(wanted, str) else (wanted or [])
+        out = []
+        for fid in file_ids:
+            for page in text_pages_for_file.get(fid, []):
+                out.append(
+                    (
+                        Document(
+                            page_content=f"chunk from {fid} p{page}",
+                            metadata={
+                                "file_id": fid,
+                                "page_number": page,
+                                "user_id": "testuser",
+                            },
+                        ),
+                        0.9,
+                    )
+                )
+        return out
+
+    monkeypatch.setattr(
+        AsyncPgVector, "asimilarity_search_with_score_by_vector", fake_text_search
+    )
+    monkeypatch.setattr(document_routes, "VISUAL_EMBED_URL", "http://clip.test/embed/image")
+    monkeypatch.setattr(document_routes, "VISUAL_TEXT_COUPLED", text_coupled)
+    monkeypatch.setattr(document_routes, "VISUAL_TEXT_COUPLED_MAX_PAGES", max_pages)
+
+    class _FakePool:
+        pass
+
+    class _DB:
+        @classmethod
+        async def get_pool(cls):
+            return _FakePool()
+
+    import app.services.database as db_mod
+
+    monkeypatch.setattr(db_mod, "PSQLDatabase", _DB)
+
+    async def fake_fetch_coupled(pool, file_id, page_numbers):
+        rows = coupled_visuals.get(file_id, [])
+        wanted = set(page_numbers)
+        return [r for r in rows if r["page_number"] in wanted]
+
+    monkeypatch.setattr(document_routes, "fetch_visual_chunks_for_pages", fake_fetch_coupled)
+    monkeypatch.setattr(visual_embed, "fetch_visual_chunks_for_pages", fake_fetch_coupled)
+
+    def fake_embed_text(query):
+        return [0.1] * 768
+
+    monkeypatch.setattr(document_routes, "embed_text_query", fake_embed_text)
+
+    async def fake_clip(pool, query_embedding, file_ids, k):
+        return [h for h in clip_hits if h["file_id"] in file_ids][:k]
+
+    monkeypatch.setattr(document_routes, "similarity_search_visual", fake_clip)
+
+
+def test_pages_by_file_from_text_docs_accepts_page_or_page_number():
+    """PyPDFLoader writes ``page``, custom loaders write ``page_number``.
+    The helper must accept both (prefers page_number), preserve rank order
+    within a file, dedupe, and drop chunks without either key."""
+    from app.routes.document_routes import _pages_by_file_from_text_docs
+
+    docs = [
+        (Document(page_content="a", metadata={"file_id": "f1", "page": 75}), 0.9),
+        (Document(page_content="b", metadata={"file_id": "f1", "page": 76}), 0.8),
+        (Document(page_content="c", metadata={"file_id": "f1", "page": 75}), 0.7),  # dup
+        (Document(page_content="d", metadata={"file_id": "f2", "page_number": 3}), 0.6),
+        (Document(page_content="e", metadata={"file_id": "f2"}), 0.5),  # no page → skip
+        (Document(page_content="f", metadata={"file_id": "f3", "page_number": "not-int"}), 0.4),
+    ]
+    out = _pages_by_file_from_text_docs(docs)
+    assert out == {"f1": [75, 76], "f2": [3]}
+
+
+def test_query_with_text_coupling_returns_text_pages_first(auth_headers, monkeypatch):
+    """Text pipeline finds pages [5, 8, 12]. visual_chunks also has 50, 51
+    (CLIP top hits). Expect visual_matches to contain {5, 8, 12} with
+    source='text_coupled' regardless of CLIP score, plus the CLIP hits that
+    don't collide, deduped."""
+    _patch_visual_merge_deps(
+        monkeypatch,
+        text_pages_for_file={"testid1": [5, 8, 12]},
+        coupled_visuals={
+            "testid1": [
+                {"file_id": "testid1", "page_number": p, "image_path": f"/x/p-{p}.png"}
+                for p in (5, 8, 12, 50, 51)
+            ]
+        },
+        clip_hits=[
+            {"file_id": "testid1", "page_number": 50, "image_path": "/x/p-50.png", "score": 0.42},
+            {"file_id": "testid1", "page_number": 51, "image_path": "/x/p-51.png", "score": 0.40},
+            # This one collides with a text-coupled page — must be deduped.
+            {"file_id": "testid1", "page_number": 5, "image_path": "/x/p-5.png", "score": 0.38},
+        ],
+    )
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "Vietnam group photo",
+            "file_id": "testid1",
+            "k": 4,
+            "entity_id": "testuser",
+            "include_visual": True,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    matches = body["visual_matches"]
+    pages = [m["page_number"] for m in matches]
+    # Text-coupled first (in text-rank order), then CLIP, with no dups.
+    assert pages[:3] == [5, 8, 12]
+    assert set(pages) == {5, 8, 12, 50, 51}
+    assert all(m["source"] == "text_coupled" for m in matches if m["page_number"] in (5, 8, 12))
+    assert all(m["source"] == "clip" for m in matches if m["page_number"] in (50, 51))
+    assert all(m["score"] == 1.0 for m in matches if m["source"] == "text_coupled")
+
+
+def test_query_with_text_coupling_disabled_falls_back_to_clip(auth_headers, monkeypatch):
+    """With VISUAL_TEXT_COUPLED=False, behaviour is Phase-3: only CLIP hits
+    are returned, no synthetic 1.0 scores, no 'text_coupled' source."""
+    _patch_visual_merge_deps(
+        monkeypatch,
+        text_pages_for_file={"testid1": [5, 8, 12]},
+        clip_hits=[
+            {"file_id": "testid1", "page_number": 50, "image_path": "/x/p-50.png", "score": 0.42},
+            {"file_id": "testid1", "page_number": 51, "image_path": "/x/p-51.png", "score": 0.40},
+        ],
+        text_coupled=False,
+    )
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "anything",
+            "file_id": "testid1",
+            "k": 4,
+            "entity_id": "testuser",
+            "include_visual": True,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    pages = [m["page_number"] for m in body["visual_matches"]]
+    assert pages == [50, 51]
+    assert all(m["source"] == "clip" for m in body["visual_matches"])
+
+
+def test_query_with_text_coupling_caps_at_max_pages(auth_headers, monkeypatch):
+    """Text pipeline finds 10 pages, but VISUAL_TEXT_COUPLED_MAX_PAGES=4
+    caps the text-coupled signal at 4. The remaining pages (ranks 5..10)
+    are NOT attached just because the text found them — but CLIP hits for
+    pages outside the capped set are still included, deduped."""
+    text_pages = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    all_visuals = [
+        {"file_id": "testid1", "page_number": p, "image_path": f"/x/p-{p}.png"}
+        for p in text_pages
+    ]
+    _patch_visual_merge_deps(
+        monkeypatch,
+        text_pages_for_file={"testid1": text_pages},
+        coupled_visuals={"testid1": all_visuals},
+        clip_hits=[
+            # CLIP returns a page OUTSIDE the capped-4 text set — must survive.
+            {"file_id": "testid1", "page_number": 77, "image_path": "/x/p-77.png", "score": 0.31},
+            # And a page INSIDE the capped set — must be deduped away (primary wins).
+            {"file_id": "testid1", "page_number": 10, "image_path": "/x/p-10.png", "score": 0.29},
+        ],
+        max_pages=4,
+    )
+
+    response = client.post(
+        "/query",
+        json={
+            "query": "q",
+            "file_id": "testid1",
+            "k": 4,
+            "entity_id": "testuser",
+            "include_visual": True,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    matches = body["visual_matches"]
+    text_coupled_pages = [m["page_number"] for m in matches if m["source"] == "text_coupled"]
+    clip_pages = [m["page_number"] for m in matches if m["source"] == "clip"]
+    assert text_coupled_pages == [10, 11, 12, 13]  # capped at 4, rank order preserved
+    assert 77 in clip_pages
+    assert 10 not in clip_pages  # deduped — text-coupled won
+
+
 def test_embed_local_file(tmp_path, auth_headers, monkeypatch):
     # Monkeypatch RAG_UPLOAD_DIR so the file is within the allowed directory.
     monkeypatch.setattr(document_routes, "RAG_UPLOAD_DIR", str(tmp_path))

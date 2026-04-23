@@ -31,6 +31,11 @@ class QueryRequestBody(BaseModel):
     file_id: str
     k: int = 4
     entity_id: Optional[str] = None
+    # When True, the /query response is wrapped as
+    # {"chunks": [...], "visual_matches": [...]} and the visual pipeline
+    # (multimodal-RAG) is consulted in addition to the text index.
+    # Default False keeps the legacy flat-list shape.
+    include_visual: bool = False
 
 
 class CleanupMethod(str, Enum):
@@ -42,3 +47,11 @@ class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
+    include_visual: bool = False
+
+
+class VisualMatch(BaseModel):
+    file_id: str
+    page_number: int
+    image_path: str
+    score: float

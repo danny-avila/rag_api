@@ -52,6 +52,19 @@ from app.utils.document_loader import (
     clean_text,
     process_documents,
     cleanup_temp_encoding_file,
+    maybe_enrich_with_webhook,
+)
+from app.utils.visual_embed import (
+    embed_text_query,
+    fetch_visual_chunks_for_pages,
+    maybe_embed_visuals,
+    similarity_search_visual,
+)
+from app.config import (
+    VISUAL_EMBED_URL,
+    VISUAL_QUERY_TOP_K,
+    VISUAL_TEXT_COUPLED,
+    VISUAL_TEXT_COUPLED_MAX_PAGES,
 )
 from app.utils.health import is_health_ok
 
@@ -158,6 +171,11 @@ async def load_file_content(
         )
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(executor, lambda: list(loader.lazy_load()))
+        # Optional pre-extraction webhook (e.g. OCR sidecar) — no-op when
+        # PRE_EXTRACTION_WEBHOOK_URL is unset.
+        data = await loop.run_in_executor(
+            executor, maybe_enrich_with_webhook, file_path, data
+        )
         return data, known_type, file_ext
     finally:
         # Clean up temporary UTF-8 file if it was created for encoding conversion
@@ -322,6 +340,126 @@ def get_cached_query_embedding(query: str):
     return vector_store.embedding_function.embed_query(query)
 
 
+def _pages_by_file_from_text_docs(text_documents) -> dict:
+    """Extract {file_id: [page_number, ...]} from text similarity_search results.
+
+    Preserves rank order (earliest text hit → first page in the list) and
+    dedupes within each file. Reads ``page_number`` first, falling back to
+    ``page`` — PyPDFLoader writes ``page`` while custom loaders and older
+    chunks may use ``page_number``. Chunks with neither are silently
+    skipped (e.g. text-only formats like .txt that have no page concept).
+    """
+    pages_by_file: dict = {}
+    if not text_documents:
+        return pages_by_file
+    for entry in text_documents:
+        doc = entry[0] if isinstance(entry, tuple) else entry
+        metadata = getattr(doc, "metadata", None) or {}
+        file_id = metadata.get("file_id")
+        page_number = metadata.get("page_number")
+        if page_number is None:
+            page_number = metadata.get("page")
+        if not file_id or page_number is None:
+            continue
+        try:
+            page_number = int(page_number)
+        except (TypeError, ValueError):
+            continue
+        bucket = pages_by_file.setdefault(file_id, [])
+        if page_number not in bucket:
+            bucket.append(page_number)
+    return pages_by_file
+
+
+async def _fetch_visual_matches_for_file_ids(
+    request: Request,
+    query: str,
+    file_ids: List[str],
+    text_documents: Optional[list] = None,
+) -> list:
+    """Cross-modal retrieval for /query's visual_matches field.
+
+    Two signals are merged when ``VISUAL_TEXT_COUPLED`` is enabled:
+
+      1. **Primary** — text-page-coupling: use the pages of the text-search
+         hits (per file_id) to look up visual_chunks directly. Fixes the
+         CLIP-weights-text-inside-images bias: a page whose headline matches
+         the query outranks the page with the actually-relevant photo.
+      2. **Secondary** — CLIP cross-modal: text query embedded via the CLIP
+         text encoder, nearest neighbours in ``visual_chunks``. Keeps
+         visually-relevant pages that the text pipeline missed.
+
+    Dedup is by (file_id, page_number); primary wins. Soft-fails on any
+    error (returns []) so a broken sidecar never breaks the main query path.
+    """
+    if not VISUAL_EMBED_URL or not file_ids:
+        return []
+
+    results: list = []
+    seen: set = set()
+
+    # Primary signal: text-page-coupling.
+    if VISUAL_TEXT_COUPLED:
+        try:
+            from app.services.database import PSQLDatabase
+
+            pool = await PSQLDatabase.get_pool()
+            pages_by_file = _pages_by_file_from_text_docs(text_documents)
+            for file_id, pages in pages_by_file.items():
+                if file_id not in file_ids:
+                    continue
+                capped = pages[:VISUAL_TEXT_COUPLED_MAX_PAGES]
+                rows = await fetch_visual_chunks_for_pages(
+                    pool=pool, file_id=file_id, page_numbers=capped
+                )
+                # Preserve text-rank order by reindexing from ``capped``.
+                by_page = {r["page_number"]: r for r in rows}
+                for page in capped:
+                    row = by_page.get(page)
+                    if not row:
+                        continue
+                    key = (row["file_id"], row["page_number"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Synthetic score above VISUAL_SCORE_THRESHOLD so downstream
+                    # filters treat text-coupled hits as top-tier.
+                    results.append({**row, "score": 1.0, "source": "text_coupled"})
+        except Exception as exc:
+            logger.warning("visual retrieval: text-page-coupling failed: %s", exc)
+
+    # Secondary signal: CLIP cross-modal.
+    try:
+        loop = asyncio.get_running_loop()
+        query_embedding = await loop.run_in_executor(
+            request.app.state.thread_pool, embed_text_query, query
+        )
+    except Exception as exc:
+        logger.warning("visual retrieval: text embed failed: %s", exc)
+        return results
+    try:
+        from app.services.database import PSQLDatabase
+
+        pool = await PSQLDatabase.get_pool()
+        clip_hits = await similarity_search_visual(
+            pool=pool,
+            query_embedding=query_embedding,
+            file_ids=file_ids,
+            k=VISUAL_QUERY_TOP_K,
+        )
+    except Exception as exc:
+        logger.warning("visual retrieval: similarity search failed: %s", exc)
+        return results
+
+    for hit in clip_hits:
+        key = (hit["file_id"], hit["page_number"])
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append({**hit, "source": "clip"})
+    return results
+
+
 @router.post("/query")
 async def query_embeddings_by_file_id(
     body: QueryRequestBody,
@@ -352,6 +490,11 @@ async def query_embeddings_by_file_id(
             )
 
         if not documents:
+            if body.include_visual:
+                visual = await _fetch_visual_matches_for_file_ids(
+                    request, body.query, [body.file_id], text_documents=documents
+                )
+                return {"chunks": authorized_documents, "visual_matches": visual}
             return authorized_documents
 
         document, score = documents[0]
@@ -380,6 +523,14 @@ async def query_embeddings_by_file_id(
                     f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
                 )
 
+        if body.include_visual:
+            visual = await _fetch_visual_matches_for_file_ids(
+                request,
+                body.query,
+                [body.file_id],
+                text_documents=authorized_documents,
+            )
+            return {"chunks": authorized_documents, "visual_matches": visual}
         return authorized_documents
 
     except HTTPException as http_exc:
@@ -767,12 +918,27 @@ async def embed_local_file(
         data = await loop.run_in_executor(
             request.app.state.thread_pool, lambda: list(loader.lazy_load())
         )
+        data = await loop.run_in_executor(
+            request.app.state.thread_pool,
+            maybe_enrich_with_webhook,
+            file_path,
+            data,
+        )
 
         result = await store_data_in_vector_db(
             data,
             document.file_id,
             user_id,
             clean_content=file_ext == "pdf",
+            executor=request.app.state.thread_pool,
+        )
+
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=file_path,
+            file_id=document.file_id,
+            file_ext=file_ext,
+            user_id=user_id,
             executor=request.app.state.thread_pool,
         )
 
@@ -849,6 +1015,15 @@ async def embed_file(
             file_id=file_id,
             user_id=user_id,
             clean_content=file_ext == "pdf",
+            executor=request.app.state.thread_pool,
+        )
+
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=validated_file_path,
+            file_id=file_id,
+            file_ext=file_ext,
+            user_id=user_id,
             executor=request.app.state.thread_pool,
         )
 
@@ -988,6 +1163,15 @@ async def embed_file_upload(
             executor=request.app.state.thread_pool,
         )
 
+        # Visual pipeline (multimodal-RAG). Soft-fails by design; never raises.
+        await maybe_embed_visuals(
+            file_path=validated_temp_file_path,
+            file_id=file_id,
+            file_ext=file_ext,
+            user_id=user_id,
+            executor=request.app.state.thread_pool,
+        )
+
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1041,6 +1225,14 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
+
+        if body.include_visual:
+            visual = await _fetch_visual_matches_for_file_ids(
+                request, body.query, body.file_ids, text_documents=documents
+            )
+            # When include_visual is True, we must not 404 just because the
+            # text path came back empty — visual matches might still be useful.
+            return {"chunks": documents, "visual_matches": visual}
 
         # Ensure documents list is not empty
         if not documents:
