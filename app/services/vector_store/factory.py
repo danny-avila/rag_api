@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from pymongo import MongoClient
 from langchain_core.embeddings import Embeddings
@@ -14,6 +14,59 @@ logger = logging.getLogger(__name__)
 _mongo_client: Optional[MongoClient] = None
 
 
+def _parse_schemas(schema: str) -> List[str]:
+    """Split POSTGRES_SCHEMA's comma-separated value into a clean list."""
+    return [s.strip() for s in schema.split(",") if s.strip()]
+
+
+def _build_search_path(schemas: List[str]) -> str:
+    """Build a Postgres search_path value that includes every requested
+    schema plus `public` (appended if missing). pgvector installs the
+    `vector` data type into whatever schema its CREATE EXTENSION targets
+    (almost always `public`), and unqualified type names are resolved
+    against search_path — so bare `search_path=myapp` breaks
+    `CREATE TABLE ... vector(...)` with `type "vector" does not exist`.
+    """
+    parts = list(schemas)
+    if "public" not in parts:
+        parts.append("public")
+    return ",".join(parts)
+
+
+def _verify_schemas_exist(connection_string: str, schemas: List[str]) -> None:
+    """Raise if any requested schema doesn't exist in the target database.
+
+    Silent fallback is worse than failing fast here: PostgreSQL resolves
+    unqualified CREATE TABLE against the first schema in search_path where
+    the role has CREATE privileges, so a typo in POSTGRES_SCHEMA would
+    land the pgvector tables in `public` instead of the intended namespace,
+    silently defeating the isolation this feature is meant to provide.
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(connection_string)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT schema_name FROM information_schema.schemata "
+                    "WHERE schema_name = ANY(:names)"
+                ),
+                {"names": schemas},
+            ).fetchall()
+            existing = {r[0] for r in rows}
+            missing = [s for s in schemas if s not in existing]
+            if missing:
+                raise ValueError(
+                    f"POSTGRES_SCHEMA: schema(s) {missing!r} do not exist. "
+                    "Create them out-of-band first (e.g. "
+                    f"`CREATE SCHEMA IF NOT EXISTS {missing[0]}; "
+                    f"GRANT USAGE, CREATE ON SCHEMA {missing[0]} TO <app_user>;`)."
+                )
+    finally:
+        engine.dispose()
+
+
 def get_vector_store(
     connection_string: str,
     embeddings: Embeddings,
@@ -23,6 +76,7 @@ def get_vector_store(
     create_extension: bool = True,
     pool_pre_ping: bool = True,
     pool_recycle: int = -1,
+    schema: Optional[str] = None,
 ):
     """Create a vector store instance for the given mode.
 
@@ -39,12 +93,27 @@ def get_vector_store(
     error. pool_recycle<=0 disables periodic recycling (SQLAlchemy default);
     set a positive number of seconds when the server enforces an idle or
     max-lifetime limit.
+
+    Set schema to prepend that schema to every connection's search_path so
+    langchain's pgvector tables are created and queried there — use this to
+    keep the vector store logically separated when sharing a database with
+    other services. The schema must already exist (fails fast via
+    information_schema.schemata if missing). Multiple schemas may be
+    supplied as a comma-separated list; `public` is always appended so the
+    `vector` data type stays resolvable when the extension was created
+    there.
     """
     global _mongo_client
 
     engine_args: dict = {"pool_pre_ping": pool_pre_ping}
     if pool_recycle > 0:
         engine_args["pool_recycle"] = pool_recycle
+    if schema:
+        schemas = _parse_schemas(schema)
+        if schemas:
+            _verify_schemas_exist(connection_string, schemas)
+            search_path = _build_search_path(schemas)
+            engine_args["connect_args"] = {"options": f"-csearch_path={search_path}"}
 
     if mode == "sync":
         return ExtendedPgVector(

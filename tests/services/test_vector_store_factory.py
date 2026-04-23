@@ -186,6 +186,102 @@ def test_get_vector_store_propagates_pool_recycle():
         assert "pool_recycle" not in kwargs.get("engine_args", {})
 
 
+def test_get_vector_store_schema_sets_search_path():
+    """schema=<name> must translate into a connect_args search_path option so
+    pgvector's tables are created and queried in the requested schema.
+    `public` must be appended so the `vector` data type — installed by the
+    extension into whichever schema it was created in (usually `public`) —
+    remains resolvable; without it CREATE TABLE fails with
+    `type "vector" does not exist`."""
+    with patch(
+        "app.services.vector_store.factory._verify_schemas_exist"
+    ), patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", schema="myapp"
+        )
+        _, kwargs = MockPG.call_args
+        engine_args = kwargs.get("engine_args")
+        assert engine_args is not None
+        assert engine_args["connect_args"]["options"] == "-csearch_path=myapp,public"
+        # schema must not displace the pool defaults already on engine_args
+        assert engine_args.get("pool_pre_ping") is True
+
+
+def test_get_vector_store_schema_preserves_user_supplied_public():
+    """If the user explicitly lists `public` we must not duplicate it."""
+    with patch(
+        "app.services.vector_store.factory._verify_schemas_exist"
+    ), patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn", mock_embeddings, "coll", mode="async", schema="myapp,public"
+        )
+        _, kwargs = MockPG.call_args
+        assert (
+            kwargs["engine_args"]["connect_args"]["options"]
+            == "-csearch_path=myapp,public"
+        )
+
+
+def test_get_vector_store_schema_accepts_multi_schema_list():
+    """Comma-separated list for callers whose `vector` extension lives in a
+    non-public schema (e.g. a dedicated `extensions` schema)."""
+    with patch(
+        "app.services.vector_store.factory._verify_schemas_exist"
+    ), patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn",
+            mock_embeddings,
+            "coll",
+            mode="async",
+            schema="myapp, extensions",
+        )
+        _, kwargs = MockPG.call_args
+        # whitespace around comma is stripped; public still auto-appended
+        assert (
+            kwargs["engine_args"]["connect_args"]["options"]
+            == "-csearch_path=myapp,extensions,public"
+        )
+
+
+def test_get_vector_store_schema_verifies_existence_before_engine_args():
+    """The factory must call _verify_schemas_exist with the parsed schemas
+    before constructing the vector store, so a typo in POSTGRES_SCHEMA fails
+    fast instead of silently creating tables in `public`."""
+    with patch(
+        "app.services.vector_store.factory._verify_schemas_exist"
+    ) as mock_verify, patch(
+        "app.services.vector_store.factory.AsyncPgVector"
+    ):
+        mock_embeddings = MagicMock()
+        factory.get_vector_store(
+            "conn://test",
+            mock_embeddings,
+            "coll",
+            mode="async",
+            schema="myapp, extensions",
+        )
+        mock_verify.assert_called_once_with("conn://test", ["myapp", "extensions"])
+
+
+def test_get_vector_store_schema_validation_error_propagates():
+    """If any configured schema is missing, _verify_schemas_exist raises and
+    we must surface that — not quietly skip validation and let tables land
+    in `public`."""
+    with patch(
+        "app.services.vector_store.factory._verify_schemas_exist",
+        side_effect=ValueError("schema 'typo' does not exist"),
+    ), patch("app.services.vector_store.factory.AsyncPgVector") as MockPG:
+        mock_embeddings = MagicMock()
+        with pytest.raises(ValueError, match="does not exist"):
+            factory.get_vector_store(
+                "conn", mock_embeddings, "coll", mode="async", schema="typo"
+            )
+        MockPG.assert_not_called()
+
+
 def test_load_file_content_cleans_up_on_lazy_load_failure():
     """cleanup_temp_encoding_file is called even when lazy_load() raises."""
     from app.routes.document_routes import load_file_content
