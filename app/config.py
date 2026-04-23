@@ -62,6 +62,13 @@ DB_PORT = get_env_variable("DB_PORT", "5432")
 PGVECTOR_CREATE_EXTENSION = get_env_variable(
     "PGVECTOR_CREATE_EXTENSION", "True"
 ).lower() in ("true", "1", "yes", "on")
+PG_POOL_PRE_PING = get_env_variable("PG_POOL_PRE_PING", "True").lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+PG_POOL_RECYCLE = int(get_env_variable("PG_POOL_RECYCLE", "-1"))
 COLLECTION_NAME = get_env_variable("COLLECTION_NAME", "testcollection")
 ATLAS_MONGO_DB_URI = get_env_variable(
     "ATLAS_MONGO_DB_URI", "mongodb://127.0.0.1:27018/LibreChat"
@@ -340,6 +347,8 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         collection_name=COLLECTION_NAME,
         mode="async",
         create_extension=PGVECTOR_CREATE_EXTENSION,
+        pool_pre_ping=PG_POOL_PRE_PING,
+        pool_recycle=PG_POOL_RECYCLE,
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
     # Backward compatability check
