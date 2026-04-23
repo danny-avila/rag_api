@@ -346,6 +346,24 @@ def _patch_visual_merge_deps(
     monkeypatch.setattr(document_routes, "similarity_search_visual", fake_clip)
 
 
+def test_pages_by_file_from_text_docs_accepts_page_or_page_number():
+    """PyPDFLoader writes ``page``, custom loaders write ``page_number``.
+    The helper must accept both (prefers page_number), preserve rank order
+    within a file, dedupe, and drop chunks without either key."""
+    from app.routes.document_routes import _pages_by_file_from_text_docs
+
+    docs = [
+        (Document(page_content="a", metadata={"file_id": "f1", "page": 75}), 0.9),
+        (Document(page_content="b", metadata={"file_id": "f1", "page": 76}), 0.8),
+        (Document(page_content="c", metadata={"file_id": "f1", "page": 75}), 0.7),  # dup
+        (Document(page_content="d", metadata={"file_id": "f2", "page_number": 3}), 0.6),
+        (Document(page_content="e", metadata={"file_id": "f2"}), 0.5),  # no page → skip
+        (Document(page_content="f", metadata={"file_id": "f3", "page_number": "not-int"}), 0.4),
+    ]
+    out = _pages_by_file_from_text_docs(docs)
+    assert out == {"f1": [75, 76], "f2": [3]}
+
+
 def test_query_with_text_coupling_returns_text_pages_first(auth_headers, monkeypatch):
     """Text pipeline finds pages [5, 8, 12]. visual_chunks also has 50, 51
     (CLIP top hits). Expect visual_matches to contain {5, 8, 12} with

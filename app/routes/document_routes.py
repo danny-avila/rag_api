@@ -333,8 +333,10 @@ def _pages_by_file_from_text_docs(text_documents) -> dict:
     """Extract {file_id: [page_number, ...]} from text similarity_search results.
 
     Preserves rank order (earliest text hit → first page in the list) and
-    dedupes within each file. Chunks without a ``page_number`` (e.g. pre-
-    Phase-3 embeddings) are silently skipped.
+    dedupes within each file. Reads ``page_number`` first, falling back to
+    ``page`` — PyPDFLoader writes ``page`` while custom loaders and older
+    chunks may use ``page_number``. Chunks with neither are silently
+    skipped (e.g. text-only formats like .txt that have no page concept).
     """
     pages_by_file: dict = {}
     if not text_documents:
@@ -344,6 +346,8 @@ def _pages_by_file_from_text_docs(text_documents) -> dict:
         metadata = getattr(doc, "metadata", None) or {}
         file_id = metadata.get("file_id")
         page_number = metadata.get("page_number")
+        if page_number is None:
+            page_number = metadata.get("page")
         if not file_id or page_number is None:
             continue
         try:
