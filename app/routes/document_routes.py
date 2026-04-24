@@ -33,12 +33,51 @@ if TYPE_CHECKING:
 from app.config import (
     logger,
     vector_store,
+    VECTOR_DB_TYPE,
+    VectorDBType,
     RAG_UPLOAD_DIR,
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MAX_QUEUE_SIZE,
+    RAG_DISTANCE_THRESHOLD,
 )
+
+# Warn once at import time if the user set a threshold under Atlas, where
+# the score direction is inverted (Atlas vectorSearchScore: higher = better)
+# and naive `score <= threshold` would keep the *weaker* matches. We scope
+# the filter to pgvector only until we grow a first-class "min similarity"
+# semantic for Atlas.
+#
+# Inspect the raw env var here rather than the parsed RAG_DISTANCE_THRESHOLD:
+# the parser in app.config deliberately skips the float() cast under Atlas
+# (so non-numeric stale values don't break startup), which means the parsed
+# value is always None for Atlas — and relying on it would suppress the
+# warning we want operators to see.
+if (
+    VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
+    and os.getenv("RAG_DISTANCE_THRESHOLD") not in (None, "")
+):
+    logger.warning(
+        "RAG_DISTANCE_THRESHOLD is set but VECTOR_DB_TYPE=atlas-mongo; "
+        "Atlas returns similarity scores (higher = better) which would "
+        "invert the filter semantics, so the threshold will be ignored."
+    )
+
+
+def _apply_distance_threshold(documents):
+    """Drop (doc, score) tuples whose distance exceeds RAG_DISTANCE_THRESHOLD.
+
+    Only applied for pgvector, where similarity_search_with_score_by_vector
+    returns a distance (lower = more similar). Skipped for Atlas because its
+    score is a similarity (higher = better) and applying the same comparison
+    would keep the weakest matches and drop the strongest.
+    """
+    if RAG_DISTANCE_THRESHOLD is None:
+        return documents
+    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+        return documents
+    return [(doc, score) for doc, score in documents if score <= RAG_DISTANCE_THRESHOLD]
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -350,6 +389,8 @@ async def query_embeddings_by_file_id(
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
             )
+
+        documents = _apply_distance_threshold(documents)
 
         if not documents:
             return authorized_documents
@@ -1041,6 +1082,8 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             documents = vector_store.similarity_search_with_score_by_vector(
                 embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
             )
+
+        documents = _apply_distance_threshold(documents)
 
         # Ensure documents list is not empty
         if not documents:
