@@ -24,6 +24,7 @@ from app.config import (
 )
 from app.middleware import security_middleware
 from app.routes import document_routes, pgvector_routes
+from app.answer.routes import router as answer_router
 from app.services.database import PSQLDatabase, ensure_vector_indexes
 from app.services.vector_store.factory import close_vector_store_connections
 
@@ -33,8 +34,8 @@ async def lifespan(app: FastAPI):
     # Startup logic goes here
     # Create bounded thread pool executor based on CPU cores
     max_workers = min(
-        int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 8
-    )  # Cap at 8
+        int(os.getenv("RAG_THREAD_POOL_SIZE", str(os.cpu_count()))), 32
+    )  # Cap at 32
     app.state.thread_pool = ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="rag-worker"
     )
@@ -90,6 +91,7 @@ app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
 # Include routers
 app.include_router(document_routes.router)
+app.include_router(answer_router)  # optional grounded-answer layer (app/answer/)
 if debug_mode:
     app.include_router(router=pgvector_routes.router)
 
