@@ -1066,6 +1066,7 @@ async def embed_file_upload(
 
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody):
+    user_authorized = get_user_id(request)
     try:
         # Get the embedding of the query text
         embedding = get_cached_query_embedding(body.query)
@@ -1085,13 +1086,30 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
 
         documents = _apply_distance_threshold(documents)
 
+        # Authorization: return only chunks the requester owns (or unowned ones),
+        # mirroring the per-document check in /query. The filter above scopes by
+        # file_id only, so without this any caller could read another tenant's
+        # documents by supplying their file_id.
+        authorized_documents = [
+            (doc, score)
+            for doc, score in documents
+            if doc.metadata.get("user_id") in (None, user_authorized)
+        ]
+        withheld = len(documents) - len(authorized_documents)
+        if withheld:
+            logger.warning(
+                "query_multiple: withheld %d chunk(s) not owned by user %s",
+                withheld,
+                user_authorized,
+            )
+
         # Ensure documents list is not empty
-        if not documents:
+        if not authorized_documents:
             raise HTTPException(
                 status_code=404, detail="No documents found for the given query"
             )
 
-        return documents
+        return authorized_documents
     except HTTPException as http_exc:
         logger.error(
             "HTTP Exception in query_embeddings_by_file_ids | Status: %d | Detail: %s",

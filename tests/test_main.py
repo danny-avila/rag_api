@@ -279,3 +279,43 @@ def test_extract_text_from_file(tmp_path, auth_headers):
     assert json_data["file_id"] == "test_text_123"
     assert json_data["filename"] == "test_text_extraction.txt"
     assert json_data["known_type"] is True  # text files are known types
+
+
+def test_query_multiple_filters_unauthorized(auth_headers, monkeypatch):
+    """/query_multiple must withhold chunks owned by another user.
+
+    Regression: it filtered by file_id only (no user_id check), so any caller
+    could read another tenant's documents by supplying their file_id.
+    """
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    async def cross_tenant_results(self, embedding, k, filter=None, executor=None):
+        return [
+            (
+                Document(
+                    page_content="mine",
+                    metadata={"file_id": "f1", "user_id": "testuser"},
+                ),
+                0.1,
+            ),
+            (
+                Document(
+                    page_content="theirs",
+                    metadata={"file_id": "f2", "user_id": "someoneelse"},
+                ),
+                0.2,
+            ),
+        ]
+
+    monkeypatch.setattr(
+        AsyncPgVector,
+        "asimilarity_search_with_score_by_vector",
+        cross_tenant_results,
+    )
+
+    data = {"query": "q", "file_ids": ["f1", "f2"], "k": 4}
+    response = client.post("/query_multiple", json=data, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    contents = [row[0]["page_content"] for row in response.json()]
+    assert "mine" in contents
+    assert "theirs" not in contents
