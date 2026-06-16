@@ -279,3 +279,53 @@ def test_extract_text_from_file(tmp_path, auth_headers):
     assert json_data["file_id"] == "test_text_123"
     assert json_data["filename"] == "test_text_extraction.txt"
     assert json_data["known_type"] is True  # text files are known types
+
+
+def test_delete_documents_rejects_other_users(auth_headers, monkeypatch):
+    """DELETE must refuse (403) to delete documents owned by another user and
+    must not call delete (regression: there was no ownership check)."""
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    async def other_user_docs(self, ids, executor=None):
+        return [
+            Document(page_content="x", metadata={"file_id": i, "user_id": "someoneelse"})
+            for i in ids
+        ]
+
+    monkeypatch.setattr(AsyncPgVector, "get_documents_by_ids", other_user_docs)
+
+    delete_calls = []
+
+    async def spy_delete(self, ids=None, collection_only=False, executor=None):
+        delete_calls.append(ids)
+
+    monkeypatch.setattr(AsyncPgVector, "delete", spy_delete)
+
+    response = client.request(
+        "DELETE", "/documents", json=["testid1"], headers=auth_headers
+    )
+    assert response.status_code == 403, response.text
+    assert delete_calls == [], "delete must not run for unauthorized request"
+
+
+def test_delete_documents_validates_before_deleting(auth_headers, monkeypatch):
+    """Unknown ids must 404 without destroying the valid rows.
+
+    Regression: delete ran before the existence check, so a request mixing
+    valid and unknown ids destroyed the valid rows and still returned 404.
+    """
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    delete_calls = []
+
+    async def spy_delete(self, ids=None, collection_only=False, executor=None):
+        delete_calls.append(ids)
+
+    monkeypatch.setattr(AsyncPgVector, "delete", spy_delete)
+
+    # "ghost" is not among the dummy's known ids (testid1/testid2)
+    response = client.request(
+        "DELETE", "/documents", json=["testid1", "ghost"], headers=auth_headers
+    )
+    assert response.status_code == 404, response.text
+    assert delete_calls == [], "delete must not run when an id is missing"

@@ -318,21 +318,57 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
 
 
 @router.delete("/documents")
-async def delete_documents(request: Request, document_ids: List[str] = Body(...)):
+async def delete_documents(
+    request: Request,
+    document_ids: List[str] = Body(...),
+    entity_id: str = None,
+):
+    user_authorized = get_user_id(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
                 document_ids, executor=request.app.state.thread_pool
             )
+            documents = await vector_store.get_documents_by_ids(
+                document_ids, executor=request.app.state.thread_pool
+            )
+        else:
+            existing_ids = vector_store.get_filtered_ids(document_ids)
+            documents = vector_store.get_documents_by_ids(document_ids)
+
+        # Validate existence BEFORE deleting anything. Previously the delete ran
+        # first and the 404 check came after, so a request mixing valid and
+        # unknown ids destroyed the valid rows and still returned "not found".
+        if not all(id in existing_ids for id in document_ids):
+            raise HTTPException(status_code=404, detail="One or more IDs not found")
+
+        # Ownership check: every chunk must be unowned or owned by the requester,
+        # so a caller cannot delete another tenant's documents by file_id.
+        unauthorized = sorted(
+            {
+                doc.metadata.get("file_id")
+                for doc in documents
+                if doc.metadata.get("user_id") not in (None, user_authorized)
+            }
+        )
+        if unauthorized:
+            logger.warning(
+                "Unauthorized delete attempt by user %s for file_ids %s",
+                user_authorized,
+                unauthorized,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to delete one or more of the specified documents",
+            )
+
+        # Only now perform the destructive delete.
+        if isinstance(vector_store, AsyncPgVector):
             await vector_store.delete(
                 ids=document_ids, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(document_ids)
             vector_store.delete(ids=document_ids)
-
-        if not all(id in existing_ids for id in document_ids):
-            raise HTTPException(status_code=404, detail="One or more IDs not found")
 
         file_count = len(document_ids)
         return {
