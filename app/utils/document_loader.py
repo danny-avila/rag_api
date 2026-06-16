@@ -9,7 +9,17 @@ import chardet
 
 from langchain_core.documents import Document
 
-from app.config import known_source_ext, PDF_EXTRACT_IMAGES, CHUNK_OVERLAP, logger
+from app.config import (
+    known_source_ext,
+    PDF_EXTRACT_IMAGES,
+    CHUNK_OVERLAP,
+    logger,
+    PDF_OCR_ENABLED,
+    PDF_OCR_MIN_CHARS,
+    PDF_OCR_DPI,
+    PDF_OCR_MAX_PAGES,
+)
+from app.utils.ocr import has_text_layer, ocr_pdf, NoExtractableTextError
 from langchain_community.document_loaders import (
     TextLoader,
     PyPDFLoader,
@@ -97,7 +107,14 @@ def get_loader(
     # File Content Type reference:
     # ref.: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/MIME_types/Common_types
     if file_ext == "pdf" or file_content_type == "application/pdf":
-        loader = SafePyPDFLoader(filepath, extract_images=PDF_EXTRACT_IMAGES)
+        loader = SafePyPDFLoader(
+            filepath,
+            extract_images=PDF_EXTRACT_IMAGES,
+            ocr_enabled=PDF_OCR_ENABLED,
+            ocr_min_chars=PDF_OCR_MIN_CHARS,
+            ocr_dpi=PDF_OCR_DPI,
+            ocr_max_pages=PDF_OCR_MAX_PAGES,
+        )
     elif file_ext == "csv" or file_content_type == "text/csv":
         # Detect encoding for CSV files
         encoding = detect_file_encoding(filepath)
@@ -256,13 +273,26 @@ class SafePyPDFLoader:
     ref.: https://github.com/langchain-ai/langchain/issues/26652
     """
 
-    def __init__(self, filepath: str, extract_images: bool = False):
+    def __init__(
+        self,
+        filepath: str,
+        extract_images: bool = False,
+        *,
+        ocr_enabled: bool = False,
+        ocr_min_chars: int = PDF_OCR_MIN_CHARS,
+        ocr_dpi: int = PDF_OCR_DPI,
+        ocr_max_pages: int = PDF_OCR_MAX_PAGES,
+    ):
         self.filepath = filepath
         self.extract_images = extract_images
         self._temp_filepath = None  # For compatibility with cleanup function
+        self.ocr_enabled = ocr_enabled
+        self.ocr_min_chars = ocr_min_chars
+        self.ocr_dpi = ocr_dpi
+        self.ocr_max_pages = ocr_max_pages
 
-    def lazy_load(self) -> Iterator[Document]:
-        """Lazy load PDF documents with automatic fallback on image extraction errors."""
+    def _load_raw(self) -> Iterator[Document]:
+        """Original load path: PyPDFLoader with image-extraction KeyError fallback."""
         loader = PyPDFLoader(self.filepath, extract_images=self.extract_images)
 
         if not self.extract_images:
@@ -286,6 +316,47 @@ class SafePyPDFLoader:
                 # Re-raise if it's a different error
                 raise
         yield from pages
+
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazy load PDF documents.
+
+        Preserves the original streaming behavior. When OCR fallback is enabled
+        and the extracted text layer is below threshold (scanned / CAD-export
+        PDFs), the pages are re-derived via OCR so the document becomes
+        searchable instead of silently ingesting as zero chunks. If OCR is
+        enabled but still finds nothing, a NoExtractableTextError is raised so
+        the caller can report a clear reason.
+        """
+        if not self.ocr_enabled:
+            # OCR off (default): behavior is byte-for-byte unchanged.
+            yield from self._load_raw()
+            return
+
+        pages = list(self._load_raw())
+        if has_text_layer(pages, self.ocr_min_chars):
+            yield from pages
+            return
+
+        logger.warning(
+            "No usable text layer in %s (scanned/CAD?) — applying OCR fallback",
+            self.filepath,
+        )
+        ocr_pages = ocr_pdf(
+            self.filepath, dpi=self.ocr_dpi, max_pages=self.ocr_max_pages
+        )
+        if has_text_layer(ocr_pages, self.ocr_min_chars):
+            logger.info(
+                "OCR recovered text for %s across %d page(s)",
+                self.filepath,
+                len(ocr_pages),
+            )
+            yield from ocr_pages
+            return
+
+        raise NoExtractableTextError(
+            f"No extractable text found in '{os.path.basename(self.filepath)}' "
+            "even after OCR. The PDF may be blank or contain only non-text graphics."
+        )
 
     def load(self) -> List[Document]:
         """Load PDF documents with automatic fallback on image extraction errors."""

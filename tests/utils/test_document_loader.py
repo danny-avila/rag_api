@@ -251,6 +251,94 @@ def test_get_loader_raw_text_leaves_pdf_alone(tmp_path):
     assert file_ext == "pdf"
 
 
+def _empty_pages_gen():
+    """A PyPDFLoader.lazy_load that yields a single blank page (no text layer)."""
+    yield Document(page_content="   \n", metadata={"page": 0})
+
+
+def test_safe_pdf_loader_ocr_disabled_skips_ocr():
+    """With OCR off (default), an empty PDF is NOT OCR'd — behavior unchanged."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    loader = SafePyPDFLoader("dummy.pdf", extract_images=False)  # ocr_enabled defaults False
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf"
+    ) as mock_ocr:
+        instance = MagicMock()
+        instance.lazy_load.side_effect = _empty_pages_gen
+        MockPDF.return_value = instance
+
+        result = list(loader.lazy_load())
+
+    mock_ocr.assert_not_called()
+    assert len(result) == 1
+    assert result[0].page_content == "   \n"
+
+
+def test_safe_pdf_loader_ocr_fallback_recovers_text():
+    """OCR on + empty text layer -> pages are re-derived via ocr_pdf."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    loader = SafePyPDFLoader("dummy.pdf", extract_images=False, ocr_enabled=True)
+
+    ocr_docs = [Document(page_content="Recovered terminal plan text", metadata={"page": 0, "ocr": True})]
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf", return_value=ocr_docs
+    ) as mock_ocr:
+        instance = MagicMock()
+        instance.lazy_load.side_effect = _empty_pages_gen
+        MockPDF.return_value = instance
+
+        result = list(loader.lazy_load())
+
+    mock_ocr.assert_called_once()
+    assert len(result) == 1
+    assert result[0].page_content == "Recovered terminal plan text"
+    assert result[0].metadata.get("ocr") is True
+
+
+def test_safe_pdf_loader_ocr_still_empty_raises():
+    """OCR on but OCR also finds nothing -> clear NoExtractableTextError."""
+    from app.utils.document_loader import SafePyPDFLoader
+    from app.utils.ocr import NoExtractableTextError
+
+    loader = SafePyPDFLoader("dummy.pdf", extract_images=False, ocr_enabled=True)
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf", return_value=[Document(page_content="")]
+    ):
+        instance = MagicMock()
+        instance.lazy_load.side_effect = _empty_pages_gen
+        MockPDF.return_value = instance
+
+        with pytest.raises(NoExtractableTextError):
+            list(loader.lazy_load())
+
+
+def test_safe_pdf_loader_ocr_skipped_when_text_present():
+    """OCR on but the PDF already has a text layer -> OCR is not invoked."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    def good_pages():
+        yield Document(page_content="A real text layer with plenty of words.", metadata={"page": 0})
+
+    loader = SafePyPDFLoader("dummy.pdf", extract_images=False, ocr_enabled=True)
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf"
+    ) as mock_ocr:
+        instance = MagicMock()
+        instance.lazy_load.side_effect = good_pages
+        MockPDF.return_value = instance
+
+        result = list(loader.lazy_load())
+
+    mock_ocr.assert_not_called()
+    assert result[0].page_content.startswith("A real text layer")
+
+
 @pytest.mark.parametrize(
     "filename, expected_loader_name",
     [
