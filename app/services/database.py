@@ -1,6 +1,7 @@
 # app/services/database.py
 import asyncpg
-from app.config import DSN, logger
+from app.config import DSN, POSTGRES_SCHEMA, logger
+from app.services.vector_store.factory import _build_search_path, _parse_schemas
 
 
 class PSQLDatabase:
@@ -9,7 +10,21 @@ class PSQLDatabase:
     @classmethod
     async def get_pool(cls):
         if cls.pool is None:
-            cls.pool = await asyncpg.create_pool(dsn=DSN)
+            connect_kwargs = {"dsn": DSN}
+            # Pin the asyncpg pool to the same search_path the SQLAlchemy engine
+            # uses (see get_vector_store). Without this the pool runs with the
+            # default search_path (public) while pgvector's tables live in
+            # POSTGRES_SCHEMA, so ensure_vector_indexes()'s unqualified DDL fails
+            # with "relation langchain_pg_embedding does not exist" (or targets a
+            # stale public table) and the JSONB migration's current_schema()
+            # guard never matches.
+            if POSTGRES_SCHEMA:
+                schemas = _parse_schemas(POSTGRES_SCHEMA)
+                if schemas:
+                    connect_kwargs["server_settings"] = {
+                        "search_path": _build_search_path(schemas)
+                    }
+            cls.pool = await asyncpg.create_pool(**connect_kwargs)
         return cls.pool
 
     @classmethod

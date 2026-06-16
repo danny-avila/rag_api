@@ -84,3 +84,44 @@ def test_ensure_vector_indexes_gin_index(monkeypatch):
     gin_stmt = next(s for s in conn.statements if "ix_cmetadata_gin" in s)
     assert "jsonb_path_ops" in gin_stmt
     assert "USING gin" in gin_stmt
+
+
+def _capture_create_pool_kwargs(monkeypatch, schema):
+    """Reset the pool, set POSTGRES_SCHEMA, and return the kwargs that
+    PSQLDatabase.get_pool() passes to asyncpg.create_pool()."""
+    import app.services.database as db
+
+    captured = {}
+
+    async def fake_create_pool(**kwargs):
+        captured.update(kwargs)
+        return object()  # sentinel pool
+
+    monkeypatch.setattr(db.asyncpg, "create_pool", fake_create_pool)
+    monkeypatch.setattr(db, "POSTGRES_SCHEMA", schema)
+    monkeypatch.setattr(db.PSQLDatabase, "pool", None)
+
+    asyncio.run(db.PSQLDatabase.get_pool())
+    return captured
+
+
+def test_get_pool_pins_search_path_when_schema_configured(monkeypatch):
+    """When POSTGRES_SCHEMA is set the asyncpg pool must receive a matching
+    search_path via server_settings (regression: ensure_vector_indexes ran in
+    the wrong schema because the pool used the bare DSN)."""
+    captured = _capture_create_pool_kwargs(monkeypatch, "myapp")
+    assert captured["server_settings"] == {"search_path": "myapp,public"}
+
+
+def test_get_pool_search_path_multiple_schemas(monkeypatch):
+    """Comma-separated POSTGRES_SCHEMA is honored and `public` is appended,
+    matching the SQLAlchemy engine's _build_search_path."""
+    captured = _capture_create_pool_kwargs(monkeypatch, "myapp, extensions")
+    assert captured["server_settings"] == {"search_path": "myapp,extensions,public"}
+
+
+def test_get_pool_no_search_path_without_schema(monkeypatch):
+    """With no POSTGRES_SCHEMA the pool keeps the default search_path (no
+    server_settings), preserving today's behavior."""
+    captured = _capture_create_pool_kwargs(monkeypatch, None)
+    assert "server_settings" not in captured
