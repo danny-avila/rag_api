@@ -114,6 +114,10 @@ PDF_OCR_ENABLED = get_env_variable("RAG_PDF_OCR_ENABLED", "False").lower() in (
 PDF_OCR_MIN_CHARS = int(get_env_variable("RAG_PDF_OCR_MIN_CHARS", "16"))
 PDF_OCR_DPI = int(get_env_variable("RAG_PDF_OCR_DPI", "200"))
 PDF_OCR_MAX_PAGES = int(get_env_variable("RAG_PDF_OCR_MAX_PAGES", "50"))
+# Drop OCR text blocks below this confidence so low-quality recognitions never
+# reach the vector store. 0.0 = keep everything (default, no filtering); a value
+# around 0.5 filters noise on difficult scans/schematics.
+PDF_OCR_MIN_CONFIDENCE = float(get_env_variable("RAG_PDF_OCR_MIN_CONFIDENCE", "0.0"))
 
 if POSTGRES_USE_UNIX_SOCKET:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"
@@ -204,6 +208,12 @@ if PDF_OCR_ENABLED:
         logger.warning(
             "RAG_PDF_OCR_MIN_CHARS=%d is negative; the OCR fallback will never trigger.",
             PDF_OCR_MIN_CHARS,
+        )
+    if not 0.0 <= PDF_OCR_MIN_CONFIDENCE <= 1.0:
+        logger.warning(
+            "RAG_PDF_OCR_MIN_CONFIDENCE=%s is outside [0.0, 1.0]; a value >1.0 "
+            "drops all OCR text. Use e.g. 0.5.",
+            PDF_OCR_MIN_CONFIDENCE,
         )
 
 

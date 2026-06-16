@@ -14,7 +14,13 @@ pytest.importorskip("pypdfium2")
 
 from langchain_core.documents import Document
 
-from app.utils.ocr import has_text_layer, ocr_pdf, _ocr_result_to_text
+from app.utils.ocr import (
+    has_text_layer,
+    ocr_pdf,
+    _ocr_result_to_text,
+    _parse_ocr_result,
+    _normalize_ocr_output,
+)
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "image_only.pdf"
 
@@ -42,6 +48,54 @@ def test_ocr_result_to_text_tolerates_malformed_rows():
         (["box"], "also good", 0.8),
     ]
     assert _ocr_result_to_text(rows) == "good\nalso good"
+
+
+# --- confidence filtering -------------------------------------------------
+
+def test_ocr_result_to_text_drops_low_confidence_blocks():
+    rows = [
+        (["box"], "keep me", 0.91),
+        (["box"], "noise", 0.20),   # below threshold -> dropped
+        (["box"], "keep too", 0.65),
+    ]
+    assert _ocr_result_to_text(rows, min_confidence=0.5) == "keep me\nkeep too"
+
+
+def test_ocr_result_to_text_zero_threshold_keeps_everything():
+    rows = [(["box"], "a", 0.01), (["box"], "b", 0.99)]
+    assert _ocr_result_to_text(rows, min_confidence=0.0) == "a\nb"
+
+
+def test_parse_ocr_result_reports_mean_confidence_of_kept_rows():
+    rows = [
+        (["box"], "kept", 0.80),
+        (["box"], "dropped", 0.10),
+        (["box"], "kept2", 0.60),
+    ]
+    text, mean_conf = _parse_ocr_result(rows, min_confidence=0.5)
+    assert text == "kept\nkept2"
+    assert mean_conf == pytest.approx((0.80 + 0.60) / 2)
+
+
+def test_parse_ocr_result_mean_confidence_none_without_scores():
+    rows = [(["box"], "text only")]  # no confidence column
+    text, mean_conf = _parse_ocr_result(rows)
+    assert text == "text only"
+    assert mean_conf is None
+
+
+# --- _normalize_ocr_output ------------------------------------------------
+
+def test_normalize_ocr_output_bare_string():
+    assert _normalize_ocr_output("hello") == ("hello", None)
+
+
+def test_normalize_ocr_output_tuple():
+    assert _normalize_ocr_output(("hello", 0.7)) == ("hello", 0.7)
+
+
+def test_normalize_ocr_output_none_is_empty():
+    assert _normalize_ocr_output(None) == ("", None)
 
 
 # --- has_text_layer -------------------------------------------------------
@@ -98,6 +152,22 @@ def test_ocr_pdf_blank_ocr_yields_blank_pages():
     assert docs[0].page_content == ""
     # the recovered text is empty -> caller (loader) decides this is a failure
     assert has_text_layer(docs) is False
+
+
+def test_ocr_pdf_pages_arg_selects_specific_indices():
+    # The single-page fixture: requesting only page 0 yields one page; requesting
+    # an out-of-range page yields nothing (defensive against bad indices).
+    docs = ocr_pdf(str(FIXTURE), pages=[0], ocr=lambda image: "x")
+    assert len(docs) == 1 and docs[0].metadata["page"] == 0
+
+    none = ocr_pdf(str(FIXTURE), pages=[7], ocr=lambda image: "x")
+    assert none == []
+
+
+def test_ocr_pdf_accepts_tuple_returning_ocr_callable():
+    docs = ocr_pdf(str(FIXTURE), ocr=lambda image: ("with conf", 0.88))
+    assert len(docs) == 1
+    assert docs[0].page_content == "with conf"
 
 
 # --- integration: real OCR engine -----------------------------------------

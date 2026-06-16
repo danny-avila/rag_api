@@ -317,6 +317,69 @@ def test_safe_pdf_loader_ocr_still_empty_raises():
             list(loader.lazy_load())
 
 
+def _mixed_pages_gen():
+    """A PDF with one native-text page (0) and one image-only page (1)."""
+    yield Document(
+        page_content="Real native text with plenty of words on this page.",
+        metadata={"page": 0},
+    )
+    yield Document(page_content="   \n", metadata={"page": 1})
+
+
+def test_safe_pdf_loader_ocr_is_page_aware_on_mixed_pdf():
+    """Mixed PDF: only the text-less page is OCR'd; native text page is kept."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    loader = SafePyPDFLoader("dummy.pdf", extract_images=False, ocr_enabled=True)
+
+    ocr_docs = [
+        Document(
+            page_content="OCR recovered text for the scanned page two.",
+            metadata={"page": 1, "ocr": True},
+        )
+    ]
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf", return_value=ocr_docs
+    ) as mock_ocr:
+        instance = MagicMock()
+        instance.lazy_load.side_effect = _mixed_pages_gen
+        MockPDF.return_value = instance
+
+        result = list(loader.lazy_load())
+
+    # OCR invoked once, targeting only the deficient page index.
+    mock_ocr.assert_called_once()
+    assert mock_ocr.call_args.kwargs["pages"] == [1]
+    # Native page survives unchanged; scanned page is replaced by OCR text.
+    assert len(result) == 2
+    assert result[0].page_content.startswith("Real native text")
+    assert result[1].page_content.startswith("OCR recovered text")
+    assert result[1].metadata.get("ocr") is True
+
+
+def test_safe_pdf_loader_ocr_threads_min_confidence():
+    """The configured min-confidence is passed through to ocr_pdf."""
+    from app.utils.document_loader import SafePyPDFLoader
+
+    loader = SafePyPDFLoader(
+        "dummy.pdf", extract_images=False, ocr_enabled=True, ocr_min_confidence=0.5
+    )
+
+    ocr_docs = [Document(page_content="recovered enough text here", metadata={"page": 0})]
+
+    with patch("app.utils.document_loader.PyPDFLoader") as MockPDF, patch(
+        "app.utils.document_loader.ocr_pdf", return_value=ocr_docs
+    ) as mock_ocr:
+        instance = MagicMock()
+        instance.lazy_load.side_effect = _empty_pages_gen
+        MockPDF.return_value = instance
+
+        list(loader.lazy_load())
+
+    assert mock_ocr.call_args.kwargs["min_confidence"] == 0.5
+
+
 def test_safe_pdf_loader_ocr_skipped_when_text_present():
     """OCR on but the PDF already has a text layer -> OCR is not invoked."""
     from app.utils.document_loader import SafePyPDFLoader

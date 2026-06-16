@@ -18,6 +18,7 @@ from app.config import (
     PDF_OCR_MIN_CHARS,
     PDF_OCR_DPI,
     PDF_OCR_MAX_PAGES,
+    PDF_OCR_MIN_CONFIDENCE,
 )
 from app.utils.ocr import has_text_layer, ocr_pdf, NoExtractableTextError
 from langchain_community.document_loaders import (
@@ -114,6 +115,7 @@ def get_loader(
             ocr_min_chars=PDF_OCR_MIN_CHARS,
             ocr_dpi=PDF_OCR_DPI,
             ocr_max_pages=PDF_OCR_MAX_PAGES,
+            ocr_min_confidence=PDF_OCR_MIN_CONFIDENCE,
         )
     elif file_ext == "csv" or file_content_type == "text/csv":
         # Detect encoding for CSV files
@@ -282,6 +284,7 @@ class SafePyPDFLoader:
         ocr_min_chars: int = PDF_OCR_MIN_CHARS,
         ocr_dpi: int = PDF_OCR_DPI,
         ocr_max_pages: int = PDF_OCR_MAX_PAGES,
+        ocr_min_confidence: float = PDF_OCR_MIN_CONFIDENCE,
     ):
         self.filepath = filepath
         self.extract_images = extract_images
@@ -290,6 +293,7 @@ class SafePyPDFLoader:
         self.ocr_min_chars = ocr_min_chars
         self.ocr_dpi = ocr_dpi
         self.ocr_max_pages = ocr_max_pages
+        self.ocr_min_confidence = ocr_min_confidence
 
     def _load_raw(self) -> Iterator[Document]:
         """Original load path: PyPDFLoader with image-extraction KeyError fallback."""
@@ -317,15 +321,23 @@ class SafePyPDFLoader:
                 raise
         yield from pages
 
+    @staticmethod
+    def _page_index(doc: Document, fallback: int) -> int:
+        """0-based PDF page index for a native page, falling back to position."""
+        page = doc.metadata.get("page")
+        return page if isinstance(page, int) else fallback
+
     def lazy_load(self) -> Iterator[Document]:
         """Lazy load PDF documents.
 
-        Preserves the original streaming behavior. When OCR fallback is enabled
-        and the extracted text layer is below threshold (scanned / CAD-export
-        PDFs), the pages are re-derived via OCR so the document becomes
-        searchable instead of silently ingesting as zero chunks. If OCR is
-        enabled but still finds nothing, a NoExtractableTextError is raised so
-        the caller can report a clear reason.
+        Preserves the original streaming behavior. When OCR fallback is enabled,
+        the fallback is **page-aware**: only pages whose extracted text layer is
+        below threshold (scanned / CAD-export pages) are re-derived via OCR,
+        while native text pages are kept as-is. This handles *mixed* PDFs (some
+        pages have a text layer, some are image-only) instead of treating the
+        document as all-or-nothing. If OCR is enabled but the document still has
+        no usable text anywhere, a NoExtractableTextError is raised so the caller
+        can report a clear reason.
         """
         if not self.ocr_enabled:
             # OCR off (default): behavior is byte-for-byte unchanged.
@@ -333,30 +345,59 @@ class SafePyPDFLoader:
             return
 
         pages = list(self._load_raw())
-        if has_text_layer(pages, self.ocr_min_chars):
+
+        # Identify the pages that individually lack a usable text layer.
+        deficient_positions = [
+            pos
+            for pos, page in enumerate(pages)
+            if not has_text_layer([page], self.ocr_min_chars)
+        ]
+
+        if not deficient_positions:
             yield from pages
             return
 
         logger.warning(
-            "No usable text layer in %s (scanned/CAD?) — applying OCR fallback",
+            "No usable text layer on %d/%d page(s) of %s (scanned/CAD?) — "
+            "applying page-aware OCR fallback",
+            len(deficient_positions),
+            len(pages),
             self.filepath,
         )
-        ocr_pages = ocr_pdf(
-            self.filepath, dpi=self.ocr_dpi, max_pages=self.ocr_max_pages
-        )
-        if has_text_layer(ocr_pages, self.ocr_min_chars):
-            logger.info(
-                "OCR recovered text for %s across %d page(s)",
-                self.filepath,
-                len(ocr_pages),
-            )
-            yield from ocr_pages
-            return
 
-        raise NoExtractableTextError(
-            f"No extractable text found in '{os.path.basename(self.filepath)}' "
-            "even after OCR. The PDF may be blank or contain only non-text graphics."
+        ocr_indices = [
+            self._page_index(pages[pos], pos) for pos in deficient_positions
+        ]
+        ocr_pages = ocr_pdf(
+            self.filepath,
+            dpi=self.ocr_dpi,
+            max_pages=self.ocr_max_pages,
+            pages=ocr_indices,
+            min_confidence=self.ocr_min_confidence,
         )
+
+        # Splice OCR results back over the deficient pages by position. Pages
+        # dropped by the max_pages cap keep their (empty) native content.
+        recovered = 0
+        for pos, ocr_doc in zip(deficient_positions, ocr_pages):
+            pages[pos] = ocr_doc
+            if has_text_layer([ocr_doc], self.ocr_min_chars):
+                recovered += 1
+
+        if not has_text_layer(pages, self.ocr_min_chars):
+            raise NoExtractableTextError(
+                f"No extractable text found in '{os.path.basename(self.filepath)}' "
+                "even after OCR. The PDF may be blank or contain only non-text "
+                "graphics."
+            )
+
+        logger.info(
+            "OCR recovered text on %d/%d page(s) of %s",
+            recovered,
+            len(deficient_positions),
+            self.filepath,
+        )
+        yield from pages
 
     def load(self) -> List[Document]:
         """Load PDF documents with automatic fallback on image extraction errors."""
