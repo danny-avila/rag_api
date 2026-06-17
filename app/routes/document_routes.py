@@ -92,9 +92,21 @@ from app.utils.document_loader import (
     process_documents,
     cleanup_temp_encoding_file,
 )
+from app.utils.ocr import NoExtractableTextError
 from app.utils.health import is_health_ok
 
 router = APIRouter()
+
+
+def _is_encrypted_pdf_error(message: str) -> bool:
+    """Heuristic: does this error indicate an encrypted/password-protected PDF?"""
+    lowered = message.lower()
+    return (
+        "has not been decrypted" in lowered
+        or "file has not been decrypted" in lowered
+        or "password" in lowered
+        or "encrypted" in lowered
+    )
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -836,12 +848,24 @@ async def embed_local_file(
             http_exc.detail,
         )
         raise http_exc
+    except NoExtractableTextError as e:
+        logger.warning(
+            "No extractable text | File: %s | %s", document.filename, str(e)
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
         logger.error(e)
         if "No pandoc was found" in str(e):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.PANDOC_NOT_INSTALLED,
+            )
+        elif _is_encrypted_pdf_error(str(e)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PDF is encrypted or password-protected and cannot be ingested.",
             )
         else:
             raise HTTPException(
@@ -919,6 +943,11 @@ async def embed_file(
             http_exc.detail,
         )
         raise http_exc
+    except NoExtractableTextError as e:
+        logger.warning("No extractable text | File: %s | %s", file.filename, str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
@@ -927,6 +956,11 @@ async def embed_file(
             str(e),
             traceback.format_exc(),
         )
+        if _is_encrypted_pdf_error(str(e)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PDF is encrypted or password-protected and cannot be ingested.",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",
@@ -1041,6 +1075,13 @@ async def embed_file_upload(
             http_exc.detail,
         )
         raise http_exc
+    except NoExtractableTextError as e:
+        logger.warning(
+            "No extractable text | File: %s | %s", uploaded_file.filename, str(e)
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
     except Exception as e:
         logger.error(
             "Error during file processing | File: %s | Error: %s | Traceback: %s",
@@ -1048,6 +1089,11 @@ async def embed_file_upload(
             str(e),
             traceback.format_exc(),
         )
+        if _is_encrypted_pdf_error(str(e)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="PDF is encrypted or password-protected and cannot be ingested.",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error during file processing: {str(e)}",

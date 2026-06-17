@@ -1,0 +1,6 @@
+# Treat sample/fixture PDFs as binary so EOL normalization never corrupts them.
+*.pdf binary
+
+# Upstream README.md is stored with CRLF + BOM; keep it verbatim so the diff
+# is only the lines we add, not a whole-file EOL rewrite.
+README.md -text

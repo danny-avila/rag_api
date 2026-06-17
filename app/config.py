@@ -101,6 +101,24 @@ EMBEDDING_MAX_QUEUE_SIZE = int(get_env_variable("EMBEDDING_MAX_QUEUE_SIZE", "3")
 env_value = get_env_variable("PDF_EXTRACT_IMAGES", "False").lower()
 PDF_EXTRACT_IMAGES = True if env_value == "true" else False
 
+# OCR fallback for text-less PDFs (scanned pages / CAD exports). Opt-in: off by
+# default so existing behavior is unchanged. When enabled, a PDF whose extracted
+# text layer is below RAG_PDF_OCR_MIN_CHARS is rasterized (pypdfium2) and OCR'd
+# (rapidocr) instead of silently ingesting as zero chunks.
+PDF_OCR_ENABLED = get_env_variable("RAG_PDF_OCR_ENABLED", "False").lower() in (
+    "true",
+    "1",
+    "yes",
+    "on",
+)
+PDF_OCR_MIN_CHARS = int(get_env_variable("RAG_PDF_OCR_MIN_CHARS", "16"))
+PDF_OCR_DPI = int(get_env_variable("RAG_PDF_OCR_DPI", "200"))
+PDF_OCR_MAX_PAGES = int(get_env_variable("RAG_PDF_OCR_MAX_PAGES", "50"))
+# Drop OCR text blocks below this confidence so low-quality recognitions never
+# reach the vector store. 0.0 = keep everything (default, no filtering); a value
+# around 0.5 filters noise on difficult scans/schematics.
+PDF_OCR_MIN_CONFIDENCE = float(get_env_variable("RAG_PDF_OCR_MIN_CONFIDENCE", "0.0"))
+
 if POSTGRES_USE_UNIX_SOCKET:
     connection_suffix = f"{urllib.parse.quote_plus(POSTGRES_USER)}:{urllib.parse.quote_plus(POSTGRES_PASSWORD)}@/{urllib.parse.quote_plus(POSTGRES_DB)}?host={urllib.parse.quote_plus(DB_HOST)}"
 else:
@@ -172,6 +190,31 @@ else:
 handler = logging.StreamHandler()  # or logging.FileHandler("app.log")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+# Validate OCR tunables now that the logger is configured. These misconfigurations
+# would otherwise fail silently (every image-only PDF rejected, or a renderer crash).
+if PDF_OCR_ENABLED:
+    if PDF_OCR_MAX_PAGES <= 0:
+        logger.warning(
+            "RAG_PDF_OCR_MAX_PAGES=%d is <= 0; OCR will reject every text-less PDF.",
+            PDF_OCR_MAX_PAGES,
+        )
+    if PDF_OCR_DPI <= 0:
+        logger.warning(
+            "RAG_PDF_OCR_DPI=%d is <= 0; page rendering will fail. Use e.g. 200.",
+            PDF_OCR_DPI,
+        )
+    if PDF_OCR_MIN_CHARS < 0:
+        logger.warning(
+            "RAG_PDF_OCR_MIN_CHARS=%d is negative; the OCR fallback will never trigger.",
+            PDF_OCR_MIN_CHARS,
+        )
+    if not 0.0 <= PDF_OCR_MIN_CONFIDENCE <= 1.0:
+        logger.warning(
+            "RAG_PDF_OCR_MIN_CONFIDENCE=%s is outside [0.0, 1.0]; a value >1.0 "
+            "drops all OCR text. Use e.g. 0.5.",
+            PDF_OCR_MIN_CONFIDENCE,
+        )
 
 
 class LogMiddleware(BaseHTTPMiddleware):

@@ -12,6 +12,7 @@ psycopg2-binary==2.9.9
 pgvector==0.2.5
 uvicorn==0.28.0
 pypdf==6.10.2
+pypdfium2==5.10.1
 unstructured==0.18.32
 markdown==3.8.2
 networkx==3.2.1
