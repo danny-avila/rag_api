@@ -77,7 +77,7 @@ ATLAS_MONGO_DB_URI = get_env_variable(
 ATLAS_SEARCH_INDEX = get_env_variable("ATLAS_SEARCH_INDEX", "vector_index")
 MONGO_VECTOR_COLLECTION = get_env_variable(
     "MONGO_VECTOR_COLLECTION", None
-)  # Deprecated, backwards compatability
+)  # Deprecated, backwards compatibility
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
 
@@ -383,7 +383,7 @@ if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         schema=POSTGRES_SCHEMA,
     )
 elif VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
-    # Backward compatability check
+    # Backward compatibility check
     if MONGO_VECTOR_COLLECTION:
         logger.info(
             f"DEPRECATED: Please remove env var MONGO_VECTOR_COLLECTION and instead use COLLECTION_NAME and ATLAS_SEARCH_INDEX. You can set both as same, but not neccessary. See README for more information."
