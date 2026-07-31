@@ -223,9 +223,30 @@ def test_load_document_context_restores_parallel_chunk_order(auth_headers, monke
 
     async def out_of_order_documents(self, ids, executor=None):
         return [
-            Document(page_content="third", metadata={"_rag_chunk_index": 2}),
-            Document(page_content="first", metadata={"_rag_chunk_index": 0}),
-            Document(page_content="second", metadata={"_rag_chunk_index": 1}),
+            Document(
+                page_content="third",
+                metadata={
+                    "_rag_chunk_index": 2,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
+            Document(
+                page_content="first",
+                metadata={
+                    "_rag_chunk_index": 0,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
+            Document(
+                page_content="second",
+                metadata={
+                    "_rag_chunk_index": 1,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
         ]
 
     monkeypatch.setattr(AsyncPgVector, "get_documents_by_ids", out_of_order_documents)
@@ -234,6 +255,37 @@ def test_load_document_context_restores_parallel_chunk_order(auth_headers, monke
 
     assert response.status_code == 200, f"Response: {response.text}"
     assert response.json() == "firstsecondthird"
+
+
+def test_load_document_context_groups_repeated_ingestion_attempts(
+    auth_headers, monkeypatch
+):
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    def marked(content, chunk_index, attempt_id, started_at_ns):
+        return Document(
+            page_content=content,
+            metadata={
+                "_rag_chunk_index": chunk_index,
+                "_rag_ingestion_attempt_id": attempt_id,
+                "_rag_ingestion_attempt_started_at_ns": started_at_ns,
+            },
+        )
+
+    async def interleaved_attempts(self, ids, executor=None):
+        return [
+            marked("old-second", 1, "old", 100),
+            marked("new-second", 1, "new", 200),
+            marked("old-first", 0, "old", 100),
+            marked("new-first", 0, "new", 200),
+        ]
+
+    monkeypatch.setattr(AsyncPgVector, "get_documents_by_ids", interleaved_attempts)
+
+    response = client.get("/documents/testid1/context", headers=auth_headers)
+
+    assert response.status_code == 200, f"Response: {response.text}"
+    assert response.json() == "old-firstold-secondnew-firstnew-second"
 
 
 def test_embed_file_upload(tmp_path, auth_headers, monkeypatch):

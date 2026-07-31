@@ -101,38 +101,85 @@ from app.utils.health import is_health_ok
 router = APIRouter()
 
 _INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
+_INGESTION_ATTEMPT_STARTED_AT_NS_KEY = "_rag_ingestion_attempt_started_at_ns"
 _INGESTION_CHUNK_INDEX_KEY = "_rag_chunk_index"
 
 
+def _tag_documents_for_ingestion(documents: List[Document], file_id: str) -> str:
+    """Attach one attempt identity and source position to every document."""
+    ingestion_attempt_id = uuid.uuid4().hex
+    ingestion_attempt_started_at_ns = time.time_ns()
+
+    for chunk_index, document in enumerate(documents):
+        document.metadata = {
+            **(document.metadata or {}),
+            "file_id": file_id,
+            _INGESTION_CHUNK_INDEX_KEY: chunk_index,
+            _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
+            _INGESTION_ATTEMPT_STARTED_AT_NS_KEY: ingestion_attempt_started_at_ns,
+        }
+
+    return ingestion_attempt_id
+
+
 def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]:
-    """Restore source order for documents carrying ingestion chunk indexes.
+    """Group ingestion attempts and restore source order within each group.
 
-    Legacy or mixed-version rows may not have a trustworthy index. Preserve their
-    existing iteration order instead of guessing when an index is missing, invalid,
-    or duplicated.
+    Repeated ingestions intentionally retain every row currently returned by the
+    vector store. Legacy rows stay first in their received order, followed by marked
+    attempts in start-time order. Within a group, preserve received order instead of
+    guessing when a chunk index is missing, invalid, or duplicated.
     """
-    ordered_documents = list(documents)
-    chunk_indexes = []
 
-    for document in ordered_documents:
-        chunk_index = (document.metadata or {}).get(_INGESTION_CHUNK_INDEX_KEY)
+    def order_group(group: List[Document]) -> List[Document]:
+        received_group = list(group)
+        chunk_indexes = []
+
+        for document in received_group:
+            chunk_index = (document.metadata or {}).get(_INGESTION_CHUNK_INDEX_KEY)
+            if (
+                isinstance(chunk_index, bool)
+                or not isinstance(chunk_index, int)
+                or chunk_index < 0
+            ):
+                return received_group
+            chunk_indexes.append(chunk_index)
+
+        if len(set(chunk_indexes)) != len(chunk_indexes):
+            return received_group
+
+        return [
+            document
+            for _, document in sorted(
+                zip(chunk_indexes, received_group), key=lambda item: item[0]
+            )
+        ]
+
+    attempt_groups = {}
+    legacy_documents = []
+    for document in documents:
+        metadata = document.metadata or {}
+        attempt_id = metadata.get(_INGESTION_ATTEMPT_ID_KEY)
+        started_at_ns = metadata.get(_INGESTION_ATTEMPT_STARTED_AT_NS_KEY)
         if (
-            isinstance(chunk_index, bool)
-            or not isinstance(chunk_index, int)
-            or chunk_index < 0
+            not isinstance(attempt_id, str)
+            or not attempt_id
+            or isinstance(started_at_ns, bool)
+            or not isinstance(started_at_ns, int)
+            or started_at_ns < 0
         ):
-            return ordered_documents
-        chunk_indexes.append(chunk_index)
+            legacy_documents.append(document)
+            continue
 
-    if len(set(chunk_indexes)) != len(chunk_indexes):
-        return ordered_documents
+        attempt_groups.setdefault((started_at_ns, attempt_id), []).append(document)
 
-    return [
-        document
-        for _, document in sorted(
-            zip(chunk_indexes, ordered_documents), key=lambda item: item[0]
-        )
-    ]
+    if not attempt_groups:
+        return legacy_documents
+
+    ordered_documents = list(legacy_documents)
+    for attempt_key in sorted(attempt_groups):
+        ordered_documents.extend(order_group(attempt_groups[attempt_key]))
+    return ordered_documents
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -574,14 +621,7 @@ async def _process_documents_async_pipeline(
     if total_chunks == 0:
         return []
 
-    ingestion_attempt_id = uuid.uuid4().hex
-    for chunk_index, document in enumerate(documents):
-        document.metadata = {
-            **(document.metadata or {}),
-            "file_id": file_id,
-            _INGESTION_CHUNK_INDEX_KEY: chunk_index,
-            _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
-        }
+    ingestion_attempt_id = _tag_documents_for_ingestion(documents, file_id)
 
     # Create queues for producer-consumer pattern
     # embedding_queue is bounded to limit document data held in memory.
@@ -632,15 +672,18 @@ async def _process_documents_async_pipeline(
                 await embedding_queue.put(
                     (batch_documents, batch_ids, batch_idx + 1, num_batches)
                 )
+            # Signal normal completion. Failure and cancellation paths are
+            # cancelled by the caller and must never block enqueueing sentinels.
+            if not failure_event.is_set():
+                for _ in range(consumer_count):
+                    await embedding_queue.put(None)
+        except asyncio.CancelledError:
+            failure_event.set()
+            raise
         except Exception as e:
             failure_event.set()
             logger.error("Error in batch producer: %s", e)
             raise
-        finally:
-            # Signal normal completion; failure paths are cancelled by the caller.
-            if not failure_event.is_set():
-                for _ in range(consumer_count):
-                    await embedding_queue.put(None)
 
     async def insert_batch(
         batch_documents: List[Document], batch_ids: List[str]
@@ -765,6 +808,7 @@ async def _process_documents_async_pipeline(
         return all_ids
 
     except (Exception, asyncio.CancelledError) as e:
+        failure_event.set()
         logger.error(
             "Pipeline failed | user_id=%s | file_id=%s | inserted_batches=%d | error=%s | %s",
             user_id,
@@ -987,6 +1031,7 @@ async def store_data_in_vector_db(
         if EMBEDDING_BATCH_SIZE <= 0:
             # synchronously embed the file and insert into vector store in one go
             if isinstance(vector_store, AsyncPgVector):
+                _tag_documents_for_ingestion(docs, file_id)
                 ids = await vector_store.aadd_documents(
                     docs, ids=[file_id] * len(docs), executor=executor
                 )

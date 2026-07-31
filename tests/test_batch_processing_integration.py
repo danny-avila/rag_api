@@ -286,6 +286,25 @@ class TestConfigurationBehavior:
         # When batch size is 0, aadd_documents should be called directly
         # (not through the pipeline)
         assert mock_store.aadd_documents.called
+        stored_documents = mock_store.aadd_documents.call_args.args[0]
+        assert [
+            document.metadata["_rag_chunk_index"] for document in stored_documents
+        ] == list(range(len(stored_documents)))
+        assert all(
+            document.metadata["file_id"] == "test_file" for document in stored_documents
+        )
+        attempt_ids = {
+            document.metadata["_rag_ingestion_attempt_id"]
+            for document in stored_documents
+        }
+        started_at_values = {
+            document.metadata["_rag_ingestion_attempt_started_at_ns"]
+            for document in stored_documents
+        }
+        assert len(attempt_ids) == 1
+        assert all(attempt_ids)
+        assert len(started_at_values) == 1
+        assert type(next(iter(started_at_values))) is int
 
     @pytest.mark.asyncio
     async def test_different_batch_sizes_produce_correct_batches(self):

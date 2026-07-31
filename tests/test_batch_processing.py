@@ -39,9 +39,30 @@ class TestDocumentChunkOrdering:
         from app.routes.document_routes import _order_documents_by_chunk_index
 
         documents = [
-            Document(page_content="third", metadata={"_rag_chunk_index": 2}),
-            Document(page_content="first", metadata={"_rag_chunk_index": 0}),
-            Document(page_content="second", metadata={"_rag_chunk_index": 1}),
+            Document(
+                page_content="third",
+                metadata={
+                    "_rag_chunk_index": 2,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
+            Document(
+                page_content="first",
+                metadata={
+                    "_rag_chunk_index": 0,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
+            Document(
+                page_content="second",
+                metadata={
+                    "_rag_chunk_index": 1,
+                    "_rag_ingestion_attempt_id": "attempt-a",
+                    "_rag_ingestion_attempt_started_at_ns": 100,
+                },
+            ),
         ]
 
         ordered = _order_documents_by_chunk_index(documents)
@@ -52,6 +73,40 @@ class TestDocumentChunkOrdering:
             "third",
         ]
         assert documents[0].page_content == "third"
+
+    def test_groups_repeated_attempts_before_ordering_chunks(self):
+        """Chunk indexes from repeated attempts must not collide."""
+        from app.routes.document_routes import _order_documents_by_chunk_index
+
+        def marked(content, chunk_index, attempt_id, started_at_ns):
+            return Document(
+                page_content=content,
+                metadata={
+                    "_rag_chunk_index": chunk_index,
+                    "_rag_ingestion_attempt_id": attempt_id,
+                    "_rag_ingestion_attempt_started_at_ns": started_at_ns,
+                },
+            )
+
+        documents = [
+            Document(page_content="legacy", metadata={}),
+            marked("a2", 2, "attempt-a", 100),
+            marked("b1", 1, "attempt-b", 200),
+            marked("a0", 0, "attempt-a", 100),
+            marked("b0", 0, "attempt-b", 200),
+            marked("a1", 1, "attempt-a", 100),
+        ]
+
+        ordered = _order_documents_by_chunk_index(documents)
+
+        assert [document.page_content for document in ordered] == [
+            "legacy",
+            "a0",
+            "a1",
+            "a2",
+            "b0",
+            "b1",
+        ]
 
     @pytest.mark.parametrize(
         "metadata",
@@ -648,6 +703,82 @@ class TestProducerConsumerPattern:
                 await pipeline_task
 
         assert events == ["insert_started", "insert_finished", "rollback"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("document_count", "blocked_put"),
+        [(3, "batch"), (2, "sentinel")],
+    )
+    async def test_producer_cancellation_does_not_block_on_full_queue(
+        self, document_count, blocked_put
+    ):
+        """One cancellation must release a producer blocked on a full queue."""
+        import asyncio
+
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        target_put_started = asyncio.Event()
+        sentinel_put_started = asyncio.Event()
+
+        class ObservingQueue(asyncio.Queue):
+            async def put(self, item):
+                if item is None:
+                    sentinel_put_started.set()
+
+                is_target = (blocked_put == "sentinel" and item is None) or (
+                    blocked_put == "batch"
+                    and item is not None
+                    and item[2] == document_count
+                )
+                if is_target:
+                    target_put_started.set()
+                return await super().put(item)
+
+        async def add_documents(docs, ids=None, executor=None):
+            await target_put_started.wait()
+            raise asyncio.CancelledError
+
+        mock_store = AsyncMock()
+        mock_store.aadd_documents = add_documents
+        mock_store.delete_by_metadata = AsyncMock()
+        documents = [
+            Document(
+                page_content=f"doc_{source_index}",
+                metadata={"source_index": source_index},
+            )
+            for source_index in range(document_count)
+        ]
+
+        with (
+            patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1),
+            patch("app.routes.document_routes.EMBEDDING_MAX_QUEUE_SIZE", 1),
+            patch("app.routes.document_routes.asyncio.Queue", ObservingQueue),
+        ):
+            pipeline_task = asyncio.create_task(
+                _process_documents_async_pipeline(
+                    documents=documents,
+                    file_id="test",
+                    vector_store=mock_store,
+                    executor=None,
+                )
+            )
+            try:
+                done, _ = await asyncio.wait({pipeline_task}, timeout=1)
+                assert (
+                    pipeline_task in done
+                ), f"pipeline hung after cancellation during {blocked_put} enqueue"
+                with pytest.raises(asyncio.CancelledError):
+                    await pipeline_task
+            finally:
+                if not pipeline_task.done():
+                    pipeline_task.cancel()
+                    await asyncio.gather(pipeline_task, return_exceptions=True)
+
+        if blocked_put == "batch":
+            assert not sentinel_put_started.is_set()
+        else:
+            assert sentinel_put_started.is_set()
+        mock_store.delete_by_metadata.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cancellation_rollback_preserves_same_file_rows(self):
