@@ -59,6 +59,14 @@ async def test_delete_passes_args(store):
 
 
 @pytest.mark.asyncio
+async def test_delete_by_metadata_passes_filter(store):
+    metadata_filter = {"_rag_ingestion_attempt_id": "attempt-123"}
+    with patch.object(ExtendedPgVector, "_delete_by_metadata") as mock:
+        await store.delete_by_metadata(metadata_filter)
+    mock.assert_called_once_with(metadata_filter)
+
+
+@pytest.mark.asyncio
 async def test_asimilarity_search_passes_args(store):
     expected = [(Document(page_content="test", metadata={}), 0.9)]
     with patch.object(

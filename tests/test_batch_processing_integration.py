@@ -194,6 +194,7 @@ class TestBatchProcessingResilience:
         mock_store = AsyncMock()
         mock_store.aadd_documents = failing_add_documents
         mock_store.delete = AsyncMock()
+        mock_store.delete_by_metadata = AsyncMock()
 
         docs = [
             Document(page_content=f"doc_{i}", metadata={"idx": i}) for i in range(15)
@@ -209,14 +210,15 @@ class TestBatchProcessingResilience:
                 )
 
         # Verify rollback was called because we had inserted batches
-        mock_store.delete.assert_called_once()
+        mock_store.delete.assert_not_called()
+        mock_store.delete_by_metadata.assert_called_once()
 
         # Verify we inserted 2 batches before failure
         assert len(inserted_batches) == 2
 
     @pytest.mark.asyncio
-    async def test_rollback_called_with_correct_file_id(self):
-        """Test that rollback uses the correct file_id."""
+    async def test_rollback_called_with_current_ingestion_attempt(self):
+        """Test that rollback targets only the current ingestion attempt."""
         from app.routes.document_routes import _process_documents_async_pipeline
 
         async def failing_on_second(docs, ids=None, executor=None):
@@ -227,6 +229,7 @@ class TestBatchProcessingResilience:
         mock_store = AsyncMock()
         mock_store.aadd_documents = failing_on_second
         mock_store.delete = AsyncMock()
+        mock_store.delete_by_metadata = AsyncMock()
 
         docs = [
             Document(page_content=f"doc_{i}", metadata={"idx": i}) for i in range(10)
@@ -241,10 +244,15 @@ class TestBatchProcessingResilience:
                     executor=None,
                 )
 
-        # Verify delete was called with the correct file_id
-        mock_store.delete.assert_called_once()
-        call_kwargs = mock_store.delete.call_args
-        assert call_kwargs[1]["ids"] == ["my_unique_file_id"]
+        mock_store.delete.assert_not_called()
+        mock_store.delete_by_metadata.assert_called_once()
+        metadata_filter = mock_store.delete_by_metadata.call_args.args[0]
+        attempt_id = metadata_filter["_rag_ingestion_attempt_id"]
+        assert attempt_id
+        assert all(
+            document.metadata["_rag_ingestion_attempt_id"] == attempt_id
+            for document in docs
+        )
 
 
 class TestConfigurationBehavior:

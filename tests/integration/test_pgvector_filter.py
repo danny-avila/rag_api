@@ -11,6 +11,7 @@ import json
 import math
 import random
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import sqlalchemy
@@ -395,6 +396,69 @@ class TestExtendedPgVectorSQL:
             results = query.all()
             assert len(results) == 10
             assert all(r.cmetadata["file_id"] == target_file for r in results)
+
+    def test_delete_by_metadata_preserves_same_file_rows(
+        self, engine, collection_id, store
+    ):
+        """Attempt-scoped rollback must preserve prior and concurrent rows."""
+        file_id = f"file-{uuid.uuid4().hex[:8]}"
+        cancelled_attempt = uuid.uuid4().hex
+        successful_attempt = uuid.uuid4().hex
+
+        rows = [
+            ("existing", {"file_id": file_id}),
+            (
+                "successful",
+                {
+                    "file_id": file_id,
+                    "_rag_ingestion_attempt_id": successful_attempt,
+                },
+            ),
+            (
+                "cancelled",
+                {
+                    "file_id": file_id,
+                    "_rag_ingestion_attempt_id": cancelled_attempt,
+                },
+            ),
+        ]
+        with engine.begin() as conn:
+            for document, metadata in rows:
+                conn.execute(
+                    text(
+                        "INSERT INTO langchain_pg_embedding "
+                        "(collection_id, embedding, document, cmetadata, custom_id) "
+                        "VALUES (:cid, :emb, :doc, :meta, :cust)"
+                    ),
+                    {
+                        "cid": collection_id,
+                        "emb": "[0.1,0.2,0.3]",
+                        "doc": document,
+                        "meta": json.dumps(metadata),
+                        "cust": file_id,
+                    },
+                )
+
+        store._bind = engine
+        store.get_collection = lambda session: SimpleNamespace(uuid=collection_id)
+        store._delete_by_metadata({"_rag_ingestion_attempt_id": cancelled_attempt})
+
+        with engine.begin() as conn:
+            remaining = (
+                conn.execute(
+                    text(
+                        "SELECT document FROM langchain_pg_embedding "
+                        "WHERE collection_id = :cid "
+                        "AND cmetadata->>'file_id' = :fid "
+                        "ORDER BY document"
+                    ),
+                    {"cid": collection_id, "fid": file_id},
+                )
+                .scalars()
+                .all()
+            )
+
+        assert remaining == ["existing", "successful"]
 
     def test_ne_clause_runs_on_real_pg(self, engine, collection_id, store):
         target_file = f"file-{uuid.uuid4().hex[:8]}"

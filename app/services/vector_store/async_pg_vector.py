@@ -69,6 +69,13 @@ class AsyncPgVector(ExtendedPgVector):
             executor, self._delete_multiple, ids, collection_only
         )
 
+    async def delete_by_metadata(
+        self, metadata_filter: Dict[str, Any], executor=None
+    ) -> None:
+        """Delete only rows in this collection that match metadata values."""
+        executor = executor or self._get_thread_pool()
+        await self._run_in_executor(executor, self._delete_by_metadata, metadata_filter)
+
     async def asimilarity_search_with_score_by_vector(
         self,
         embedding: List[float],

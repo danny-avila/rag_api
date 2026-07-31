@@ -198,6 +198,26 @@ class ExtendedPgVector(PGVector):
                 if result.custom_id in ids
             ]
 
+    def _delete_by_metadata(self, metadata_filter: Dict[str, Any]) -> None:
+        """Delete rows in this collection that exactly match metadata values."""
+        if not metadata_filter:
+            raise ValueError("metadata_filter must not be empty")
+
+        with Session(self._bind) as session:
+            collection = self.get_collection(session)
+            if not collection:
+                self.logger.warning("Collection not found")
+                return
+
+            stmt = delete(self.EmbeddingStore).where(
+                self.EmbeddingStore.collection_id == collection.uuid
+            )
+            for field, value in metadata_filter.items():
+                stmt = stmt.where(self._handle_field_filter(field, value))
+
+            session.execute(stmt)
+            session.commit()
+
     def _delete_multiple(
         self, ids: Optional[list[str]] = None, collection_only: bool = False
     ) -> None:

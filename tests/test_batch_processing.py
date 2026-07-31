@@ -4,6 +4,34 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from langchain_core.documents import Document
 
 
+class TestProcessMemoryDetails:
+    """Test process memory details used by ingestion logging."""
+
+    @pytest.mark.parametrize(
+        ("platform_name", "ru_maxrss"),
+        [
+            pytest.param("linux", 1536, id="linux-kib"),
+            pytest.param("darwin", 1536 * 1024, id="darwin-bytes"),
+        ],
+    )
+    def test_fallback_converts_peak_rss_to_mb(self, platform_name, ru_maxrss):
+        """Fallback should normalize native ru_maxrss units to MiB."""
+        from app.routes.document_routes import get_process_memory_details
+
+        mock_resource = MagicMock()
+        mock_resource.RUSAGE_SELF = object()
+        mock_resource.getrusage.return_value = Mock(ru_maxrss=ru_maxrss)
+
+        with (
+            patch("builtins.open", side_effect=FileNotFoundError),
+            patch("app.routes.document_routes.sys.platform", platform_name),
+            patch.dict("sys.modules", {"resource": mock_resource}),
+        ):
+            assert get_process_memory_details() == "rss_peak_mb=1.5"
+
+        mock_resource.getrusage.assert_called_once_with(mock_resource.RUSAGE_SELF)
+
+
 class TestBatchProcessing:
     """Test batch processing functions."""
 
@@ -21,6 +49,7 @@ class TestBatchProcessing:
         store = AsyncMock()
         store.aadd_documents = AsyncMock(return_value=["id1", "id2"])
         store.delete = AsyncMock()
+        store.delete_by_metadata = AsyncMock()
         return store
 
     @pytest.fixture
@@ -118,7 +147,11 @@ class TestBatchProcessing:
                     executor=None,
                 )
 
-        mock_async_vector_store.delete.assert_called_once()
+        mock_async_vector_store.delete.assert_not_called()
+        mock_async_vector_store.delete_by_metadata.assert_called_once()
+        metadata_filter = mock_async_vector_store.delete_by_metadata.call_args.args[0]
+        assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
+        assert metadata_filter["_rag_ingestion_attempt_id"]
 
     @pytest.mark.asyncio
     async def test_async_pipeline_no_rollback_before_insert_starts(
@@ -141,6 +174,7 @@ class TestBatchProcessing:
                 )
 
         assert not mock_async_vector_store.delete.called
+        assert not mock_async_vector_store.delete_by_metadata.called
 
     # --- Sync Batched Tests ---
 
@@ -435,12 +469,13 @@ class TestProducerConsumerPattern:
             events.append("failing_insert")
             raise ValueError("Test error")
 
-        async def delete(ids=None, executor=None):
+        async def delete_by_metadata(metadata_filter, executor=None):
+            assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
             events.append("rollback")
 
         mock_store = AsyncMock()
         mock_store.aadd_documents = add_documents
-        mock_store.delete = delete
+        mock_store.delete_by_metadata = delete_by_metadata
 
         docs = [
             Document(page_content="slow", metadata={"idx": 0}),
@@ -477,12 +512,13 @@ class TestProducerConsumerPattern:
             events.append("insert_finished")
             return ["id"]
 
-        async def delete(ids=None, executor=None):
+        async def delete_by_metadata(metadata_filter, executor=None):
+            assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
             events.append("rollback")
 
         mock_store = AsyncMock()
         mock_store.aadd_documents = add_documents
-        mock_store.delete = delete
+        mock_store.delete_by_metadata = delete_by_metadata
 
         docs = [Document(page_content="test", metadata={})]
 
@@ -504,6 +540,171 @@ class TestProducerConsumerPattern:
                 await pipeline_task
 
         assert events == ["insert_started", "insert_finished", "rollback"]
+
+    @pytest.mark.asyncio
+    async def test_cancellation_rollback_preserves_same_file_rows(self):
+        """Rollback removes only rows created by the cancelled ingestion attempt."""
+        import asyncio
+
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        key = "_rag_ingestion_attempt_id"
+        records = [{"content": "existing", "metadata": {"file_id": "test"}}]
+        cancelled_insert_started = asyncio.Event()
+        release_cancelled_insert = asyncio.Event()
+
+        class TrackingStore:
+            async def aadd_documents(self, docs, ids=None, executor=None):
+                document = docs[0]
+                if document.page_content == "cancelled":
+                    cancelled_insert_started.set()
+                    await release_cancelled_insert.wait()
+
+                records.append(
+                    {
+                        "content": document.page_content,
+                        "metadata": dict(document.metadata),
+                    }
+                )
+                return ids
+
+            async def delete_by_metadata(self, metadata_filter, executor=None):
+                records[:] = [
+                    record
+                    for record in records
+                    if not all(
+                        record["metadata"].get(field) == value
+                        for field, value in metadata_filter.items()
+                    )
+                ]
+
+            async def delete(self, ids=None, executor=None):
+                raise AssertionError("rollback must not delete by file_id")
+
+        store = TrackingStore()
+        cancelled_docs = [Document(page_content="cancelled", metadata={})]
+        successful_docs = [Document(page_content="successful", metadata={})]
+
+        with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
+            cancelled_task = asyncio.create_task(
+                _process_documents_async_pipeline(
+                    documents=cancelled_docs,
+                    file_id="test",
+                    vector_store=store,
+                    executor=None,
+                )
+            )
+            await asyncio.wait_for(cancelled_insert_started.wait(), timeout=1)
+
+            await _process_documents_async_pipeline(
+                documents=successful_docs,
+                file_id="test",
+                vector_store=store,
+                executor=None,
+            )
+
+            cancelled_task.cancel()
+            await asyncio.sleep(0)
+            release_cancelled_insert.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(cancelled_task, timeout=1)
+
+        assert [record["content"] for record in records] == [
+            "existing",
+            "successful",
+        ]
+        assert key not in records[0]["metadata"]
+        assert key in records[1]["metadata"]
+        assert cancelled_docs[0].metadata[key] != successful_docs[0].metadata[key]
+
+    @pytest.mark.asyncio
+    async def test_peer_consumer_skips_queued_batch_after_failure(self):
+        """A peer must acknowledge, but not start, queued work after a failure."""
+        import asyncio
+
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        created_queues = []
+
+        class TrackingQueue(asyncio.Queue):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.get_count = 0
+                self.task_done_count = 0
+                self.checked_out = {}
+                self.completed = []
+                created_queues.append(self)
+
+            async def get(self):
+                item = await super().get()
+                self.get_count += 1
+                self.checked_out[asyncio.current_task()] = item
+                return item
+
+            def task_done(self):
+                self.task_done_count += 1
+                self.completed.append(self.checked_out.pop(asyncio.current_task()))
+                super().task_done()
+
+        loop = asyncio.get_running_loop()
+        failing_result = loop.create_future()
+        successful_result = loop.create_future()
+        first_two_started = asyncio.Event()
+        started_batches = []
+
+        async def add_documents(docs, ids=None, executor=None):
+            batch_idx = docs[0].metadata["idx"]
+            started_batches.append(batch_idx)
+
+            if len(started_batches) == 2:
+                first_two_started.set()
+
+            if batch_idx == 0:
+                return await failing_result
+            if batch_idx == 1:
+                return await successful_result
+            return [f"id_{batch_idx}"]
+
+        mock_store = AsyncMock()
+        mock_store.aadd_documents = add_documents
+        mock_store.delete_by_metadata = AsyncMock()
+
+        docs = [
+            Document(page_content=f"doc_{idx}", metadata={"idx": idx})
+            for idx in range(3)
+        ]
+
+        with (
+            patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1),
+            patch("app.routes.document_routes.EMBEDDING_MAX_QUEUE_SIZE", 3),
+            patch("app.routes.document_routes.asyncio.Queue", TrackingQueue),
+        ):
+            pipeline_task = asyncio.create_task(
+                _process_documents_async_pipeline(
+                    documents=docs,
+                    file_id="test",
+                    vector_store=mock_store,
+                    executor=None,
+                    parallel_execution=2,
+                )
+            )
+
+            await asyncio.wait_for(first_two_started.wait(), timeout=1)
+            failing_result.set_exception(ValueError("Test error"))
+            successful_result.set_result(["id_1"])
+
+            with pytest.raises(ValueError, match="Test error"):
+                await asyncio.wait_for(pipeline_task, timeout=1)
+
+        assert set(started_batches) == {0, 1}
+
+        queue = created_queues[0]
+        completed_batch_numbers = [
+            item[2] for item in queue.completed if item is not None
+        ]
+        assert 3 in completed_batch_numbers
+        assert queue.get_count == queue.task_done_count
+        assert queue.checked_out == {}
 
     @pytest.mark.asyncio
     async def test_all_ids_collected_across_batches(self):

@@ -1,5 +1,6 @@
 # app/routes/document_routes.py
 import os
+import sys
 import uuid
 from pathlib import Path
 import hashlib
@@ -56,10 +57,9 @@ from app.config import (
 # (so non-numeric stale values don't break startup), which means the parsed
 # value is always None for Atlas — and relying on it would suppress the
 # warning we want operators to see.
-if (
-    VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
-    and os.getenv("RAG_DISTANCE_THRESHOLD") not in (None, "")
-):
+if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO and os.getenv(
+    "RAG_DISTANCE_THRESHOLD"
+) not in (None, ""):
     logger.warning(
         "RAG_DISTANCE_THRESHOLD is set but VECTOR_DB_TYPE=atlas-mongo; "
         "Atlas returns similarity scores (higher = better) which would "
@@ -80,6 +80,8 @@ def _apply_distance_threshold(documents):
     if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         return documents
     return [(doc, score) for doc, score in documents if score <= RAG_DISTANCE_THRESHOLD]
+
+
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -97,6 +99,8 @@ from app.utils.document_loader import (
 from app.utils.health import is_health_ok
 
 router = APIRouter()
+
+_INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -134,10 +138,10 @@ def get_process_memory_details() -> str:
         import resource
 
         max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if os.name == "posix":
-            max_rss_mb = max_rss / 1024
-        else:
-            max_rss_mb = max_rss / (1024 * 1024)
+        # Darwin reports ru_maxrss in bytes; Linux reports it in KiB.
+        max_rss_mb = (
+            max_rss / (1024 * 1024) if sys.platform == "darwin" else max_rss / 1024
+        )
 
         if not any(part.startswith("rss_peak_mb=") for part in parts):
             parts.append(f"rss_peak_mb={max_rss_mb:.1f}")
@@ -538,6 +542,13 @@ async def _process_documents_async_pipeline(
     if total_chunks == 0:
         return []
 
+    ingestion_attempt_id = uuid.uuid4().hex
+    for document in documents:
+        document.metadata = {
+            **(document.metadata or {}),
+            _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
+        }
+
     # Create queues for producer-consumer pattern
     # embedding_queue is bounded to limit document data held in memory.
     embedding_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)
@@ -646,37 +657,44 @@ async def _process_documents_async_pipeline(
         try:
             while True:
                 item = await embedding_queue.get()
-                if item is None:  # End signal
-                    embedding_queue.task_done()
-                    break
-
-                batch_documents, batch_ids, batch_num, total_batches = item
-
-                logger.debug(
-                    "Inserting batch | user_id=%s | file_id=%s | batch=%d/%d | batch_chunks=%d",
-                    user_id,
-                    file_id,
-                    batch_num,
-                    total_batches,
-                    len(batch_documents),
-                )
-
                 try:
-                    # Insert batch into database
-                    batch_result_ids = await insert_batch(batch_documents, batch_ids)
-                    successful_batch_ids[batch_num] = batch_result_ids
-                except Exception as e:
-                    failure_event.set()
-                    logger.error(
-                        "Error processing batch | user_id=%s | file_id=%s | batch=%d/%d | error=%s | %s",
+                    if item is None:  # End signal
+                        break
+
+                    # A peer can fail before gather() resumes and cancels this task.
+                    # Acknowledge already-queued work without starting another insert.
+                    if failure_event.is_set():
+                        continue
+
+                    batch_documents, batch_ids, batch_num, total_batches = item
+
+                    logger.debug(
+                        "Inserting batch | user_id=%s | file_id=%s | batch=%d/%d | batch_chunks=%d",
                         user_id,
                         file_id,
                         batch_num,
                         total_batches,
-                        e,
-                        get_process_memory_details(),
+                        len(batch_documents),
                     )
-                    raise
+
+                    try:
+                        # Insert batch into database
+                        batch_result_ids = await insert_batch(
+                            batch_documents, batch_ids
+                        )
+                        successful_batch_ids[batch_num] = batch_result_ids
+                    except Exception as e:
+                        failure_event.set()
+                        logger.error(
+                            "Error processing batch | user_id=%s | file_id=%s | batch=%d/%d | error=%s | %s",
+                            user_id,
+                            file_id,
+                            batch_num,
+                            total_batches,
+                            e,
+                            get_process_memory_details(),
+                        )
+                        raise
                 finally:
                     embedding_queue.task_done()
 
@@ -747,7 +765,10 @@ async def _process_documents_async_pipeline(
                     file_id,
                     get_process_memory_details(),
                 )
-                await vector_store.delete(ids=[file_id], executor=executor)
+                await vector_store.delete_by_metadata(
+                    {_INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id},
+                    executor=executor,
+                )
                 logger.info(
                     "Rollback completed | user_id=%s | file_id=%s | %s",
                     user_id,
