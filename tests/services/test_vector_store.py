@@ -1,5 +1,7 @@
 import pytest
 import sqlalchemy
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from sqlalchemy.dialects import postgresql
 from langchain_community.vectorstores.pgvector import _get_embedding_collection_store
 
@@ -30,6 +32,37 @@ def _compile(clause):
             dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
         )
     )
+
+
+def test_delete_by_metadata_is_collection_scoped():
+    store = DummyPgVector()
+    collection_id = "00000000-0000-0000-0000-000000000123"
+    store.get_collection = Mock(return_value=SimpleNamespace(uuid=collection_id))
+
+    with patch("app.services.vector_store.extended_pg_vector.Session") as session_class:
+        session = session_class.return_value.__enter__.return_value
+        store._delete_by_metadata(
+            {
+                "file_id": "file-123",
+                "_rag_ingestion_attempt_id": "attempt-123",
+            }
+        )
+
+    statement = session.execute.call_args.args[0]
+    sql = _compile(statement)
+    assert "DELETE FROM langchain_pg_embedding" in sql
+    assert "collection_id" in sql
+    assert "->>" in sql
+    assert "file_id" in sql
+    assert "file-123" in sql
+    assert "_rag_ingestion_attempt_id" in sql
+    assert "attempt-123" in sql
+    session.commit.assert_called_once_with()
+
+
+def test_delete_by_metadata_rejects_empty_filter():
+    with pytest.raises(ValueError, match="must not be empty"):
+        DummyPgVector()._delete_by_metadata({})
 
 
 class TestHandleFieldFilter:

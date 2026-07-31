@@ -80,6 +80,7 @@ MONGO_VECTOR_COLLECTION = get_env_variable(
 )  # Deprecated, backwards compatability
 CHUNK_SIZE = int(get_env_variable("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(get_env_variable("CHUNK_OVERLAP", "100"))
+PARALLEL_EXECUTION = int(get_env_variable("PARALLEL_EXECUTION", "2"))
 
 # Batch processing configuration for memory-constrained environments.
 # When EMBEDDING_BATCH_SIZE > 0, documents are processed in batches to reduce

@@ -1,11 +1,14 @@
 # app/routes/document_routes.py
 import os
+import sys
 import uuid
 from pathlib import Path
 import hashlib
 import traceback
 import aiofiles
 import aiofiles.os
+import asyncio
+import time
 from shutil import copyfileobj
 from typing import List, Iterable, Optional, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +26,6 @@ from fastapi import (
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from functools import lru_cache
-import asyncio
 
 if TYPE_CHECKING:
     from app.services.vector_store.async_pg_vector import AsyncPgVector
@@ -40,6 +42,7 @@ from app.config import (
     CHUNK_OVERLAP,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_MAX_QUEUE_SIZE,
+    PARALLEL_EXECUTION,
     RAG_DISTANCE_THRESHOLD,
 )
 
@@ -54,10 +57,9 @@ from app.config import (
 # (so non-numeric stale values don't break startup), which means the parsed
 # value is always None for Atlas — and relying on it would suppress the
 # warning we want operators to see.
-if (
-    VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO
-    and os.getenv("RAG_DISTANCE_THRESHOLD") not in (None, "")
-):
+if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO and os.getenv(
+    "RAG_DISTANCE_THRESHOLD"
+) not in (None, ""):
     logger.warning(
         "RAG_DISTANCE_THRESHOLD is set but VECTOR_DB_TYPE=atlas-mongo; "
         "Atlas returns similarity scores (higher = better) which would "
@@ -78,6 +80,8 @@ def _apply_distance_threshold(documents):
     if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
         return documents
     return [(doc, score) for doc, score in documents if score <= RAG_DISTANCE_THRESHOLD]
+
+
 from app.constants import ERROR_MESSAGES
 from app.models import (
     StoreDocument,
@@ -96,6 +100,87 @@ from app.utils.health import is_health_ok
 
 router = APIRouter()
 
+_INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
+_INGESTION_ATTEMPT_STARTED_AT_NS_KEY = "_rag_ingestion_attempt_started_at_ns"
+_INGESTION_CHUNK_INDEX_KEY = "_rag_chunk_index"
+
+
+def _tag_documents_for_ingestion(documents: List[Document], file_id: str) -> str:
+    """Attach one attempt identity and source position to every document."""
+    ingestion_attempt_id = uuid.uuid4().hex
+    ingestion_attempt_started_at_ns = time.time_ns()
+
+    for chunk_index, document in enumerate(documents):
+        document.metadata = {
+            **(document.metadata or {}),
+            "file_id": file_id,
+            _INGESTION_CHUNK_INDEX_KEY: chunk_index,
+            _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
+            _INGESTION_ATTEMPT_STARTED_AT_NS_KEY: ingestion_attempt_started_at_ns,
+        }
+
+    return ingestion_attempt_id
+
+
+def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]:
+    """Group ingestion attempts and restore source order within each group.
+
+    Repeated ingestions intentionally retain every row currently returned by the
+    vector store. Legacy rows stay first in their received order, followed by marked
+    attempts in start-time order. Within a group, preserve received order instead of
+    guessing when a chunk index is missing, invalid, or duplicated.
+    """
+
+    def order_group(group: List[Document]) -> List[Document]:
+        received_group = list(group)
+        chunk_indexes = []
+
+        for document in received_group:
+            chunk_index = (document.metadata or {}).get(_INGESTION_CHUNK_INDEX_KEY)
+            if (
+                isinstance(chunk_index, bool)
+                or not isinstance(chunk_index, int)
+                or chunk_index < 0
+            ):
+                return received_group
+            chunk_indexes.append(chunk_index)
+
+        if len(set(chunk_indexes)) != len(chunk_indexes):
+            return received_group
+
+        return [
+            document
+            for _, document in sorted(
+                zip(chunk_indexes, received_group), key=lambda item: item[0]
+            )
+        ]
+
+    attempt_groups = {}
+    legacy_documents = []
+    for document in documents:
+        metadata = document.metadata or {}
+        attempt_id = metadata.get(_INGESTION_ATTEMPT_ID_KEY)
+        started_at_ns = metadata.get(_INGESTION_ATTEMPT_STARTED_AT_NS_KEY)
+        if (
+            not isinstance(attempt_id, str)
+            or not attempt_id
+            or isinstance(started_at_ns, bool)
+            or not isinstance(started_at_ns, int)
+            or started_at_ns < 0
+        ):
+            legacy_documents.append(document)
+            continue
+
+        attempt_groups.setdefault((started_at_ns, attempt_id), []).append(document)
+
+    if not attempt_groups:
+        return legacy_documents
+
+    ordered_documents = list(legacy_documents)
+    for attempt_key in sorted(attempt_groups):
+        ordered_documents.extend(order_group(attempt_groups[attempt_key]))
+    return ordered_documents
+
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
     """Calculate the number of batches needed to process total items."""
@@ -110,6 +195,77 @@ def get_user_id(request: Request, entity_id: str = None) -> str:
         return entity_id if entity_id else "public"
     else:
         return entity_id if entity_id else request.state.user.get("id")
+
+
+def get_process_memory_details() -> str:
+    """Return lightweight process memory details for logging."""
+    parts = []
+
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as status_file:
+            for line in status_file:
+                if line.startswith("VmRSS:"):
+                    rss_kib = int(line.split()[1])
+                    parts.append(f"rss_mb={rss_kib / 1024:.1f}")
+                elif line.startswith("VmHWM:"):
+                    hwm_kib = int(line.split()[1])
+                    parts.append(f"rss_peak_mb={hwm_kib / 1024:.1f}")
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        pass
+
+    try:
+        import resource
+
+        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Darwin reports ru_maxrss in bytes; Linux reports it in KiB.
+        max_rss_mb = (
+            max_rss / (1024 * 1024) if sys.platform == "darwin" else max_rss / 1024
+        )
+
+        if not any(part.startswith("rss_peak_mb=") for part in parts):
+            parts.append(f"rss_peak_mb={max_rss_mb:.1f}")
+    except (ImportError, AttributeError, OSError, ValueError):
+        pass
+
+    return " | ".join(parts) if parts else "rss_mb=unknown"
+
+
+def build_ingestion_context(
+    route_name: str,
+    user_id: str,
+    file_id: str,
+    filename: str,
+    content_type: Optional[str] = None,
+    temp_file_path: Optional[str] = None,
+    known_type: Optional[str] = None,
+    file_ext: Optional[str] = None,
+    chunk_count: Optional[int] = None,
+    include_memory: bool = False,
+) -> str:
+    """Build a compact ingestion context string for logs."""
+    parts = [
+        f"route={route_name}",
+        f"user_id={user_id}",
+        f"file_id={file_id}",
+        f"filename={filename}",
+    ]
+    if content_type:
+        parts.append(f"content_type={content_type}")
+    if temp_file_path:
+        try:
+            file_size_bytes = os.path.getsize(temp_file_path)
+            parts.append(f"file_size_bytes={file_size_bytes}")
+        except OSError:
+            pass
+    if known_type:
+        parts.append(f"known_type={known_type}")
+    if file_ext:
+        parts.append(f"file_ext={file_ext}")
+    if chunk_count is not None:
+        parts.append(f"chunk_count={chunk_count}")
+    if include_memory:
+        parts.append(get_process_memory_details())
+    return " | ".join(parts)
 
 
 async def save_upload_file_async(file: UploadFile, temp_file_path: str) -> None:
@@ -446,6 +602,8 @@ async def _process_documents_async_pipeline(
     file_id: str,
     vector_store: "AsyncPgVector",
     executor: "ThreadPoolExecutor",
+    parallel_execution: int = 1,
+    user_id: str = "",
 ) -> List[str]:
     """
     Process documents using async producer-consumer pattern for batched embedding and insertion.
@@ -463,142 +621,249 @@ async def _process_documents_async_pipeline(
     if total_chunks == 0:
         return []
 
+    ingestion_attempt_id = _tag_documents_for_ingestion(documents, file_id)
+
     # Create queues for producer-consumer pattern
     # embedding_queue is bounded to limit document data held in memory.
-    # results_queue is unbounded — it holds only small UUID lists, and the
-    # drain loop runs after gather(), so bounding it would deadlock when
-    # num_batches > maxsize.
     embedding_queue = asyncio.Queue(maxsize=EMBEDDING_MAX_QUEUE_SIZE)
-    results_queue = asyncio.Queue()
     all_ids = []
+    successful_batch_ids = {}
+    failure_event = asyncio.Event()
+    in_flight_insert_tasks = set()
+    cleanup_needed = False
 
     num_batches = calculate_num_batches(total_chunks, EMBEDDING_BATCH_SIZE)
+    consumer_count = max(1, min(parallel_execution, num_batches))
 
     logger.info(
-        "Starting async pipeline for file %s: %d chunks with %d batch size",
+        "Starting async pipeline | user_id=%s | file_id=%s | total_chunks=%d | batch_size=%d | consumers=%d | %s",
+        user_id,
         file_id,
         total_chunks,
         EMBEDDING_BATCH_SIZE,
+        consumer_count,
+        get_process_memory_details(),
     )
 
     async def batch_producer():
         """Produce document batches and put them in the queue."""
         try:
             for batch_idx in range(num_batches):
+                if failure_event.is_set():
+                    break
+
                 start_idx = batch_idx * EMBEDDING_BATCH_SIZE
                 end_idx = min(start_idx + EMBEDDING_BATCH_SIZE, total_chunks)
                 batch_documents = documents[start_idx:end_idx]
                 batch_ids = [file_id] * len(batch_documents)
 
-                logger.info(
-                    "Generating embeddings for batch %d/%d: chunks %d-%d",
+                logger.debug(
+                    "Queueing batch | user_id=%s | file_id=%s | batch=%d/%d | chunk_range=%d-%d | batch_chunks=%d",
+                    user_id,
+                    file_id,
                     batch_idx + 1,
                     num_batches,
                     start_idx,
                     end_idx - 1,
+                    len(batch_documents),
                 )
 
                 # Put batch in queue for processing
                 await embedding_queue.put(
                     (batch_documents, batch_ids, batch_idx + 1, num_batches)
                 )
+            # Signal normal completion. Failure and cancellation paths are
+            # cancelled by the caller and must never block enqueueing sentinels.
+            if not failure_event.is_set():
+                for _ in range(consumer_count):
+                    await embedding_queue.put(None)
+        except asyncio.CancelledError:
+            failure_event.set()
+            raise
         except Exception as e:
+            failure_event.set()
             logger.error("Error in batch producer: %s", e)
             raise
+
+    async def insert_batch(
+        batch_documents: List[Document], batch_ids: List[str]
+    ) -> List[str]:
+        """Track started inserts so rollback waits for executor-backed work."""
+        nonlocal cleanup_needed
+        insert_task = asyncio.create_task(
+            vector_store.aadd_documents(
+                batch_documents, ids=batch_ids, executor=executor
+            )
+        )
+        in_flight_insert_tasks.add(insert_task)
+        try:
+            batch_result_ids = await asyncio.shield(insert_task)
+            cleanup_needed = True
+            return batch_result_ids
         finally:
-            # Always signal end of production
-            await embedding_queue.put(None)
+            if insert_task.done():
+                try:
+                    insert_task.result()
+                    cleanup_needed = True
+                except BaseException:
+                    pass
+                in_flight_insert_tasks.discard(insert_task)
+
+    async def wait_for_in_flight_inserts() -> None:
+        """Wait for started inserts before rollback can delete inserted vectors."""
+        nonlocal cleanup_needed
+        if not in_flight_insert_tasks:
+            return
+
+        pending_tasks = list(in_flight_insert_tasks)
+        logger.warning(
+            "Waiting for in-flight inserts before rollback | user_id=%s | file_id=%s | inserts=%d | %s",
+            user_id,
+            file_id,
+            len(pending_tasks),
+            get_process_memory_details(),
+        )
+        results = await asyncio.gather(*pending_tasks, return_exceptions=True)
+        for insert_task, result in zip(pending_tasks, results):
+            in_flight_insert_tasks.discard(insert_task)
+            if not isinstance(result, BaseException):
+                cleanup_needed = True
 
     async def embedding_consumer():
         """Consume batches from queue, embed and insert into database."""
         try:
             while True:
                 item = await embedding_queue.get()
-                if item is None:  # End signal
-                    embedding_queue.task_done()
-                    break
-
-                batch_documents, batch_ids, batch_num, total_batches = item
-
-                logger.info(
-                    "Inserting batch %d/%d into database (%d chunks)",
-                    batch_num,
-                    total_batches,
-                    len(batch_documents),
-                )
-
                 try:
-                    # Insert batch into database
-                    batch_result_ids = await vector_store.aadd_documents(
-                        batch_documents, ids=batch_ids, executor=executor
+                    if item is None:  # End signal
+                        break
+
+                    # A peer can fail before gather() resumes and cancels this task.
+                    # Acknowledge already-queued work without starting another insert.
+                    if failure_event.is_set():
+                        continue
+
+                    batch_documents, batch_ids, batch_num, total_batches = item
+
+                    logger.debug(
+                        "Inserting batch | user_id=%s | file_id=%s | batch=%d/%d | batch_chunks=%d",
+                        user_id,
+                        file_id,
+                        batch_num,
+                        total_batches,
+                        len(batch_documents),
                     )
-                    await results_queue.put(batch_result_ids)
-                except Exception as e:
-                    logger.error(
-                        "Error processing batch %d/%d: %s", batch_num, total_batches, e
-                    )
-                    await results_queue.put(e)  # Put exception object
+
+                    try:
+                        # Insert batch into database
+                        batch_result_ids = await insert_batch(
+                            batch_documents, batch_ids
+                        )
+                        successful_batch_ids[batch_num] = batch_result_ids
+                    except Exception as e:
+                        failure_event.set()
+                        logger.error(
+                            "Error processing batch | user_id=%s | file_id=%s | batch=%d/%d | error=%s | %s",
+                            user_id,
+                            file_id,
+                            batch_num,
+                            total_batches,
+                            e,
+                            get_process_memory_details(),
+                        )
+                        raise
                 finally:
                     embedding_queue.task_done()
 
         except Exception as e:
-            logger.error("Fatal error in embedding consumer: %s", e)
-            await results_queue.put(e)
+            if not failure_event.is_set():
+                failure_event.set()
+                logger.error("Fatal error in embedding consumer: %s", e)
             raise
 
     producer_task = None
-    consumer_task = None
+    consumer_tasks: List[asyncio.Task] = []
 
     try:
-        # Start producer and consumer concurrently
+        # Start producer and consumers concurrently
         producer_task = asyncio.create_task(batch_producer())
-        consumer_task = asyncio.create_task(embedding_consumer())
+        consumer_tasks = [
+            asyncio.create_task(embedding_consumer()) for _ in range(consumer_count)
+        ]
 
-        # Wait for both to complete
-        await asyncio.gather(producer_task, consumer_task, return_exceptions=False)
+        # Wait for all tasks to complete
+        await asyncio.gather(producer_task, *consumer_tasks, return_exceptions=False)
 
-        # Collect results from all batches
-        for _ in range(num_batches):
-            result = await results_queue.get()
-            if isinstance(result, Exception):
-                raise result
-            all_ids.extend(result)
+        for batch_num in range(1, num_batches + 1):
+            all_ids.extend(successful_batch_ids[batch_num])
 
         logger.info(
-            "Async pipeline completed for file %s: %d embeddings created",
+            "Async pipeline completed | user_id=%s | file_id=%s | inserted_ids=%d | %s",
+            user_id,
             file_id,
             len(all_ids),
+            get_process_memory_details(),
         )
 
         return all_ids
 
-    except Exception as e:
-        logger.error("Pipeline failed for file %s: %s", file_id, e)
-        if consumer_task is not None or producer_task is not None:
+    except (Exception, asyncio.CancelledError) as e:
+        failure_event.set()
+        logger.error(
+            "Pipeline failed | user_id=%s | file_id=%s | inserted_batches=%d | error=%s | %s",
+            user_id,
+            file_id,
+            len(successful_batch_ids),
+            e,
+            get_process_memory_details(),
+        )
+        if producer_task is not None or consumer_tasks:
             # if one of the tasks is still running, cancel it
-            if consumer_task is not None and not consumer_task.done():
-                consumer_task.cancel()
             if producer_task is not None and not producer_task.done():
                 producer_task.cancel()
+            for consumer_task in consumer_tasks:
+                if not consumer_task.done():
+                    consumer_task.cancel()
 
             # Await cancelled tasks to ensure proper cleanup
-            if consumer_task is None:
-                await asyncio.gather(producer_task, return_exceptions=True)
-            elif producer_task is None:
-                await asyncio.gather(consumer_task, return_exceptions=True)
-            else:
-                await asyncio.gather(
-                    consumer_task, producer_task, return_exceptions=True
-                )
+            tasks_to_await = []
+            if producer_task is not None:
+                tasks_to_await.append(producer_task)
+            tasks_to_await.extend(consumer_tasks)
+            if tasks_to_await:
+                await asyncio.gather(*tasks_to_await, return_exceptions=True)
 
-        # Attempt rollback only if we inserted something
-        if all_ids:
+        await wait_for_in_flight_inserts()
+
+        if cleanup_needed:
             try:
-                logger.warning("Performing rollback of file %s", file_id)
-                await vector_store.delete(ids=[file_id], executor=executor)
-                logger.info("Rollback completed for file %s", file_id)
+                logger.warning(
+                    "Performing rollback | user_id=%s | file_id=%s | %s",
+                    user_id,
+                    file_id,
+                    get_process_memory_details(),
+                )
+                await vector_store.delete_by_metadata(
+                    {
+                        "file_id": file_id,
+                        _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
+                    },
+                    executor=executor,
+                )
+                logger.info(
+                    "Rollback completed | user_id=%s | file_id=%s | %s",
+                    user_id,
+                    file_id,
+                    get_process_memory_details(),
+                )
             except Exception as cleanup_error:
-                logger.error("Rollback failed for file %s: %s", file_id, cleanup_error)
+                logger.error(
+                    "Rollback failed | user_id=%s | file_id=%s | error=%s | %s",
+                    user_id,
+                    file_id,
+                    cleanup_error,
+                    get_process_memory_details(),
+                )
 
         # Re-raise the original error
         raise
@@ -731,7 +996,12 @@ async def store_data_in_vector_db(
     user_id: str = "",
     clean_content: bool = False,
     executor=None,
+    route_name: str = "unknown",
+    filename: Optional[str] = None,
+    content_type: Optional[str] = None,
+    temp_file_path: Optional[str] = None,
 ) -> bool:
+    start_time = time.perf_counter()
     # Run document preparation in executor to avoid blocking the event loop
     loop = asyncio.get_running_loop()
     docs = await loop.run_in_executor(
@@ -743,10 +1013,25 @@ async def store_data_in_vector_db(
         clean_content,
     )
 
+    logger.info(
+        "Documents prepared | %s",
+        build_ingestion_context(
+            route_name=route_name,
+            user_id=user_id,
+            file_id=file_id,
+            filename=filename or file_id,
+            content_type=content_type,
+            temp_file_path=temp_file_path,
+            chunk_count=len(docs),
+            include_memory=True,
+        ),
+    )
+
     try:
         if EMBEDDING_BATCH_SIZE <= 0:
             # synchronously embed the file and insert into vector store in one go
             if isinstance(vector_store, AsyncPgVector):
+                _tag_documents_for_ingestion(docs, file_id)
                 ids = await vector_store.aadd_documents(
                     docs, ids=[file_id] * len(docs), executor=executor
                 )
@@ -759,7 +1044,12 @@ async def store_data_in_vector_db(
 
             if isinstance(vector_store, AsyncPgVector):
                 ids = await _process_documents_async_pipeline(
-                    docs, file_id, vector_store, executor
+                    docs,
+                    file_id,
+                    vector_store,
+                    executor,
+                    parallel_execution=max(1, PARALLEL_EXECUTION),
+                    user_id=user_id,
                 )
             else:
                 # Fallback to batched processing for sync vector stores
@@ -767,13 +1057,37 @@ async def store_data_in_vector_db(
                     docs, file_id, vector_store, executor
                 )
 
+        logger.info(
+            "Ingestion completed | %s | inserted_ids=%d | elapsed_ms=%d",
+            build_ingestion_context(
+                route_name=route_name,
+                user_id=user_id,
+                file_id=file_id,
+                filename=filename or file_id,
+                content_type=content_type,
+                temp_file_path=temp_file_path,
+                chunk_count=len(docs),
+                include_memory=True,
+            ),
+            len(ids),
+            int((time.perf_counter() - start_time) * 1000),
+        )
         return {"message": "Documents added successfully", "ids": ids}
 
     except Exception as e:
         logger.error(
-            "Failed to store data in vector DB | File ID: %s | User ID: %s | Error: %s | Traceback: %s",
-            file_id,
-            user_id,
+            "Failed to store data in vector DB | %s | elapsed_ms=%d | Error: %s | Traceback: %s",
+            build_ingestion_context(
+                route_name=route_name,
+                user_id=user_id,
+                file_id=file_id,
+                filename=filename or file_id,
+                content_type=content_type,
+                temp_file_path=temp_file_path,
+                chunk_count=len(docs),
+                include_memory=True,
+            ),
+            int((time.perf_counter() - start_time) * 1000),
             str(e),
             traceback.format_exc(),
         )
@@ -784,23 +1098,36 @@ async def store_data_in_vector_db(
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
+    user_id = get_user_id(request, entity_id)
     file_path = validate_file_path(RAG_UPLOAD_DIR, document.filepath)
 
     # Check if the file exists and if it is within the allowed upload directory
     if file_path is None or not os.path.exists(file_path):
-        logger.warning("Path validation failed for local embed: %s", document.filepath)
+        logger.warning(
+            "Path validation failed for local embed | route=local_embed | user_id=%s | file_id=%s | filename=%s | requested_path=%s",
+            user_id,
+            document.file_id,
+            document.filename,
+            document.filepath,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
         )
 
-    if not hasattr(request.state, "user"):
-        user_id = entity_id if entity_id else "public"
-    else:
-        user_id = entity_id if entity_id else request.state.user.get("id")
-
     loader = None
     try:
+        logger.info(
+            "Ingestion started | %s",
+            build_ingestion_context(
+                route_name="local_embed",
+                user_id=user_id,
+                file_id=document.file_id,
+                filename=document.filename,
+                content_type=document.file_content_type,
+                temp_file_path=file_path,
+            ),
+        )
         loader, known_type, file_ext = get_loader(
             document.filename, document.file_content_type, file_path
         )
@@ -815,6 +1142,10 @@ async def embed_local_file(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            route_name="local_embed",
+            filename=document.filename,
+            content_type=document.file_content_type,
+            temp_file_path=file_path,
         )
 
         if result:
@@ -831,13 +1162,23 @@ async def embed_local_file(
             )
     except HTTPException as http_exc:
         logger.error(
-            "HTTP Exception in embed_local_file | Status: %d | Detail: %s",
+            "HTTP Exception in embed_local_file | route=local_embed | user_id=%s | file_id=%s | filename=%s | status=%d | detail=%s",
+            user_id,
+            document.file_id,
+            document.filename,
             http_exc.status_code,
             http_exc.detail,
         )
         raise http_exc
     except Exception as e:
-        logger.error(e)
+        logger.error(
+            "Unhandled exception in embed_local_file | route=local_embed | user_id=%s | file_id=%s | filename=%s | error=%s | traceback=%s",
+            user_id,
+            document.file_id,
+            document.filename,
+            str(e),
+            traceback.format_exc(),
+        )
         if "No pandoc was found" in str(e):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -869,13 +1210,29 @@ async def embed_file(
     validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
-        logger.warning("Path validation failed for embed: %s", file.filename)
+        logger.warning(
+            "Path validation failed for embed | route=embed | user_id=%s | file_id=%s | filename=%s",
+            user_id,
+            file_id,
+            file.filename,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT("Invalid request"),
         )
 
     try:
+        logger.info(
+            "Ingestion started | %s",
+            build_ingestion_context(
+                route_name="embed",
+                user_id=user_id,
+                file_id=file_id,
+                filename=file.filename,
+                content_type=file.content_type,
+                temp_file_path=validated_file_path,
+            ),
+        )
         os.makedirs(os.path.dirname(validated_file_path), exist_ok=True)
         await save_upload_file_async(file, validated_file_path)
         data, known_type, file_ext = await load_file_content(
@@ -885,12 +1242,24 @@ async def embed_file(
             request.app.state.thread_pool,
         )
 
+        logger.debug(
+            "Loading file | filename=%s | content_type=%s | file_ext=%s | known_type=%s",
+            file.filename,
+            file.content_type,
+            file_ext,
+            known_type,
+        )
+
         result = await store_data_in_vector_db(
             data=data,
             file_id=file_id,
             user_id=user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            route_name="embed",
+            filename=file.filename,
+            content_type=file.content_type,
+            temp_file_path=validated_file_path,
         )
 
         if not result:
@@ -914,7 +1283,10 @@ async def embed_file(
         response_status = False
         response_message = f"HTTP Exception: {http_exc.detail}"
         logger.error(
-            "HTTP Exception in embed_file | Status: %d | Detail: %s",
+            "HTTP Exception in embed_file | route=embed | user_id=%s | file_id=%s | filename=%s | status=%d | detail=%s",
+            user_id,
+            file_id,
+            file.filename,
             http_exc.status_code,
             http_exc.detail,
         )
@@ -923,7 +1295,10 @@ async def embed_file(
         response_status = False
         response_message = f"Error during file processing: {str(e)}"
         logger.error(
-            "Error during file processing: %s\nTraceback: %s",
+            "Error during file processing | route=embed | user_id=%s | file_id=%s | filename=%s | error=%s | traceback=%s",
+            user_id,
+            file_id,
+            file.filename,
             str(e),
             traceback.format_exc(),
         )
@@ -970,7 +1345,7 @@ async def load_document_context(request: Request, id: str):
                 status_code=404, detail="No document found for the given ID"
             )
 
-        return process_documents(documents)
+        return process_documents(_order_documents_by_chunk_index(documents))
     except HTTPException as http_exc:
         logger.error(
             "HTTP Exception in load_document_context | Status: %d | Detail: %s",
@@ -1004,7 +1379,10 @@ async def embed_file_upload(
 
     if validated_temp_file_path is None:
         logger.warning(
-            "Path validation failed for embed-upload: %s", uploaded_file.filename
+            "Path validation failed for embed-upload | route=embed_upload | user_id=%s | file_id=%s | filename=%s",
+            user_id,
+            file_id,
+            uploaded_file.filename,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1012,6 +1390,17 @@ async def embed_file_upload(
         )
 
     try:
+        logger.info(
+            "Ingestion started | %s",
+            build_ingestion_context(
+                route_name="embed_upload",
+                user_id=user_id,
+                file_id=file_id,
+                filename=uploaded_file.filename,
+                content_type=uploaded_file.content_type,
+                temp_file_path=validated_temp_file_path,
+            ),
+        )
         os.makedirs(os.path.dirname(validated_temp_file_path), exist_ok=True)
         await save_upload_file_async(uploaded_file, validated_temp_file_path)
         data, known_type, file_ext = await load_file_content(
@@ -1027,6 +1416,10 @@ async def embed_file_upload(
             user_id,
             clean_content=file_ext == "pdf",
             executor=request.app.state.thread_pool,
+            route_name="embed_upload",
+            filename=uploaded_file.filename,
+            content_type=uploaded_file.content_type,
+            temp_file_path=validated_temp_file_path,
         )
 
         if not result:
@@ -1036,14 +1429,19 @@ async def embed_file_upload(
             )
     except HTTPException as http_exc:
         logger.error(
-            "HTTP Exception in embed_file_upload | Status: %d | Detail: %s",
+            "HTTP Exception in embed_file_upload | route=embed_upload | user_id=%s | file_id=%s | filename=%s | status=%d | detail=%s",
+            user_id,
+            file_id,
+            uploaded_file.filename,
             http_exc.status_code,
             http_exc.detail,
         )
         raise http_exc
     except Exception as e:
         logger.error(
-            "Error during file processing | File: %s | Error: %s | Traceback: %s",
+            "Error during file processing | route=embed_upload | user_id=%s | file_id=%s | filename=%s | error=%s | traceback=%s",
+            user_id,
+            file_id,
             uploaded_file.filename,
             str(e),
             traceback.format_exc(),
