@@ -90,7 +90,7 @@ The following environment variables are required to run the application:
 - `COLLECTION_NAME`: (Optional) The name of the collection in the vector store. Default value is "testcollection".
 - `CHUNK_SIZE`: (Optional) The size of the chunks for text processing. Default value is "1500".
 - `CHUNK_OVERLAP`: (Optional) The overlap between chunks during text processing. Default value is "100".
-- `EMBEDDING_BATCH_SIZE`: (Optional) Number of document chunks to process per batch. Set to `0` (default) to disable batching. Recommended value is `750` for `text-embedding-3-small`.
+- `EMBEDDING_BATCH_SIZE`: (Optional) Number of document chunks to process per batch. Defaults to `500`; set to `0` to disable batching. Recommended value is `750` for `text-embedding-3-small`.
 - `EMBEDDING_MAX_QUEUE_SIZE`: (Optional) Maximum number of batches to buffer in memory during async processing. Default value is "3".
 - `PARALLEL_EXECUTION`: (Optional) Maximum number of async embedding/database insertion consumers to run per file when batching is enabled. Default value is "2".
 - `RAG_DISTANCE_THRESHOLD`: (Optional, `VECTOR_DB_TYPE=pgvector` only) Drop results whose vector distance is greater than this value, after the top-`k` search. Unset by default (no filtering). Lower distance = more similar, so e.g. `0.5` keeps only hits with distance ≤ 0.5 and discards weaker matches. Useful for reducing downstream LLM token cost when the top-`k` call returns loosely-related chunks. Appropriate values depend on the embedding model and distance strategy — inspect your actual scores before choosing one. Ignored (with a startup warning) under `VECTOR_DB_TYPE=atlas-mongo`, because Atlas returns a similarity score (higher = better) with inverted semantics.
@@ -142,7 +142,7 @@ For large files, you can enable batched embedding processing to reduce memory co
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EMBEDDING_BATCH_SIZE` | `0` | Number of document chunks to process per batch. `0` disables batching (original behavior). |
+| `EMBEDDING_BATCH_SIZE` | `500` | Number of document chunks to process per batch. `0` disables batching (original behavior). |
 | `EMBEDDING_MAX_QUEUE_SIZE` | `3` | Maximum number of batches to buffer in memory during async processing. |
 | `PARALLEL_EXECUTION` | `2` | Maximum number of async embedding/database insertion consumers per file when batching is enabled. |
 
@@ -169,7 +169,7 @@ When `EMBEDDING_BATCH_SIZE > 0`:
 - Memory usage is bounded by queued plus active batches, roughly `EMBEDDING_BATCH_SIZE * (EMBEDDING_MAX_QUEUE_SIZE + PARALLEL_EXECUTION)`
 - Ingestion lifecycle logs include route, user, file, chunk count, file size, elapsed time, and selected process memory context. Per-batch queue/insert progress is logged at debug level
 
-When `EMBEDDING_BATCH_SIZE = 0` (default):
+When `EMBEDDING_BATCH_SIZE <= 0`:
 - All documents are processed at once (original behavior)
 - Better for small files or memory-rich environments
 

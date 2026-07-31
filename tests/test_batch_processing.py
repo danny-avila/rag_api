@@ -460,6 +460,52 @@ class TestProducerConsumerPattern:
         assert events.index("slow_insert_finished") < events.index("rollback")
 
     @pytest.mark.asyncio
+    async def test_cancellation_waits_for_in_flight_insert_before_rollback(self):
+        """Request cancellation must not leave a shielded insert committed."""
+        import asyncio
+
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        insert_started = asyncio.Event()
+        release_insert = asyncio.Event()
+        events = []
+
+        async def add_documents(docs, ids=None, executor=None):
+            events.append("insert_started")
+            insert_started.set()
+            await release_insert.wait()
+            events.append("insert_finished")
+            return ["id"]
+
+        async def delete(ids=None, executor=None):
+            events.append("rollback")
+
+        mock_store = AsyncMock()
+        mock_store.aadd_documents = add_documents
+        mock_store.delete = delete
+
+        docs = [Document(page_content="test", metadata={})]
+
+        with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
+            pipeline_task = asyncio.create_task(
+                _process_documents_async_pipeline(
+                    documents=docs,
+                    file_id="test",
+                    vector_store=mock_store,
+                    executor=None,
+                )
+            )
+            await insert_started.wait()
+            pipeline_task.cancel()
+            await asyncio.sleep(0)
+            release_insert.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await pipeline_task
+
+        assert events == ["insert_started", "insert_finished", "rollback"]
+
+    @pytest.mark.asyncio
     async def test_all_ids_collected_across_batches(self):
         """Test that IDs from all batches are collected."""
         from app.routes.document_routes import _process_documents_async_pipeline

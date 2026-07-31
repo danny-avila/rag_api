@@ -712,7 +712,7 @@ async def _process_documents_async_pipeline(
 
         return all_ids
 
-    except Exception as e:
+    except (Exception, asyncio.CancelledError) as e:
         logger.error(
             "Pipeline failed | user_id=%s | file_id=%s | inserted_batches=%d | error=%s | %s",
             user_id,
@@ -1139,7 +1139,13 @@ async def embed_file(
             request.app.state.thread_pool,
         )
 
-        logger.debug(f"Loading Filename:{file.filename} - ContentType:{file.content_type} - FileExt:{file_ext} - KnownType:{known_type}")
+        logger.debug(
+            "Loading file | filename=%s | content_type=%s | file_ext=%s | known_type=%s",
+            file.filename,
+            file.content_type,
+            file_ext,
+            known_type,
+        )
 
         result = await store_data_in_vector_db(
             data=data,
