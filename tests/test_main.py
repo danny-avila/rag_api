@@ -218,6 +218,24 @@ def test_load_document_context(auth_headers):
     assert "testid1" in content or "Test content" in content
 
 
+def test_load_document_context_restores_parallel_chunk_order(auth_headers, monkeypatch):
+    from app.services.vector_store.async_pg_vector import AsyncPgVector
+
+    async def out_of_order_documents(self, ids, executor=None):
+        return [
+            Document(page_content="third", metadata={"_rag_chunk_index": 2}),
+            Document(page_content="first", metadata={"_rag_chunk_index": 0}),
+            Document(page_content="second", metadata={"_rag_chunk_index": 1}),
+        ]
+
+    monkeypatch.setattr(AsyncPgVector, "get_documents_by_ids", out_of_order_documents)
+
+    response = client.get("/documents/testid1/context", headers=auth_headers)
+
+    assert response.status_code == 200, f"Response: {response.text}"
+    assert response.json() == "firstsecondthird"
+
+
 def test_embed_file_upload(tmp_path, auth_headers, monkeypatch):
     file_content = "Test content for embed upload."
     test_file = tmp_path / "upload_test.txt"

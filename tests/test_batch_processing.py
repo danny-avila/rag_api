@@ -32,6 +32,68 @@ class TestProcessMemoryDetails:
         mock_resource.getrusage.assert_called_once_with(mock_resource.RUSAGE_SELF)
 
 
+class TestDocumentChunkOrdering:
+    """Test source-order restoration for parallel pgvector ingestion."""
+
+    def test_orders_documents_by_ingestion_chunk_index(self):
+        from app.routes.document_routes import _order_documents_by_chunk_index
+
+        documents = [
+            Document(page_content="third", metadata={"_rag_chunk_index": 2}),
+            Document(page_content="first", metadata={"_rag_chunk_index": 0}),
+            Document(page_content="second", metadata={"_rag_chunk_index": 1}),
+        ]
+
+        ordered = _order_documents_by_chunk_index(documents)
+
+        assert [document.page_content for document in ordered] == [
+            "first",
+            "second",
+            "third",
+        ]
+        assert documents[0].page_content == "third"
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            pytest.param([{}, {}, {}], id="legacy-missing-index"),
+            pytest.param(
+                [
+                    {"_rag_chunk_index": 0},
+                    {"_rag_chunk_index": 0},
+                    {"_rag_chunk_index": 1},
+                ],
+                id="duplicate-index",
+            ),
+            pytest.param(
+                [
+                    {"_rag_chunk_index": 2},
+                    {"_rag_chunk_index": "0"},
+                    {"_rag_chunk_index": 1},
+                ],
+                id="invalid-index",
+            ),
+        ],
+    )
+    def test_preserves_received_order_without_trustworthy_indexes(self, metadata):
+        from app.routes.document_routes import _order_documents_by_chunk_index
+
+        documents = [
+            Document(page_content=content, metadata=document_metadata)
+            for content, document_metadata in zip(
+                ["third", "first", "second"], metadata
+            )
+        ]
+
+        ordered = _order_documents_by_chunk_index(documents)
+
+        assert [document.page_content for document in ordered] == [
+            "third",
+            "first",
+            "second",
+        ]
+
+
 class TestBatchProcessing:
     """Test batch processing functions."""
 
@@ -150,8 +212,46 @@ class TestBatchProcessing:
         mock_async_vector_store.delete.assert_not_called()
         mock_async_vector_store.delete_by_metadata.assert_called_once()
         metadata_filter = mock_async_vector_store.delete_by_metadata.call_args.args[0]
-        assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
-        assert metadata_filter["_rag_ingestion_attempt_id"]
+        assert metadata_filter == {
+            "file_id": "test_file",
+            "_rag_ingestion_attempt_id": mock_documents[0].metadata[
+                "_rag_ingestion_attempt_id"
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_async_pipeline_canonicalizes_file_id_for_rollback(
+        self, mock_async_vector_store
+    ):
+        """Rollback must match the canonical file ID, not loader metadata."""
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        documents = [
+            Document(page_content="inserted", metadata={"file_id": "spoofed"}),
+            Document(page_content="failed", metadata={}),
+        ]
+        mock_async_vector_store.aadd_documents = AsyncMock(
+            side_effect=[["inserted"], ValueError("DB error")]
+        )
+
+        with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
+            with pytest.raises(ValueError, match="DB error"):
+                await _process_documents_async_pipeline(
+                    documents=documents,
+                    file_id="canonical-file",
+                    vector_store=mock_async_vector_store,
+                    executor=None,
+                )
+
+        assert all(
+            document.metadata["file_id"] == "canonical-file" for document in documents
+        )
+        assert mock_async_vector_store.delete_by_metadata.call_args.args[0] == {
+            "file_id": "canonical-file",
+            "_rag_ingestion_attempt_id": documents[0].metadata[
+                "_rag_ingestion_attempt_id"
+            ],
+        }
 
     @pytest.mark.asyncio
     async def test_async_pipeline_no_rollback_before_insert_starts(
@@ -470,7 +570,11 @@ class TestProducerConsumerPattern:
             raise ValueError("Test error")
 
         async def delete_by_metadata(metadata_filter, executor=None):
-            assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
+            assert metadata_filter["file_id"] == "test"
+            assert set(metadata_filter) == {
+                "file_id",
+                "_rag_ingestion_attempt_id",
+            }
             events.append("rollback")
 
         mock_store = AsyncMock()
@@ -513,7 +617,11 @@ class TestProducerConsumerPattern:
             return ["id"]
 
         async def delete_by_metadata(metadata_filter, executor=None):
-            assert list(metadata_filter) == ["_rag_ingestion_attempt_id"]
+            assert metadata_filter["file_id"] == "test"
+            assert set(metadata_filter) == {
+                "file_id",
+                "_rag_ingestion_attempt_id",
+            }
             events.append("rollback")
 
         mock_store = AsyncMock()
@@ -771,6 +879,68 @@ class TestProducerConsumerPattern:
 
         assert max_active_batches > 1
         assert result == [f"id_{i}" for i in range(6)]
+
+    @pytest.mark.asyncio
+    async def test_parallel_completion_persists_source_chunk_indexes(self):
+        """Out-of-order commits retain ordinals that reconstruct source order."""
+        import asyncio
+
+        from app.routes.document_routes import _process_documents_async_pipeline
+
+        loop = asyncio.get_running_loop()
+        release_batches = [loop.create_future() for _ in range(3)]
+        all_batches_started = asyncio.Event()
+        started_batches = []
+        completion_order = []
+
+        async def controlled_add_documents(docs, ids=None, executor=None):
+            source_index = docs[0].metadata["source_index"]
+            started_batches.append(source_index)
+            if len(started_batches) == 3:
+                all_batches_started.set()
+
+            await release_batches[source_index]
+            completion_order.append(source_index)
+            return [f"id_{source_index}"]
+
+        mock_store = AsyncMock()
+        mock_store.aadd_documents = controlled_add_documents
+        documents = [
+            Document(
+                page_content=f"doc_{source_index}",
+                metadata={
+                    "source_index": source_index,
+                    "_rag_chunk_index": 99,
+                },
+            )
+            for source_index in range(3)
+        ]
+
+        with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
+            pipeline_task = asyncio.create_task(
+                _process_documents_async_pipeline(
+                    documents=documents,
+                    file_id="test",
+                    vector_store=mock_store,
+                    executor=None,
+                    parallel_execution=3,
+                )
+            )
+
+            await asyncio.wait_for(all_batches_started.wait(), timeout=1)
+            for source_index in (2, 1, 0):
+                release_batches[source_index].set_result(None)
+                await asyncio.sleep(0)
+
+            result = await asyncio.wait_for(pipeline_task, timeout=1)
+
+        assert completion_order == [2, 1, 0]
+        assert result == ["id_0", "id_1", "id_2"]
+        assert [document.metadata["_rag_chunk_index"] for document in documents] == [
+            0,
+            1,
+            2,
+        ]
 
 
 class TestSyncBatchedMongoCompat:

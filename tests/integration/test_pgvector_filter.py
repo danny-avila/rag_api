@@ -180,6 +180,38 @@ class TestQueryPlanRegression:
             f"Got plan: {json.dumps(plan_json, indent=2)}"
         )
 
+    def test_rollback_predicate_uses_file_id_index(
+        self, engine, collection_id, seeded_data
+    ):
+        """Attempt rollback can narrow by file ID before checking its marker."""
+        _, target_file_id = seeded_data
+
+        with engine.begin() as conn:
+            plan_json = conn.execute(
+                text(
+                    "EXPLAIN (FORMAT JSON) "
+                    "DELETE FROM langchain_pg_embedding "
+                    "WHERE collection_id = :cid "
+                    "AND (cmetadata->>'file_id') = :fid "
+                    "AND (cmetadata->>'_rag_ingestion_attempt_id') = :attempt"
+                ),
+                {
+                    "cid": collection_id,
+                    "fid": target_file_id,
+                    "attempt": uuid.uuid4().hex,
+                },
+            ).scalar()
+
+        index_names = {
+            node.get("Index Name")
+            for node in _walk_plan_nodes(plan_json)
+            if node.get("Index Name")
+        }
+        assert "idx_langchain_pg_embedding_file_id" in index_names, (
+            "Expected rollback DELETE to use the file_id expression index.\n"
+            f"Got plan: {json.dumps(plan_json, indent=2)}"
+        )
+
     def test_jsonb_path_match_forces_seq_scan(self, engine, seeded_data):
         """The bug: jsonb_path_match() cannot use the expression index."""
         _, target_file_id = seeded_data
@@ -402,6 +434,7 @@ class TestExtendedPgVectorSQL:
     ):
         """Attempt-scoped rollback must preserve prior and concurrent rows."""
         file_id = f"file-{uuid.uuid4().hex[:8]}"
+        other_file_id = f"file-{uuid.uuid4().hex[:8]}"
         cancelled_attempt = uuid.uuid4().hex
         successful_attempt = uuid.uuid4().hex
 
@@ -421,6 +454,13 @@ class TestExtendedPgVectorSQL:
                     "_rag_ingestion_attempt_id": cancelled_attempt,
                 },
             ),
+            (
+                "other-file-same-attempt",
+                {
+                    "file_id": other_file_id,
+                    "_rag_ingestion_attempt_id": cancelled_attempt,
+                },
+            ),
         ]
         with engine.begin() as conn:
             for document, metadata in rows:
@@ -435,13 +475,18 @@ class TestExtendedPgVectorSQL:
                         "emb": "[0.1,0.2,0.3]",
                         "doc": document,
                         "meta": json.dumps(metadata),
-                        "cust": file_id,
+                        "cust": metadata["file_id"],
                     },
                 )
 
         store._bind = engine
         store.get_collection = lambda session: SimpleNamespace(uuid=collection_id)
-        store._delete_by_metadata({"_rag_ingestion_attempt_id": cancelled_attempt})
+        store._delete_by_metadata(
+            {
+                "file_id": file_id,
+                "_rag_ingestion_attempt_id": cancelled_attempt,
+            }
+        )
 
         with engine.begin() as conn:
             remaining = (
@@ -449,16 +494,20 @@ class TestExtendedPgVectorSQL:
                     text(
                         "SELECT document FROM langchain_pg_embedding "
                         "WHERE collection_id = :cid "
-                        "AND cmetadata->>'file_id' = :fid "
+                        "AND cmetadata->>'file_id' IN (:fid, :other_fid) "
                         "ORDER BY document"
                     ),
-                    {"cid": collection_id, "fid": file_id},
+                    {
+                        "cid": collection_id,
+                        "fid": file_id,
+                        "other_fid": other_file_id,
+                    },
                 )
                 .scalars()
                 .all()
             )
 
-        assert remaining == ["existing", "successful"]
+        assert remaining == ["existing", "other-file-same-attempt", "successful"]
 
     def test_ne_clause_runs_on_real_pg(self, engine, collection_id, store):
         target_file = f"file-{uuid.uuid4().hex[:8]}"

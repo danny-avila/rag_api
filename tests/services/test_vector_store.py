@@ -41,13 +41,20 @@ def test_delete_by_metadata_is_collection_scoped():
 
     with patch("app.services.vector_store.extended_pg_vector.Session") as session_class:
         session = session_class.return_value.__enter__.return_value
-        store._delete_by_metadata({"_rag_ingestion_attempt_id": "attempt-123"})
+        store._delete_by_metadata(
+            {
+                "file_id": "file-123",
+                "_rag_ingestion_attempt_id": "attempt-123",
+            }
+        )
 
     statement = session.execute.call_args.args[0]
     sql = _compile(statement)
     assert "DELETE FROM langchain_pg_embedding" in sql
     assert "collection_id" in sql
     assert "->>" in sql
+    assert "file_id" in sql
+    assert "file-123" in sql
     assert "_rag_ingestion_attempt_id" in sql
     assert "attempt-123" in sql
     session.commit.assert_called_once_with()

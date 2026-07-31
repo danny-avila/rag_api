@@ -247,8 +247,12 @@ class TestBatchProcessingResilience:
         mock_store.delete.assert_not_called()
         mock_store.delete_by_metadata.assert_called_once()
         metadata_filter = mock_store.delete_by_metadata.call_args.args[0]
+        assert metadata_filter["file_id"] == "my_unique_file_id"
         attempt_id = metadata_filter["_rag_ingestion_attempt_id"]
         assert attempt_id
+        assert all(
+            document.metadata["file_id"] == "my_unique_file_id" for document in docs
+        )
         assert all(
             document.metadata["_rag_ingestion_attempt_id"] == attempt_id
             for document in docs

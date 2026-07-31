@@ -101,6 +101,38 @@ from app.utils.health import is_health_ok
 router = APIRouter()
 
 _INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
+_INGESTION_CHUNK_INDEX_KEY = "_rag_chunk_index"
+
+
+def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]:
+    """Restore source order for documents carrying ingestion chunk indexes.
+
+    Legacy or mixed-version rows may not have a trustworthy index. Preserve their
+    existing iteration order instead of guessing when an index is missing, invalid,
+    or duplicated.
+    """
+    ordered_documents = list(documents)
+    chunk_indexes = []
+
+    for document in ordered_documents:
+        chunk_index = (document.metadata or {}).get(_INGESTION_CHUNK_INDEX_KEY)
+        if (
+            isinstance(chunk_index, bool)
+            or not isinstance(chunk_index, int)
+            or chunk_index < 0
+        ):
+            return ordered_documents
+        chunk_indexes.append(chunk_index)
+
+    if len(set(chunk_indexes)) != len(chunk_indexes):
+        return ordered_documents
+
+    return [
+        document
+        for _, document in sorted(
+            zip(chunk_indexes, ordered_documents), key=lambda item: item[0]
+        )
+    ]
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -543,9 +575,11 @@ async def _process_documents_async_pipeline(
         return []
 
     ingestion_attempt_id = uuid.uuid4().hex
-    for document in documents:
+    for chunk_index, document in enumerate(documents):
         document.metadata = {
             **(document.metadata or {}),
+            "file_id": file_id,
+            _INGESTION_CHUNK_INDEX_KEY: chunk_index,
             _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
         }
 
@@ -766,7 +800,10 @@ async def _process_documents_async_pipeline(
                     get_process_memory_details(),
                 )
                 await vector_store.delete_by_metadata(
-                    {_INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id},
+                    {
+                        "file_id": file_id,
+                        _INGESTION_ATTEMPT_ID_KEY: ingestion_attempt_id,
+                    },
                     executor=executor,
                 )
                 logger.info(
@@ -1263,7 +1300,7 @@ async def load_document_context(request: Request, id: str):
                 status_code=404, detail="No document found for the given ID"
             )
 
-        return process_documents(documents)
+        return process_documents(_order_documents_by_chunk_index(documents))
     except HTTPException as http_exc:
         logger.error(
             "HTTP Exception in load_document_context | Status: %d | Detail: %s",
