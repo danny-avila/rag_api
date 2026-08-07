@@ -163,8 +163,18 @@ They are accepted while `RAG_AUTH_ACCEPT_LEGACY` is true. On the `/v1` service
 endpoints the flag relaxes only the *claim shape* — a token signed with the
 application `JWT_SECRET` is never accepted there, in any mode.
 
+Legacy tokens predate scopes and entity lists, so they are grandfathered into
+both. That grandfather is limited to the `{"id": ...}` shape. A token that states
+its own `scopes` or `entities` keeps exactly what it stated even if it fails
+strict validation for some other reason — otherwise dropping `exp`, the tenant or
+the scopes from a `rag:embed`-only token would hand it every scope and
+unrestricted entity access.
+
 - `RAG_JWT_SECRET`: (Optional) dedicated signing secret for this service. At
   least 32 characters for HMAC algorithms. Required when `RAG_SEARCH_API_ENABLED=true`.
+  Whenever it is set the service validates it at startup — the key signs tokens
+  the middleware honours on `/query` and the upload routes regardless of whether
+  the search endpoints are mounted, so a short secret fails startup either way.
 - `RAG_JWT_PUBLIC_KEY`: (Optional) verification key when `RAG_JWT_ALGORITHM` is asymmetric.
 - `RAG_JWT_ALGORITHM`: (Optional) default `HS256`. `HS*`, `RS*`, `ES*` and `EdDSA` are supported.
 - `RAG_JWT_ISSUER`: (Optional) required `iss`, default `librechat`.
@@ -253,6 +263,17 @@ back to another model or space.
 - `RAG_CHAT_EMBEDDING_BASEURL` / `RAG_CHAT_EMBEDDING_API_KEY`: (Optional)
   OpenAI-compatible endpoint for the space, defaulting to `RAG_OPENAI_BASEURL`
   and `RAG_OPENAI_API_KEY`.
+- `RAG_CHAT_EMBEDDING_QUERY_PREFIX` / `RAG_CHAT_EMBEDDING_DOCUMENT_PREFIX`:
+  (Optional) task prefixes applied to `input_type: "query"` and
+  `input_type: "document"` respectively, both empty by default.
+
+`input_type` selects how the text is encoded. Asymmetric models — qwen3-embedding
+among them — expect a query and a passage to be encoded differently, so the space
+applies the matching task prefix and, where the backend exposes a dedicated batch
+query encoder, uses it. The prefixes are part of the space's locked definition:
+changing one changes every vector the space produces, so stored vectors have to
+be rebuilt to match. `content_hash` is always taken over the un-prefixed
+normalized text, so it stays a stable cache key for the same content.
 
 `/v1/rerank` implements the `fast-v1` profile as embed-blend: the query is
 embedded once through the retrieval cache, candidate vectors are read from the
@@ -344,12 +365,55 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
     {
       "path": "file_id",
       "type": "filter"
+    },
+    {
+      "path": "user_id",
+      "type": "filter"
+    },
+    {
+      "path": "tenant_id",
+      "type": "filter"
     }
   ]
 }
 ```
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+
+#### Migrating an existing Atlas vector index
+
+`/query` and `/query_multiple` scope every search by owner and tenant, and those
+predicates are Atlas **pre-filters**. Atlas rejects a `$vectorSearch` whose filter
+references a path that is not declared as a filter field, so an index created
+before this release — one carrying only `file_id` — makes those endpoints fail
+rather than return results.
+
+If your index predates this release:
+
+1. In the Atlas UI, open **Atlas Search → your `$ATLAS_SEARCH_INDEX` → Edit Index
+   Definition**, or use `mongosh`/the Admin API with the JSON above.
+2. Add the `user_id` and `tenant_id` filter entries, keeping `numDimensions` and
+   `similarity` at whatever your deployment already uses.
+3. Save and wait for the index status to return to **Active**. Atlas rebuilds the
+   index in place; no re-embedding is required.
+4. Backfill `tenant_id` on chunks embedded before this release. They carry no
+   such field, and Atlas vector-search pre-filters match on declared scalar
+   values rather than on absent fields, so an untagged chunk stays invisible
+   until it is stamped with the base tenant:
+
+   ```javascript
+   db.getCollection("<COLLECTION_NAME>").updateMany(
+     { tenant_id: { $exists: false } },
+     { $set: { tenant_id: "__BASE__" } }
+   )
+   ```
+
+   `__BASE__` is the tenant every caller without a `tenant` claim resolves to, so
+   this restores exactly the visibility those chunks had before. Run it once,
+   after the index reaches **Active**.
+
+Queries against `file_id` continue to work throughout — only the owner- and
+tenant-scoped paths wait on the rebuild.
 
 #### Create a `file_id` Index (recommended)
 

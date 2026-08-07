@@ -42,6 +42,12 @@ _SUPPORTED_ALGORITHMS = _HMAC_ALGORITHMS | _ASYMMETRIC_ALGORITHMS
 _MIN_HMAC_SECRET_LENGTH = 32
 _LEGACY_ALGORITHMS = ["HS256"]
 
+# The subject claim of the pre-scopes ``{"id": userId}`` token shape, and the
+# claims a token uses to state its own authorization. A token carrying either of
+# the latter is never grandfathered into full privileges.
+_LEGACY_SUBJECT_CLAIM = "id"
+_AUTHORIZATION_CLAIMS = ("scopes", "scope", "entities")
+
 
 class AuthError(Exception):
     """Raised when a bearer token cannot be accepted."""
@@ -174,10 +180,9 @@ class AuthSettings:
                 "(RAG_JWT_SECRET, or RAG_JWT_PUBLIC_KEY for asymmetric algorithms)"
             )
 
-        if not self.search_api_enabled:
-            return
-
         if not self.verification_key:
+            if not self.search_api_enabled:
+                return
             raise RuntimeError(
                 "RAG_SEARCH_API_ENABLED=true requires "
                 + (
@@ -187,6 +192,12 @@ class AuthSettings:
                 )
             )
 
+        # Everything below validates a key that *is* configured, so it runs
+        # whether or not the search router is mounted. The middleware accepts
+        # RAG-signed strict tokens on /query, the upload routes and every other
+        # non-/v1 path regardless of RAG_SEARCH_API_ENABLED, so gating these
+        # checks on that flag would let a deployment protect its document APIs
+        # with a trivially weak secret and still start cleanly.
         if (
             self.algorithm in _HMAC_ALGORITHMS
             and len(self.rag_secret) < _MIN_HMAC_SECRET_LENGTH
@@ -198,12 +209,12 @@ class AuthSettings:
 
         if not self.issuer:
             raise RuntimeError(
-                "RAG_JWT_ISSUER must be set when the search API is enabled"
+                "RAG_JWT_ISSUER must not be empty when a RAG signing key is configured"
             )
 
         if not self.audience:
             raise RuntimeError(
-                "RAG_JWT_AUDIENCE must be set when the search API is enabled"
+                "RAG_JWT_AUDIENCE must not be empty when a RAG signing key is configured"
             )
 
 
@@ -266,17 +277,43 @@ def _principal_from_strict(claims: Dict[str, Any]) -> Principal:
     )
 
 
+def _declares_authorization(claims: Dict[str, Any]) -> bool:
+    """Whether the token states its own scopes or entity list."""
+    return any(claim in claims for claim in _AUTHORIZATION_CLAIMS)
+
+
 def _principal_from_legacy(claims: Dict[str, Any]) -> Principal:
+    """Resolve a transition-era token, without widening what it asked for.
+
+    The legacy grandfather in :meth:`Principal.has_scope` and
+    :meth:`Principal.permits_entity` exists for the ``{"id": userId}`` shape,
+    which predates scopes and entity lists entirely. It is withheld from every
+    other token, because handing it to a token that *states* its authorization
+    would mean a strict token gains privileges by being malformed: drop ``exp``,
+    the tenant, or the scopes and a ``rag:embed``-only token would come back
+    holding every scope and arbitrary entity access.
+
+    So legacy acceptance covers claims a token omits, never claims it makes.
+    """
     subject = str(claims.get("id") or claims.get("sub") or "")
     if not subject:
         raise AuthError(status.HTTP_401_UNAUTHORIZED, "Token is missing a subject")
-    tenant = str(claims.get("tenant") or claims.get("tenant_id") or BASE_TENANT_ID)
+
+    declares_authorization = _declares_authorization(claims)
+    if declares_authorization:
+        logger.warning(
+            "Token failed strict validation but states its own authorization; "
+            "honouring its scopes and entities rather than grandfathering it | "
+            "subject=%s",
+            subject,
+        )
+
     return Principal(
         subject=subject,
-        tenant=tenant,
+        tenant=str(claims.get("tenant") or claims.get("tenant_id") or BASE_TENANT_ID),
         scopes=_split_scopes(claims),
         entities=_string_set(claims.get("entities")),
-        legacy=True,
+        legacy=_LEGACY_SUBJECT_CLAIM in claims and not declares_authorization,
     )
 
 

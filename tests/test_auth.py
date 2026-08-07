@@ -199,6 +199,114 @@ def test_missing_authorization_header_is_rejected(search_enabled):
     assert client.post("/v1/embeddings", json=EMBED_BODY).status_code == 401
 
 
+def unsigned_claims(**claims) -> str:
+    """A RAG-key-signed token with exactly the claims given, and nothing else."""
+    import jwt as pyjwt
+
+    return pyjwt.encode(claims, RAG_SECRET, algorithm="HS256")
+
+
+class TestMalformedStrictTokensGainNothing:
+    """A strict token must not widen its own authority by failing validation.
+
+    With RAG_AUTH_ACCEPT_LEGACY=true a RAG-signed token that misses ``exp``, the
+    tenant or the scopes drops out of strict validation into the legacy
+    fallback. Legacy principals are grandfathered into every scope and into
+    arbitrary entity access, so a token that restricted itself to ``rag:embed``
+    and one entity would come back holding everything — privilege escalation by
+    malformation. The grandfather now applies only to the pre-scopes
+    ``{"id": userId}`` shape.
+    """
+
+    def _principal(self, token: str):
+        return auth.verify_token(token, auth.get_settings(), allow_legacy_secret=False)
+
+    def _rerank(self, token: str):
+        body = {
+            "profile": "fast-v1",
+            "query": "q",
+            "candidates": [{"id": "c1", "text": "t", "base_score": 1.0}],
+        }
+        return client.post("/v1/rerank", json=body, headers=bearer(token))
+
+    def _query(self, token: str, entity_id: str):
+        return client.post(
+            "/query",
+            json={**QUERY_BODY, "entity_id": entity_id},
+            headers=bearer(token),
+        )
+
+    def test_a_token_without_expiry_keeps_only_its_own_scopes(self, search_enabled):
+        token = unsigned_claims(
+            sub="user-1",
+            iss=ISSUER,
+            aud=AUDIENCE,
+            tenant="__BASE__",
+            scopes=["rag:embed"],
+        )
+        principal = self._principal(token)
+        assert principal.legacy is False
+        assert principal.has_scope("rag:embed")
+        assert not principal.has_scope("rag:rerank")
+        assert post_embed(token).status_code == 200
+        assert self._rerank(token).status_code == 403
+
+    def test_a_token_without_a_tenant_keeps_only_its_own_scopes(self, search_enabled):
+        token = strict_token(tenant=None, scopes=["rag:embed"])
+        assert self._principal(token).legacy is False
+        assert post_embed(token).status_code == 200
+        assert self._rerank(token).status_code == 403
+
+    def test_a_token_without_an_audience_keeps_only_its_own_scopes(
+        self, search_enabled
+    ):
+        token = strict_token(audience=None, scopes=["rag:embed"])
+        assert post_embed(token).status_code == 200
+        assert self._rerank(token).status_code == 403
+
+    def test_an_empty_scope_list_grants_nothing(self, search_enabled):
+        """Stating no scopes is a restriction, not an omission."""
+        token = strict_token(tenant=None, scopes=[])
+        assert post_embed(token).status_code == 403
+        assert self._rerank(token).status_code == 403
+
+    def test_entity_restrictions_survive_the_fallback(self, search_enabled, store_stub):
+        token = strict_token(
+            subject="user-1", tenant=None, scopes=["rag:embed"], entities=["agent-7"]
+        )
+        principal = self._principal(token)
+        assert principal.permits_entity("agent-7")
+        assert not principal.permits_entity("user-2")
+        assert self._query(token, "agent-7").status_code == 200
+        assert self._query(token, "user-2").status_code == 403
+
+    def test_a_declared_empty_entity_list_permits_no_other_entity(
+        self, search_enabled, store_stub
+    ):
+        token = unsigned_claims(
+            sub="user-1", iss=ISSUER, aud=AUDIENCE, scopes=["rag:embed"], entities=[]
+        )
+        assert self._query(token, "user-2").status_code == 403
+
+    def test_a_sub_shaped_token_is_not_grandfathered(self, search_enabled, store_stub):
+        """Only the ``{"id": ...}`` shape predates scopes, so only it is trusted."""
+        token = strict_token(tenant=None, scopes=None)
+        assert self._principal(token).legacy is False
+        assert post_embed(token).status_code == 403
+        assert self._query(token, "user-2").status_code == 403
+
+    def test_the_genuine_legacy_shape_is_still_grandfathered(
+        self, search_enabled, store_stub
+    ):
+        token = legacy_token(user_id="user-1", secret=RAG_SECRET)
+        principal = self._principal(token)
+        assert principal.legacy is True
+        assert principal.has_scope("rag:rerank")
+        assert principal.permits_entity("agent-7")
+        assert post_embed(token).status_code == 200
+        assert self._query(token, "agent-7").status_code == 200
+
+
 def test_service_endpoints_are_unavailable_when_the_search_api_is_off(monkeypatch):
     monkeypatch.setenv("RAG_SEARCH_API_ENABLED", "false")
     monkeypatch.setenv("RAG_JWT_SECRET", RAG_SECRET)
@@ -311,3 +419,52 @@ class TestStartupValidation:
         )
         with pytest.raises(RuntimeError, match="requires RAG_JWT_PUBLIC_KEY"):
             settings.validate()
+
+    def test_short_hmac_secret_is_refused_with_search_disabled(self, monkeypatch):
+        """The key still signs tokens the middleware accepts on /query.
+
+        RAG_SEARCH_API_ENABLED only decides whether the /v1 router is mounted.
+        A RAG-signed strict token is honoured on the document routes either way,
+        so a weak key is a weak key whether or not search is on.
+        """
+        settings = self._settings(
+            monkeypatch,
+            RAG_SEARCH_API_ENABLED="false",
+            RAG_JWT_SECRET="too-short",
+            JWT_SECRET=APP_SECRET,
+        )
+        with pytest.raises(RuntimeError, match="at least 32 characters"):
+            settings.validate()
+
+    def test_empty_issuer_is_refused_with_search_disabled(self, monkeypatch):
+        settings = self._settings(
+            monkeypatch,
+            RAG_SEARCH_API_ENABLED="false",
+            RAG_JWT_SECRET=RAG_SECRET,
+            RAG_JWT_ISSUER="",
+            JWT_SECRET=APP_SECRET,
+        )
+        with pytest.raises(RuntimeError, match="RAG_JWT_ISSUER"):
+            settings.validate()
+
+    def test_empty_audience_is_refused_with_search_disabled(self, monkeypatch):
+        settings = self._settings(
+            monkeypatch,
+            RAG_SEARCH_API_ENABLED="false",
+            RAG_JWT_SECRET=RAG_SECRET,
+            RAG_JWT_AUDIENCE="",
+            JWT_SECRET=APP_SECRET,
+        )
+        with pytest.raises(RuntimeError, match="RAG_JWT_AUDIENCE"):
+            settings.validate()
+
+    def test_no_rag_key_and_no_search_still_passes(self, monkeypatch):
+        """The legacy-only deployment has no RAG key to validate."""
+        settings = self._settings(
+            monkeypatch,
+            RAG_SEARCH_API_ENABLED="false",
+            RAG_JWT_SECRET=None,
+            RAG_JWT_ISSUER="",
+            JWT_SECRET=APP_SECRET,
+        )
+        settings.validate()
