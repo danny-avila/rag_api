@@ -5,12 +5,13 @@
 ``POST /v1/rerank`` serves the ``fast-v1`` profile as embed-blend.
 
 Neither endpoint returns candidate text, and neither logs query or candidate
-text — only lengths and non-reversible fingerprints.
+text — only lengths and non-reversible fingerprints. That extends to failures:
+an exception message is provider- or driver-controlled and routinely quotes the
+input that caused it, so only the exception's class chain is ever logged.
 """
 
 import asyncio
 import inspect
-import traceback
 from typing import Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -45,6 +46,26 @@ from app.services.space import SpaceBackendError, get_space, known_spaces
 from app.utils.text import content_hash, fingerprint, normalize_text
 
 router = APIRouter(prefix="/v1")
+
+_MAX_CAUSE_DEPTH = 5
+
+
+def error_category(exc: BaseException) -> str:
+    """The exception's class chain — never its message, never a traceback.
+
+    An inference gateway that rejects an input commonly echoes that input back
+    in the error, and ``SpaceBackendError`` wraps the provider's message
+    verbatim; a database driver does the same with the statement parameters,
+    which here are caller-supplied candidate ids. Class names are the only part
+    of an exception this process authored, so they are the only part that gets
+    logged.
+    """
+    names: List[str] = []
+    current: Optional[BaseException] = exc
+    while current is not None and len(names) < _MAX_CAUSE_DEPTH:
+        names.append(type(current).__name__)
+        current = current.__cause__
+    return " <- ".join(names)
 
 
 def _executor(request: Request):
@@ -97,16 +118,32 @@ async def create_embeddings(
             detail=f"Inputs normalize to empty text: {empty}",
         )
 
+    # The model validator sizes the request as the caller sent it; NFKC is what
+    # the backend actually receives, and compatibility characters expand under
+    # it (one U+FB03 becomes three characters). The advertised limit is a
+    # provider limit, so it is re-checked against the text that will be sent —
+    # still before anything leaves the process.
+    normalized_characters = sum(len(text) for text in texts)
+    if normalized_characters > MAX_EMBEDDING_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"inputs normalize to {normalized_characters} characters, "
+                f"which exceeds the {MAX_EMBEDDING_CHARS} limit"
+            ),
+        )
+
     try:
-        vectors = await _run(request, space.embed_documents, texts)
+        vectors = await _run(request, space.embed, texts, body.input_type)
     except SpaceBackendError as exc:
         # chat-v1 is substitution-locked: a backend failure is a 503, never a
         # quiet switch to another model or dimensionality.
         logger.error(
-            "Embedding backend unavailable | space=%s inputs=%d | %s",
+            "Embedding backend unavailable | space=%s input_type=%s inputs=%d | %s",
             body.space,
+            body.input_type,
             len(texts),
-            exc,
+            error_category(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -190,9 +227,7 @@ async def _authorize_candidates(
         )
         existing, authorized = probed
     except Exception as exc:
-        logger.error(
-            "Candidate authorization probe failed | %s: %s", type(exc).__name__, exc
-        )
+        logger.error("Candidate authorization probe failed | %s", error_category(exc))
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Candidate authorization is unavailable",
@@ -236,9 +271,8 @@ async def _stored_vectors(
         )
     except Exception as exc:
         logger.warning(
-            "Stored candidate vector lookup failed, falling back to inference | %s: %s",
-            type(exc).__name__,
-            exc,
+            "Stored candidate vector lookup failed, falling back to inference | %s",
+            error_category(exc),
         )
         return {}
 
@@ -306,12 +340,10 @@ async def rerank(
         )
     except Exception as exc:
         logger.error(
-            "Rerank embedding backend unavailable | candidates=%d pending=%d | %s: %s\n%s",
+            "Rerank embedding backend unavailable | candidates=%d pending=%d | %s",
             len(body.candidates),
             len(pending_texts),
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
+            error_category(exc),
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

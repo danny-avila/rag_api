@@ -391,6 +391,97 @@ def test_embedding_backend_failure_returns_503(backend, monkeypatch):
     assert "gateway down" not in response.text
 
 
+class TestFailuresAreLoggedWithoutProviderText:
+    """An exception message is provider-controlled and may quote the input.
+
+    The endpoint promises that no query or candidate text is logged. That has to
+    hold on the error paths too, which means logging the exception's class chain
+    rather than its message or a traceback.
+    """
+
+    SECRET_QUERY = "supersecretquerystring"
+    SECRET_TEXT = "supersecretcandidatetext"
+
+    def _candidates(self):
+        return [{"id": "c1", "text": self.SECRET_TEXT, "base_score": 1.0}]
+
+    def _assert_clean(self, caplog, response):
+        assert self.SECRET_QUERY not in caplog.text
+        assert self.SECRET_TEXT not in caplog.text
+        assert self.SECRET_QUERY not in response.text
+        assert self.SECRET_TEXT not in response.text
+
+    def test_a_query_embedding_failure_that_echoes_the_query(
+        self, backend, caplog, monkeypatch
+    ):
+        def explode(text):
+            raise RuntimeError(f"tokenizer rejected: '{text}'")
+
+        monkeypatch.setattr(
+            "app.services.embedding.get_cached_query_embedding", explode
+        )
+        with caplog.at_level(logging.DEBUG):
+            response = rerank(self._candidates(), query=self.SECRET_QUERY)
+        assert response.status_code == 503
+        self._assert_clean(caplog, response)
+        assert "RuntimeError" in caplog.text
+
+    def test_a_candidate_embedding_failure_that_echoes_the_candidate(
+        self, backend, caplog, monkeypatch
+    ):
+        def explode(texts):
+            raise RuntimeError(f"batch rejected: {texts}")
+
+        monkeypatch.setattr("app.services.embedding.embed_texts", explode)
+        with caplog.at_level(logging.DEBUG):
+            response = rerank(self._candidates(), query=self.SECRET_QUERY)
+        assert response.status_code == 503
+        self._assert_clean(caplog, response)
+
+    def test_no_traceback_is_written(self, backend, caplog, monkeypatch):
+        """A traceback carries the frame locals' repr into the log with it."""
+
+        def explode(text):
+            raise RuntimeError("gateway down")
+
+        monkeypatch.setattr(
+            "app.services.embedding.get_cached_query_embedding", explode
+        )
+        with caplog.at_level(logging.DEBUG):
+            assert rerank(self._candidates()).status_code == 503
+        assert "Traceback (most recent call last)" not in caplog.text
+        assert "gateway down" not in caplog.text
+
+    def test_a_store_failure_does_not_log_the_candidate_ids(
+        self, backend, stored, caplog, monkeypatch
+    ):
+        """Driver errors embed the statement parameters, which are caller strings."""
+
+        def explode(ids, owners, tenants=(None,), executor=None):
+            raise RuntimeError(f"could not execute: {list(ids)}")
+
+        monkeypatch.setattr(vector_store, "probe_candidate_ids", explode, raising=False)
+        with caplog.at_level(logging.DEBUG):
+            response = rerank([{"id": "leaky-id-42", "text": "t", "base_score": 1.0}])
+        assert response.status_code == 503
+        assert "leaky-id-42" not in caplog.text
+        assert "could not execute" not in caplog.text
+
+    def test_the_error_category_chain_survives_wrapping(self):
+        from app.routes.search_routes import error_category
+
+        cause = ValueError("provider echoed the input")
+        try:
+            try:
+                raise cause
+            except ValueError as exc:
+                raise RuntimeError("wrapper") from exc
+        except RuntimeError as exc:
+            category = error_category(exc)
+        assert category == "RuntimeError <- ValueError"
+        assert "provider echoed" not in category
+
+
 def test_candidates_without_text_or_stored_vector_still_rank(backend, stored):
     candidates = [
         {"id": "c-alpha", "text": "alpha", "base_score": 3.0},
