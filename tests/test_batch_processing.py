@@ -156,7 +156,14 @@ class TestBatchProcessing:
     def mock_documents(self):
         """Create mock documents for testing."""
         return [
-            Document(page_content=f"content_{i}", metadata={"file_id": "test_file"})
+            Document(
+                page_content=f"content_{i}",
+                metadata={
+                    "file_id": "test_file",
+                    "user_id": "user-1",
+                    "tenant_id": "__BASE__",
+                },
+            )
             for i in range(10)
         ]
 
@@ -175,6 +182,7 @@ class TestBatchProcessing:
         store = Mock()
         store.add_documents = Mock(return_value=["id1", "id2"])
         store.delete = Mock()
+        store.delete_scoped = Mock()
         return store
 
     # --- Async Pipeline Tests ---
@@ -393,7 +401,13 @@ class TestBatchProcessing:
                         executor=executor,
                     )
 
-        mock_sync_vector_store.delete.assert_called_once()
+        # The rollback deletes by the caller-supplied file id, so it carries the
+        # writer's owner and tenant: another owner's chunks under the same id
+        # are not this request's to remove.
+        mock_sync_vector_store.delete_scoped.assert_called_once_with(
+            ["test_file"], ["user-1"], ["__BASE__"]
+        )
+        assert not mock_sync_vector_store.delete.called
 
     @pytest.mark.asyncio
     async def test_sync_batched_no_rollback_on_first_error(
@@ -417,6 +431,7 @@ class TestBatchProcessing:
 
         # Should not attempt rollback since nothing was inserted
         assert not mock_sync_vector_store.delete.called
+        assert not mock_sync_vector_store.delete_scoped.called
 
 
 class TestBatchConfiguration:

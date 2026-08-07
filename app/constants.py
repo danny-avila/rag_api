@@ -1,6 +1,21 @@
 # app/constants.py
 from enum import Enum
 
+# Service endpoint limits — fixed by the search-stack contract, not tunable per
+# deployment: callers batch against them and the projector sizes its work units
+# from them.
+MAX_EMBEDDING_INPUTS = 64
+MAX_EMBEDDING_CHARS = 256_000
+MAX_RERANK_CANDIDATES = 50
+MAX_RERANK_TOP_N = 25
+# A rerank query is a single embedding input sent to the provider on its own, so
+# the aggregate candidate budget never bounds it. Without a limit of its own an
+# authenticated caller can hand the gateway an arbitrarily large query and get
+# the provider's rejection back as a 503.
+MAX_QUERY_CHARS = 8_000
+
+RERANK_PROFILE_FAST_V1 = "fast-v1"
+
 
 class MESSAGES(str, Enum):
     DEFAULT = lambda msg="": f"{msg if msg else ''}"

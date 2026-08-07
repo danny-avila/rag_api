@@ -63,6 +63,16 @@ docker compose build --no-cache
 
 ### Environment Variables
 
+Copy `.env.example` to `.env` and replace every `REPLACE_ME_*` placeholder. The
+database credentials ship **no fallback defaults** — the service refuses to
+start without them, and the compose files use `${VAR:?}` so `docker compose up`
+fails loudly rather than bringing up a database whose credentials are public in
+this repository:
+
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: **required** when
+  `VECTOR_DB_TYPE=pgvector`. `POSTGRES_PASSWORD` may be empty only when
+  `POSTGRES_USE_UNIX_SOCKET=True`, where peer authentication carries no password.
+
 The following environment variables are required to run the application:
 
 - `RAG_OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
@@ -72,9 +82,9 @@ The following environment variables are required to run the application:
     - Note: When using with LibreChat, you can also set `HTTP_PROXY` and `HTTPS_PROXY` environment variables in the `docker-compose.override.yml` file (see [Proxy Configuration](#proxy-configuration) section below)
 - `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
 - `POSTGRES_USE_UNIX_SOCKET`: (Optional) Set to "True" when connecting to the PostgreSQL database server with Unix Socket.
-- `POSTGRES_DB`: (Optional) The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`.
-- `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
-- `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
+- `POSTGRES_DB`: The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`. Required, no default.
+- `POSTGRES_USER`: The username for connecting to the PostgreSQL database. Required, no default.
+- `POSTGRES_PASSWORD`: The password for connecting to the PostgreSQL database. Required, no default (may be empty only under `POSTGRES_USE_UNIX_SOCKET=True`).
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
 - `PGVECTOR_CREATE_EXTENSION`: (Optional) Set to "False" to skip the `CREATE EXTENSION IF NOT EXISTS vector` call on startup. Default is "True". Use this when the `vector` extension is already installed on a managed Postgres (e.g. RDS, Azure Database for PostgreSQL) and the application user is not a superuser.
@@ -136,6 +146,229 @@ The following environment variables are required to run the application:
 - `RAG_CHECK_EMBEDDING_CTX_LENGTH` (Optional) Default is true, disabling this will send raw input to the embedder, use this for custom embedding models.
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
+
+### Authentication
+
+Requests carry a bearer JWT. Two token generations are recognised.
+
+**Strict tokens** are signed with `RAG_JWT_SECRET` — a key dedicated to this
+service — and carry `iss`, `aud`, `sub`, `exp`, a tenant claim, and scopes.
+`RAG_JWT_SECRET` must never be the application's `JWT_SECRET`: sharing the key
+makes every token minted for rag_api simultaneously a full API session token
+for the calling app, and vice versa. Startup refuses to proceed if the two
+match.
+
+**Legacy tokens** are the `{"id": userId}` shape older LibreChat releases mint.
+They are accepted while `RAG_AUTH_ACCEPT_LEGACY` is true. On the `/v1` service
+endpoints the flag relaxes only the *claim shape* — a token signed with the
+application `JWT_SECRET` is never accepted there, in any mode.
+
+Legacy tokens predate scopes and entity lists, so they are grandfathered into
+both. That grandfather is limited to the `{"id": ...}` shape. A token that states
+its own `scopes` or `entities` keeps exactly what it stated even if it fails
+strict validation for some other reason — otherwise dropping `exp`, the tenant or
+the scopes from a `rag:embed`-only token would hand it every scope and
+unrestricted entity access.
+
+- `RAG_JWT_SECRET`: (Optional) dedicated signing secret for this service. At
+  least 32 characters for HMAC algorithms. Required when `RAG_SEARCH_API_ENABLED=true`.
+  Whenever it is set the service validates it at startup — the key signs tokens
+  the middleware honours on `/query` and the upload routes regardless of whether
+  the search endpoints are mounted, so a short secret fails startup either way.
+- `RAG_JWT_PUBLIC_KEY`: (Optional) verification key when `RAG_JWT_ALGORITHM` is asymmetric.
+- `RAG_JWT_ALGORITHM`: (Optional) default `HS256`. `HS*`, `RS*`, `ES*` and `EdDSA` are supported.
+- `RAG_JWT_ISSUER`: (Optional) required `iss`, default `librechat`.
+- `RAG_JWT_AUDIENCE`: (Optional) required `aud`, default `rag_api`.
+- `RAG_JWT_LEEWAY_SECONDS`: (Optional) clock skew allowance, default `0`.
+- `RAG_AUTH_ACCEPT_LEGACY`: (Optional) default `true`. Set to `false` once every
+  caller mints the full claim set.
+
+Scopes name a capability, and none of them substitutes for another:
+
+| Scope | Grants |
+| --- | --- |
+| `rag:embed` | `POST /v1/embeddings` |
+| `rag:rerank` | `POST /v1/rerank` |
+| `rag:documents` | `GET /ids`, `GET /documents`, `GET /documents/{id}/context`, `DELETE /documents` |
+
+The document plane and the inference plane are separate capabilities, so they
+carry separate scopes. `rag:documents` reads and deletes stored chunks and buys
+no inference; `rag:embed` and `rag:rerank` spend inference budget and reach no
+document route. A credential minted to delete one file therefore cannot be
+replayed against an embedding provider, and a leaked embedding credential
+cannot read or destroy stored content. A token carrying neither is refused
+either way — a strict token with no scopes at all is refused outright.
+
+The tenant claim (`tenant`, or `tenant_id`) is required for strict tokens; the
+reserved value `__SYSTEM__` is always refused.
+
+Callers may pass an `entity_id` to `/query` and `/query_multiple` to reach an
+agent's knowledge-base files. Strict tokens must list that id in their
+`entities` claim. Legacy tokens cannot prove entity access, so the id is taken
+at face value — which is the reason to flip `RAG_AUTH_ACCEPT_LEGACY` off once
+the migration lands.
+
+### Retrieval scope
+
+Retrieval is scoped by `(tenant, owner/entity, file_id)`, and all three go into
+the vector-store predicate before ranking. A chunk outside the caller's scope
+matches nothing rather than being filtered out of the result set afterwards.
+There is one scope builder (`app/scope.py`); no route writes its own scope
+clause.
+
+Chunks record the writing caller's `tenant_id` and `user_id`. Chunks written
+before `tenant_id` existed carry no value and normalize to the base tenant
+`__BASE__`, so a single-tenant deployment reads them exactly as before while a
+named tenant never absorbs untagged content. Documents written before `user_id`
+was recorded are no longer visible to any caller; re-embed them if you still
+need them.
+
+Writes are scoped too: uploading under an `entity_id` the token does not permit
+is refused, so a caller cannot plant content in a knowledge base it cannot read.
+
+The file-addressed routes are scoped by the same builder, because a file id is
+caller-supplied and proves nothing about who may read it. All four require the
+`rag:documents` scope, and holding it is permission to address this plane, never
+permission to address another owner's rows inside it:
+
+| Route | Scope |
+| --- | --- |
+| `GET /ids` | lists only the caller's own file ids |
+| `GET /documents?ids=` | chunks the caller owns; anything else is `404` |
+| `GET /documents/{id}/context` | as above, for one file |
+| `DELETE /documents` | deletes only the caller's rows for those ids |
+
+A token missing `rag:documents` is refused with `403` before the store is
+touched, so the refusal says nothing about whether the file exists. Deployments
+that configure no signing key at all are unauthenticated and unchanged — scope
+enforcement starts where tokens do.
+
+Each accepts an optional `entity_id` query parameter, with the same rule as
+`/query`: strict tokens must list the id in their `entities` claim, legacy
+tokens are taken at face value. A file outside the scope reads as "not found"
+rather than "found but refused", so none of these routes is an existence oracle.
+
+The scope is inside the `DELETE` predicate rather than beside it. Two owners can
+hold rows under one file id — the id is chosen by whoever uploads — so a delete
+that filtered on the id alone would take both.
+
+**Upgrade note.** Files embedded under an `entity_id` (agent knowledge bases)
+are owned by that entity, so deleting or reading them needs `entity_id` on these
+routes just as querying them already does. A client that deletes an agent's file
+with a plain user token and no `entity_id` now gets `404` and leaves the chunks
+in place; pass the entity the file was uploaded under to remove them.
+
+**Upgrade note.** These four routes now require `rag:documents`. Strict tokens
+minted for them before the scope existed carried `rag:embed` — the smallest
+scope set that satisfied the non-empty-scopes rule — and are refused with `403`
+now that the plane has a scope of its own. Mint `rag:documents` for the calls
+that read or delete stored chunks and keep `rag:embed` for the ones that
+actually embed. Legacy `{"id": userId}` tokens predate every scope and are
+unaffected while `RAG_AUTH_ACCEPT_LEGACY` is true.
+
+The two directions are not symmetric, so the deploy order matters. Roll the
+minting change out first and this build second, or both together:
+
+- **Client first, service second — safe.** A build that does not yet require
+  `rag:documents` never inspects the scope on these routes, so a token carrying
+  it is simply accepted. The unknown scope is inert.
+- **Service first, client second — breaks.** This build refuses a token that
+  still carries only `rag:embed`, so every document read and delete returns
+  `403` until the client catches up.
+
+### Authorize before egress
+
+Rerank and embedding send text to an inference provider. That text has left the
+trust boundary whether or not the caller ever sees a response, so authorization
+happens before the call rather than as a filter on its result:
+
+- `/v1/rerank` probes every candidate id against the store — metadata only, no
+  vectors and no document text. An id that exists but resolves to nothing inside
+  the caller's scope makes the whole request `403`, and nothing is embedded. Ids
+  that match nothing in the store (web-scrape candidates, synthetic ids) are
+  unaffected. If the probe cannot run, the request fails closed with `503`
+  rather than embedding text it could not check.
+- `/v1/embeddings` reads no store at all: it embeds only text the authenticated
+  caller supplied in the request body. Scope, quota and limit rejections all
+  happen before the backend is called.
+
+### Search service endpoints
+
+Enabled by `RAG_SEARCH_API_ENABLED=true` (default `false`); the service refuses
+to start if enabled without a valid signing configuration.
+
+```text
+POST /v1/embeddings
+{ "space": "chat-v1", "input_type": "query" | "document",
+  "inputs": [{ "id": "...", "text": "..." }] }
+-> { "space", "model", "dimensions", "normalized",
+     "items": [{ "id", "content_hash", "embedding" }], "usage" }
+
+POST /v1/rerank
+{ "profile": "fast-v1", "query": "...",
+  "candidates": [{ "id", "text", "base_score" }], "top_n": 25 }
+-> { "profile", "model", "results": [{ "id", "index", "score" }] }
+```
+
+Limits: 64 inputs and 256,000 aggregate characters per embeddings call; 50
+candidates, 8,000 query characters and `top_n <= 25` per rerank call. The
+character limits are provider limits, so they bind the payload that is actually
+sent — after NFKC normalization and including the space's task prefix, which
+applies to every input. Over-limit requests are rejected with `422` before any
+text reaches the backend. Caller ids are preserved and tie
+ordering is deterministic (ties break on the candidate's position in the
+request). `content_hash` is the SHA-256 of the NFKC-normalized,
+whitespace-collapsed text that was embedded. Vectors leave the service
+L2-normalized.
+
+The `chat-v1` space is substitution-locked: if its backend is unavailable, or
+returns a different dimensionality, the call fails with 503 rather than falling
+back to another model or space.
+
+- `RAG_SEARCH_API_ENABLED`: (Optional) default `false`.
+- `RAG_EMBEDDING_SPACE`: (Optional) space name, default `chat-v1`.
+- `RAG_CHAT_EMBEDDING_MODEL`: (Optional) default `qwen3-embedding-8b`.
+- `RAG_CHAT_EMBEDDING_DIMENSIONS`: (Optional) default `1024`.
+- `RAG_CHAT_EMBEDDING_BASEURL` / `RAG_CHAT_EMBEDDING_API_KEY`: (Optional)
+  OpenAI-compatible endpoint for the space, defaulting to `RAG_OPENAI_BASEURL`
+  and `RAG_OPENAI_API_KEY`.
+- `RAG_CHAT_EMBEDDING_QUERY_PREFIX` / `RAG_CHAT_EMBEDDING_DOCUMENT_PREFIX`:
+  (Optional) task prefixes applied to `input_type: "query"` and
+  `input_type: "document"` respectively, both empty by default.
+
+`input_type` selects how the text is encoded. Asymmetric models — qwen3-embedding
+among them — expect a query and a passage to be encoded differently, so the space
+applies the matching task prefix and, where the backend exposes a dedicated batch
+query encoder, uses it. The prefixes are part of the space's locked definition:
+changing one changes every vector the space produces, so stored vectors have to
+be rebuilt to match. `content_hash` is always taken over the un-prefixed
+normalized text, so it stays a stable cache key for the same content.
+
+`/v1/rerank` implements the `fast-v1` profile as embed-blend: the query is
+embedded once through the retrieval cache, candidate vectors are read from the
+pgvector store wherever they already exist, and only vectorless candidates are
+embedded. The final score is reciprocal-rank fusion of cosine similarity with
+the caller's `base_score` — never pure embedding order, which regresses
+identifier and exact-match queries. Candidate ids resolve against the stored
+row's `uuid` or the chunk `digest` in its metadata, always restricted to owners
+the token permits.
+
+- `RAG_RERANK_RRF_K`: (Optional) fusion constant, default `60`.
+- `RAG_RERANK_SIMILARITY_WEIGHT` / `RAG_RERANK_BASE_WEIGHT`: (Optional) arm weights, default `1.0`.
+- `RAG_QUERY_EMBEDDING_CACHE_SIZE`: (Optional) shared query-vector cache size, default `128`.
+
+Rate limits apply per tenant and per subject, with separate embedding and
+rerank budgets. Counters are process-local, so a multi-pod deployment enforces
+`limit x pods`.
+
+- `RAG_RATE_LIMIT_ENABLED`: (Optional) default `true`.
+- `RAG_RATE_LIMIT_WINDOW_SECONDS`: (Optional) default `60`.
+- `RAG_RATE_LIMIT_EMBED_TENANT` / `RAG_RATE_LIMIT_EMBED_SUBJECT`: (Optional) default `600` / `120`.
+- `RAG_RATE_LIMIT_RERANK_TENANT` / `RAG_RATE_LIMIT_RERANK_SUBJECT`: (Optional) default `900` / `180`.
+
+Note for `atlas-mongo` deployments: `/query` and `/query_multiple` now put the
+owner predicate in the vector-search `filter`, so `user_id` must be declared as
+a filter field on the Atlas vector index.
 
 ### Embedding Batch Processing
 
@@ -201,6 +434,14 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
     {
       "path": "file_id",
       "type": "filter"
+    },
+    {
+      "path": "user_id",
+      "type": "filter"
+    },
+    {
+      "path": "tenant_id",
+      "type": "filter"
     }
   ]
 }
@@ -208,15 +449,75 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
 
-#### Create a `file_id` Index (recommended)
+#### Migrating an existing Atlas vector index
 
-We recommend creating a standard MongoDB index on `file_id` to keep lookups fast. After creating the collection, run the following once (via Atlas UI, Compass, or `mongosh`):
+`/query` and `/query_multiple` scope every search by owner and tenant, and those
+predicates are Atlas **pre-filters**. Atlas rejects a `$vectorSearch` whose filter
+references a path that is not declared as a filter field, so an index created
+before this release — one carrying only `file_id` — makes those endpoints fail
+rather than return results.
+
+If your index predates this release:
+
+1. In the Atlas UI, open **Atlas Search → your `$ATLAS_SEARCH_INDEX` → Edit Index
+   Definition**, or use `mongosh`/the Admin API with the JSON above.
+2. Add the `user_id` and `tenant_id` filter entries, keeping `numDimensions` and
+   `similarity` at whatever your deployment already uses.
+3. Save and wait for the index status to return to **Active**. Atlas rebuilds the
+   index in place; no re-embedding is required.
+4. Backfill `tenant_id` on chunks embedded before this release. They carry no
+   such field, and Atlas vector-search pre-filters match on declared scalar
+   values rather than on absent fields, so an untagged chunk stays invisible
+   until it is stamped with the base tenant:
+
+   ```javascript
+   db.getCollection("<COLLECTION_NAME>").updateMany(
+     { tenant_id: { $exists: false } },
+     { $set: { tenant_id: "__BASE__" } }
+   )
+   ```
+
+   `__BASE__` is the tenant every caller without a `tenant` claim resolves to, so
+   this restores exactly the visibility those chunks had before. Run it once,
+   after the index reaches **Active**.
+
+5. Make sure the standard `digest` index below exists. The service creates it on
+   startup, so restarting is enough; create it by hand if the database user
+   cannot build indexes. Without it every `/v1/rerank` call scans the whole
+   vector collection twice.
+
+Queries against `file_id` continue to work throughout — only the owner- and
+tenant-scoped paths wait on the rebuild.
+
+#### Standard indexes
+
+The Atlas **vector-search** index accelerates `$vectorSearch` and nothing else.
+The document routes and the rerank candidate lookups are ordinary `find` calls,
+so they need ordinary indexes or they scan the collection.
+
+The service creates both on startup, so a fresh deployment needs no manual step.
+`createIndex` is idempotent, and a database user without index privileges only
+produces a warning — the lookups still return the right answers, they just scan.
+To create them yourself (Atlas UI, Compass, or `mongosh`):
 
 ```javascript
 db.getCollection("<COLLECTION_NAME>").createIndex({ file_id: 1 })
+db.getCollection("<COLLECTION_NAME>").createIndex({ digest: 1, user_id: 1, tenant_id: 1 })
 ```
 
-Replace `<COLLECTION_NAME>` with the same collection used by the RAG API. This ensures lookups remain fast even as the number of embedded documents grows.
+Replace `<COLLECTION_NAME>` with the same collection used by the RAG API.
+
+`file_id` serves `/query`, `/documents`, `/documents/{id}/context` and
+`DELETE /documents`. The compound `digest` index serves `/v1/rerank`: candidate
+ids handed back to callers are normally chunk digests rather than Mongo `_id`
+values, and every rerank resolves them twice — once for the authorization probe,
+then again for the stored-vector lookup. Without it each rerank scans the whole
+vector collection twice, and that cost grows with the corpus. The trailing
+`user_id` and `tenant_id` are the scope fields the second lookup filters on, so
+it can be answered from the index instead of fetching rows it then discards.
+
+Existing deployments get both on the next restart; they build in the background
+and need no re-embedding.
 
 
 ### Proxy Configuration

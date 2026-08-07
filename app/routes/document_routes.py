@@ -14,6 +14,7 @@ from typing import List, Iterable, Optional, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
+    Depends,
     Request,
     UploadFile,
     HTTPException,
@@ -25,7 +26,6 @@ from fastapi import (
 )
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from functools import lru_cache
 
 if TYPE_CHECKING:
     from app.services.vector_store.async_pg_vector import AsyncPgVector
@@ -89,6 +89,15 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
 )
+from app.auth import BASE_TENANT_ID, require_document_scope
+from app.scope import (
+    PUBLIC_OWNER,
+    file_clause,
+    files_clause,
+    resolve_scope,
+    writer_tenant,
+)
+from app.services import embedding as embedding_service
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
     get_loader,
@@ -97,8 +106,13 @@ from app.utils.document_loader import (
     cleanup_temp_encoding_file,
 )
 from app.utils.health import is_health_ok
+from app.utils.text import fingerprint
 
 router = APIRouter()
+
+# The file-addressed routes: they read or delete stored chunks by id and need no
+# inference capability to do it, so they are guarded by the document scope alone.
+DOCUMENT_PLANE = [Depends(require_document_scope)]
 
 _INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
 _INGESTION_ATTEMPT_STARTED_AT_NS_KEY = "_rag_ingestion_attempt_started_at_ns"
@@ -182,6 +196,11 @@ def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]
     return ordered_documents
 
 
+INTERNAL_ERROR_DETAIL = (
+    "The request could not be completed. See the service logs for details."
+)
+
+
 def calculate_num_batches(total: int, batch_size: int) -> int:
     """Calculate the number of batches needed to process total items."""
     if batch_size <= 0:
@@ -192,7 +211,7 @@ def calculate_num_batches(total: int, batch_size: int) -> int:
 def get_user_id(request: Request, entity_id: str = None) -> str:
     """Extract user ID from request or entity_id."""
     if not hasattr(request.state, "user"):
-        return entity_id if entity_id else "public"
+        return entity_id if entity_id else PUBLIC_OWNER
     else:
         return entity_id if entity_id else request.state.user.get("id")
 
@@ -266,6 +285,17 @@ def build_ingestion_context(
     if include_memory:
         parts.append(get_process_memory_details())
     return " | ".join(parts)
+
+
+def resolve_writer(request: Request, entity_id: Optional[str] = None) -> tuple:
+    """``(owner, tenant)`` to stamp on the chunks this request writes.
+
+    Runs the same entity authorization as the read path: writing into another
+    entity's namespace would let a caller poison a knowledge base it cannot
+    read.
+    """
+    resolve_scope(request, entity_id)
+    return get_user_id(request, entity_id), writer_tenant(request)
 
 
 async def save_upload_file_async(file: UploadFile, temp_file_path: str) -> None:
@@ -389,13 +419,18 @@ async def cleanup_temp_file_async(file_path: str) -> None:
         )
 
 
-@router.get("/ids")
-async def get_all_ids(request: Request):
+@router.get("/ids", dependencies=DOCUMENT_PLANE)
+async def get_all_ids(request: Request, entity_id: Optional[str] = Query(None)):
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.get_all_ids(executor=request.app.state.thread_pool)
+            ids = await vector_store.get_all_ids(
+                list(scope.owners),
+                scope.tenant_values(),
+                executor=request.app.state.thread_pool,
+            )
         else:
-            ids = vector_store.get_all_ids()
+            ids = vector_store.get_all_ids(list(scope.owners), scope.tenant_values())
 
         return list(set(ids))
     except HTTPException as http_exc:
@@ -411,7 +446,7 @@ async def get_all_ids(request: Request):
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 @router.get("/health")
@@ -431,19 +466,35 @@ async def health_check():
         return {"status": "DOWN", "error": str(e)}, 503
 
 
-@router.get("/documents", response_model=list[DocumentResponse])
-async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
+@router.get(
+    "/documents", response_model=list[DocumentResponse], dependencies=DOCUMENT_PLANE
+)
+async def get_documents_by_ids(
+    request: Request,
+    ids: list[str] = Query(...),
+    entity_id: Optional[str] = Query(None),
+):
+    """Chunks of the named files, restricted to the caller's scope.
+
+    A file id is caller-supplied and proves nothing, so the owner and tenant
+    predicate goes into the store query alongside it. A file outside the scope
+    is "not found" rather than "found but refused": distinguishing the two would
+    turn this route into an existence oracle over the whole deployment.
+    """
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners, tenants)
+            documents = vector_store.get_documents_by_ids(ids, owners, tenants)
 
         # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
@@ -470,22 +521,38 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
-@router.delete("/documents")
-async def delete_documents(request: Request, document_ids: List[str] = Body(...)):
+@router.delete("/documents", dependencies=DOCUMENT_PLANE)
+async def delete_documents(
+    request: Request,
+    document_ids: List[str] = Body(...),
+    entity_id: Optional[str] = Query(None),
+):
+    """Delete the named files' chunks, restricted to the caller's scope.
+
+    The scope is part of the DELETE predicate, not a check performed beside it:
+    a file id is chosen by whoever uploaded, so two owners can hold rows under
+    the same id and only the caller's may be removed.
+    """
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                document_ids, executor=request.app.state.thread_pool
+                document_ids, owners, tenants, executor=request.app.state.thread_pool
             )
-            await vector_store.delete(
-                ids=document_ids, executor=request.app.state.thread_pool
+            await vector_store.delete_scoped(
+                document_ids,
+                owners,
+                tenants,
+                executor=request.app.state.thread_pool,
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(document_ids)
-            vector_store.delete(ids=document_ids)
+            existing_ids = vector_store.get_filtered_ids(document_ids, owners, tenants)
+            vector_store.delete_scoped(document_ids, owners, tenants)
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
@@ -508,13 +575,12 @@ async def delete_documents(request: Request, document_ids: List[str] = Body(...)
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
-# Cache the embedding function with LRU cache
-@lru_cache(maxsize=128)
-def get_cached_query_embedding(query: str):
-    return vector_store.embedding_function.embed_query(query)
+# Shared with POST /v1/rerank so a rerank following a retrieval on the same
+# query string pays no query inference at all.
+get_cached_query_embedding = embedding_service.get_cached_query_embedding
 
 
 @router.post("/query")
@@ -522,14 +588,8 @@ async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
 ):
-    if not hasattr(request.state, "user"):
-        user_authorized = body.entity_id if body.entity_id else "public"
-    else:
-        user_authorized = (
-            body.entity_id if body.entity_id else request.state.user.get("id")
-        )
-
-    authorized_documents = []
+    scope = resolve_scope(request, body.entity_id)
+    query_filter = scope.predicate(file_clause(body.file_id))
 
     try:
         embedding = get_cached_query_embedding(body.query)
@@ -538,46 +598,15 @@ async def query_embeddings_by_file_id(
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$eq": body.file_id}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
+                embedding, k=body.k, filter=query_filter
             )
 
-        documents = _apply_distance_threshold(documents)
-
-        if not documents:
-            return authorized_documents
-
-        document, score = documents[0]
-        doc_metadata = document.metadata
-        doc_user_id = doc_metadata.get("user_id")
-
-        if doc_user_id is None or doc_user_id == user_authorized:
-            authorized_documents = documents
-        else:
-            # If using entity_id and access denied, try again with user's actual ID
-            if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
-                if doc_user_id == user_authorized:
-                    authorized_documents = documents
-                else:
-                    if body.entity_id == doc_user_id:
-                        logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
-                        )
-                    else:
-                        logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
-                        )
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
-                )
-
-        return authorized_documents
+        return _apply_distance_threshold(documents)
 
     except HTTPException as http_exc:
         logger.error(
@@ -590,11 +619,11 @@ async def query_embeddings_by_file_id(
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_id,
-            body.query,
+            fingerprint(body.query),
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 async def _process_documents_async_pipeline(
@@ -937,8 +966,16 @@ async def _process_documents_batched_sync(
             ):  # any batch succeeded (i.e., any chunks for this file were inserted)
                 logger.warning("Rolling back file %s due to batch failure", file_id)
                 try:
+                    # Scoped to the writer: `file_id` is caller-supplied, so an
+                    # unscoped rollback would delete another owner's chunks that
+                    # happen to sit under the same id.
+                    owner = documents[0].metadata.get("user_id")
+                    tenant = documents[0].metadata.get("tenant_id")
                     await loop.run_in_executor(
-                        executor, lambda: vector_store.delete(ids=[file_id])
+                        executor,
+                        lambda: vector_store.delete_scoped(
+                            [file_id], [owner], [tenant]
+                        ),
                     )
                     logger.info("Rollback completed for file %s", file_id)
                 except Exception as rollback_error:
@@ -960,10 +997,14 @@ def _prepare_documents_sync(
     file_id: str,
     user_id: str,
     clean_content: bool,
+    tenant_id: str = BASE_TENANT_ID,
 ) -> List[Document]:
     """
     Synchronous document preparation - runs in executor to avoid blocking event loop.
     Handles text splitting, cleaning, and metadata preparation.
+
+    ``tenant_id`` is recorded on every chunk so the retrieval predicate can scope
+    by tenant in the store rather than trusting a later filter.
     """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
@@ -975,15 +1016,20 @@ def _prepare_documents_sync(
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
-    # Preparing documents with page content and metadata for insertion.
+    # Loader metadata is untrusted: it comes from the uploaded file itself, and
+    # several loaders preserve document properties verbatim. It is merged first
+    # so the request's verified identity always wins — a crafted property named
+    # tenant_id, user_id, file_id or digest would otherwise overwrite the value
+    # taken from the token and stamp these chunks into another tenant.
     return [
         Document(
             page_content=doc.page_content,
             metadata={
+                **(doc.metadata or {}),
                 "file_id": file_id,
                 "user_id": user_id,
+                "tenant_id": tenant_id,
                 "digest": generate_digest(doc.page_content),
-                **(doc.metadata or {}),
             },
         )
         for doc in documents
@@ -1000,6 +1046,7 @@ async def store_data_in_vector_db(
     filename: Optional[str] = None,
     content_type: Optional[str] = None,
     temp_file_path: Optional[str] = None,
+    tenant_id: str = BASE_TENANT_ID,
 ) -> bool:
     start_time = time.perf_counter()
     # Run document preparation in executor to avoid blocking the event loop
@@ -1011,6 +1058,7 @@ async def store_data_in_vector_db(
         file_id,
         user_id,
         clean_content,
+        tenant_id,
     )
 
     logger.info(
@@ -1098,7 +1146,7 @@ async def store_data_in_vector_db(
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
     file_path = validate_file_path(RAG_UPLOAD_DIR, document.filepath)
 
     # Check if the file exists and if it is within the allowed upload directory
@@ -1146,6 +1194,7 @@ async def embed_local_file(
             filename=document.filename,
             content_type=document.file_content_type,
             temp_file_path=file_path,
+            tenant_id=tenant_id,
         )
 
         if result:
@@ -1206,7 +1255,7 @@ async def embed_file(
     response_message = "File processed successfully."
     known_type = None
 
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
     validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
@@ -1260,6 +1309,7 @@ async def embed_file(
             filename=file.filename,
             content_type=file.content_type,
             temp_file_path=validated_file_path,
+            tenant_id=tenant_id,
         )
 
         if not result:
@@ -1318,20 +1368,30 @@ async def embed_file(
     }
 
 
-@router.get("/documents/{id}/context")
-async def load_document_context(request: Request, id: str):
+@router.get("/documents/{id}/context", dependencies=DOCUMENT_PLANE)
+async def load_document_context(
+    request: Request, id: str, entity_id: Optional[str] = Query(None)
+):
+    """Full text of one file, restricted to the caller's scope.
+
+    This route returns raw document content, so the owner and tenant predicate
+    is part of the store query exactly as it is for ``/query``.
+    """
     ids = [id]
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners, tenants)
+            documents = vector_store.get_documents_by_ids(ids, owners, tenants)
 
         # Ensure the requested id exists
         if not all(id in existing_ids for id in ids):
@@ -1373,7 +1433,7 @@ async def embed_file_upload(
     uploaded_file: UploadFile = File(...),
     entity_id: str = Form(None),
 ):
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
 
     validated_temp_file_path = _make_unique_temp_path(user_id, uploaded_file.filename)
 
@@ -1420,6 +1480,7 @@ async def embed_file_upload(
             filename=uploaded_file.filename,
             content_type=uploaded_file.content_type,
             temp_file_path=validated_temp_file_path,
+            tenant_id=tenant_id,
         )
 
         if not result:
@@ -1464,21 +1525,25 @@ async def embed_file_upload(
 
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody):
+    scope = resolve_scope(request, body.entity_id)
+    query_filter = scope.predicate(files_clause(body.file_ids))
+
     try:
         # Get the embedding of the query text
         embedding = get_cached_query_embedding(body.query)
 
-        # Perform similarity search with the query embedding and filter by the file_ids in metadata
+        # Perform similarity search with the query embedding, filtered by the
+        # requested file ids *and* the owners the caller is authorized for.
         if isinstance(vector_store, AsyncPgVector):
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$in": body.file_ids}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter=query_filter
             )
 
         documents = _apply_distance_threshold(documents)
@@ -1501,11 +1566,11 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_ids,
-            body.query,
+            fingerprint(body.query),
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 @router.post("/text")

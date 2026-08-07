@@ -2,6 +2,7 @@
 import os
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -22,10 +23,15 @@ from app.config import (
     logger,
     vector_store,
 )
+from app.auth import validate_startup_config
 from app.middleware import security_middleware
-from app.routes import document_routes, pgvector_routes
+from app.routes import document_routes, pgvector_routes, search_routes
 from app.services.database import PSQLDatabase, ensure_vector_indexes
 from app.services.vector_store.factory import close_vector_store_connections
+
+# Fail closed before the app exists: a deployment with broken signing
+# configuration must not reach a state where it serves requests.
+auth_settings = validate_startup_config()
 
 
 @asynccontextmanager
@@ -45,6 +51,14 @@ async def lifespan(app: FastAPI):
     if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
         await PSQLDatabase.get_pool()  # Initialize the pool
         await ensure_vector_indexes()
+
+    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+        try:
+            vector_store.ensure_indexes()
+        except Exception as exc:
+            # An index-restricted database user must not stop the service. The
+            # lookups still return the right answers, they just scan.
+            logger.warning("Failed to ensure Atlas standard indexes: %s", exc)
 
     yield
 
@@ -90,16 +104,29 @@ app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
 # Include routers
 app.include_router(document_routes.router)
+app.include_router(search_routes.router)
 if debug_mode:
     app.include_router(router=pgvector_routes.router)
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.debug("Validation error: %s", exc.errors())
+    # Custom field validators put the originating exception in `ctx`, which is
+    # not JSON serializable — encoding it as its message keeps a 422 a 422.
+    errors = jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
+    # Only locations and error types are logged: the `input` values carry the
+    # caller's raw text, which never belongs in these logs.
+    logger.debug(
+        "Validation error: %s",
+        [
+            {"loc": error.get("loc"), "type": error.get("type")}
+            for error in errors
+            if isinstance(error, dict)
+        ],
+    )
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "message": "Request validation failed"},
+        content={"detail": errors, "message": "Request validation failed"},
     )
 
 
