@@ -4,20 +4,45 @@ Equivalent to mongodb-memory-server in Node.js: spins up a real, ephemeral
 PostgreSQL instance with pgvector for production-parity testing.
 """
 
+import hashlib
+from typing import List
+
 import pytest
 import sqlalchemy
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from testcontainers.postgres import PostgresContainer
 
+from app.services.vector_store.async_pg_vector import AsyncPgVector
+from app.services.vector_store.factory import get_vector_store
+from tests.conftest import ORIGINAL_PGVECTOR_POST_INIT
+
 PGVECTOR_IMAGE = "pgvector/pgvector:pg16"
+
+# The shared table is created with `vector(3)`, so every store built against
+# this container embeds into three dimensions.
+TEST_DIMENSIONS = 3
 
 
 @pytest.fixture(scope="session")
 def pg_container():
-    """Start a pgvector PostgreSQL container once for the entire test session."""
-    with PostgresContainer(PGVECTOR_IMAGE, driver="psycopg2") as pg:
-        yield pg
+    """Start a pgvector PostgreSQL container once for the entire test session.
+
+    Skips — rather than errors — when no container runtime is reachable, so the
+    DB-dependent suites stay runnable on machines without Docker.
+    """
+    container = PostgresContainer(PGVECTOR_IMAGE, driver="psycopg2")
+    try:
+        container.start()
+    except Exception as exc:
+        pytest.skip(
+            f"PostgreSQL is unreachable ({type(exc).__name__}: {exc}); "
+            "skipping database-dependent tests"
+        )
+    try:
+        yield container
+    finally:
+        container.stop()
 
 
 @pytest.fixture(scope="session")
@@ -100,6 +125,50 @@ def collection_id(engine, _create_tables):
             {"name": "test_collection", "meta": "{}"},
         ).fetchone()
     return row[0]
+
+
+class DeterministicEmbeddings:
+    """Three-dimensional embeddings derived from the text, plus a call log.
+
+    Real inference is the only thing faked here; every store write, SQL
+    predicate and cosine computation below runs for real against PostgreSQL.
+    """
+
+    def __init__(self, vectors=None):
+        self.vectors = vectors or {}
+        self.queries: List[str] = []
+        self.documents: List[str] = []
+
+    def _vector(self, text_value: str) -> List[float]:
+        if text_value in self.vectors:
+            return list(self.vectors[text_value])
+        digest = hashlib.sha256(text_value.encode("utf-8")).digest()
+        return [(digest[index] / 255.0) + 0.01 for index in range(TEST_DIMENSIONS)]
+
+    def embed_query(self, text_value: str) -> List[float]:
+        self.queries.append(text_value)
+        return self._vector(text_value)
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        self.documents.extend(texts)
+        return [self._vector(text_value) for text_value in texts]
+
+
+@pytest.fixture()
+def pg_store(pg_url, engine, _create_tables, monkeypatch):
+    """A real AsyncPgVector bound to the container, with its own collection."""
+    monkeypatch.setattr(AsyncPgVector, "__post_init__", ORIGINAL_PGVECTOR_POST_INIT)
+    embeddings = DeterministicEmbeddings()
+    store = get_vector_store(
+        connection_string=pg_url,
+        embeddings=embeddings,
+        collection_name=f"integration-{id(embeddings)}",
+        mode="async",
+        create_extension=False,
+    )
+    store.embeddings_log = embeddings
+    yield store
+    store._bind.dispose()
 
 
 @pytest.fixture()

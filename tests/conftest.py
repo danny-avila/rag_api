@@ -22,6 +22,10 @@ def dummy_post_init(self):
     pass
 
 
+# Integration tests that talk to a real container need the genuine bootstrap
+# back, so keep a handle on it before it is replaced.
+ORIGINAL_PGVECTOR_POST_INIT = PGVector.__post_init__
+
 AsyncPgVector.__post_init__ = dummy_post_init
 PGVector.__post_init__ = dummy_post_init
 

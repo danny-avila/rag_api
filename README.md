@@ -137,6 +137,105 @@ The following environment variables are required to run the application:
 
 Make sure to set these environment variables before running the application. You can set them in a `.env` file or as system environment variables.
 
+### Authentication
+
+Requests carry a bearer JWT. Two token generations are recognised.
+
+**Strict tokens** are signed with `RAG_JWT_SECRET` — a key dedicated to this
+service — and carry `iss`, `aud`, `sub`, `exp`, a tenant claim, and scopes.
+`RAG_JWT_SECRET` must never be the application's `JWT_SECRET`: sharing the key
+makes every token minted for rag_api simultaneously a full API session token
+for the calling app, and vice versa. Startup refuses to proceed if the two
+match.
+
+**Legacy tokens** are the `{"id": userId}` shape older LibreChat releases mint.
+They are accepted while `RAG_AUTH_ACCEPT_LEGACY` is true. On the `/v1` service
+endpoints the flag relaxes only the *claim shape* — a token signed with the
+application `JWT_SECRET` is never accepted there, in any mode.
+
+- `RAG_JWT_SECRET`: (Optional) dedicated signing secret for this service. At
+  least 32 characters for HMAC algorithms. Required when `RAG_SEARCH_API_ENABLED=true`.
+- `RAG_JWT_PUBLIC_KEY`: (Optional) verification key when `RAG_JWT_ALGORITHM` is asymmetric.
+- `RAG_JWT_ALGORITHM`: (Optional) default `HS256`. `HS*`, `RS*`, `ES*` and `EdDSA` are supported.
+- `RAG_JWT_ISSUER`: (Optional) required `iss`, default `librechat`.
+- `RAG_JWT_AUDIENCE`: (Optional) required `aud`, default `rag_api`.
+- `RAG_JWT_LEEWAY_SECONDS`: (Optional) clock skew allowance, default `0`.
+- `RAG_AUTH_ACCEPT_LEGACY`: (Optional) default `true`. Set to `false` once every
+  caller mints the full claim set.
+
+Scopes: `rag:embed` grants `POST /v1/embeddings`, `rag:rerank` grants
+`POST /v1/rerank`. The tenant claim (`tenant`, or `tenant_id`) is required for
+strict tokens; the reserved value `__SYSTEM__` is always refused.
+
+Callers may pass an `entity_id` to `/query` and `/query_multiple` to reach an
+agent's knowledge-base files. Strict tokens must list that id in their
+`entities` claim. Legacy tokens cannot prove entity access, so the id is taken
+at face value — which is the reason to flip `RAG_AUTH_ACCEPT_LEGACY` off once
+the migration lands.
+
+### Search service endpoints
+
+Enabled by `RAG_SEARCH_API_ENABLED=true` (default `false`); the service refuses
+to start if enabled without a valid signing configuration.
+
+```text
+POST /v1/embeddings
+{ "space": "chat-v1", "input_type": "query" | "document",
+  "inputs": [{ "id": "...", "text": "..." }] }
+-> { "space", "model", "dimensions", "normalized",
+     "items": [{ "id", "content_hash", "embedding" }], "usage" }
+
+POST /v1/rerank
+{ "profile": "fast-v1", "query": "...",
+  "candidates": [{ "id", "text", "base_score" }], "top_n": 25 }
+-> { "profile", "model", "results": [{ "id", "index", "score" }] }
+```
+
+Limits: 64 inputs and 256,000 aggregate characters per embeddings call; 50
+candidates and `top_n <= 25` per rerank call. Caller ids are preserved and tie
+ordering is deterministic (ties break on the candidate's position in the
+request). `content_hash` is the SHA-256 of the NFKC-normalized,
+whitespace-collapsed text that was embedded. Vectors leave the service
+L2-normalized.
+
+The `chat-v1` space is substitution-locked: if its backend is unavailable, or
+returns a different dimensionality, the call fails with 503 rather than falling
+back to another model or space.
+
+- `RAG_SEARCH_API_ENABLED`: (Optional) default `false`.
+- `RAG_EMBEDDING_SPACE`: (Optional) space name, default `chat-v1`.
+- `RAG_CHAT_EMBEDDING_MODEL`: (Optional) default `qwen3-embedding-8b`.
+- `RAG_CHAT_EMBEDDING_DIMENSIONS`: (Optional) default `1024`.
+- `RAG_CHAT_EMBEDDING_BASEURL` / `RAG_CHAT_EMBEDDING_API_KEY`: (Optional)
+  OpenAI-compatible endpoint for the space, defaulting to `RAG_OPENAI_BASEURL`
+  and `RAG_OPENAI_API_KEY`.
+
+`/v1/rerank` implements the `fast-v1` profile as embed-blend: the query is
+embedded once through the retrieval cache, candidate vectors are read from the
+pgvector store wherever they already exist, and only vectorless candidates are
+embedded. The final score is reciprocal-rank fusion of cosine similarity with
+the caller's `base_score` — never pure embedding order, which regresses
+identifier and exact-match queries. Candidate ids resolve against the stored
+row's `uuid` or the chunk `digest` in its metadata, always restricted to owners
+the token permits.
+
+- `RAG_RERANK_RRF_K`: (Optional) fusion constant, default `60`.
+- `RAG_RERANK_SIMILARITY_WEIGHT` / `RAG_RERANK_BASE_WEIGHT`: (Optional) arm weights, default `1.0`.
+- `RAG_QUERY_EMBEDDING_CACHE_SIZE`: (Optional) shared query-vector cache size, default `128`.
+
+Rate limits apply per tenant and per subject, with separate embedding and
+rerank budgets. Counters are process-local, so a multi-pod deployment enforces
+`limit x pods`.
+
+- `RAG_RATE_LIMIT_ENABLED`: (Optional) default `true`.
+- `RAG_RATE_LIMIT_WINDOW_SECONDS`: (Optional) default `60`.
+- `RAG_RATE_LIMIT_EMBED_TENANT` / `RAG_RATE_LIMIT_EMBED_SUBJECT`: (Optional) default `600` / `120`.
+- `RAG_RATE_LIMIT_RERANK_TENANT` / `RAG_RATE_LIMIT_RERANK_SUBJECT`: (Optional) default `900` / `180`.
+
+Note for `atlas-mongo` deployments: `/query` and `/query_multiple` now put the
+owner predicate in the vector-search `filter`, so `user_id` must be declared as
+a filter field on the Atlas vector index.
+
 ### Embedding Batch Processing
 
 For large files, you can enable batched embedding processing to reduce memory consumption. This is particularly useful in memory-constrained environments like Kubernetes pods with memory limits.
