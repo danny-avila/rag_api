@@ -97,8 +97,14 @@ def test_tenant_budget_is_enforced_across_subjects(limited):
 
 
 def test_tenants_have_independent_budgets(limited):
-    for _ in range(3):
-        embed(subject="user-1", tenant="tenant-a")
+    """Three distinct subjects, because only served requests spend the budget.
+
+    The tenant limit is 3 and the subject limit is 2, so one subject cannot
+    exhaust the tenant on its own — its third request is rejected by the subject
+    arm and never reaches the tenant counter.
+    """
+    for subject in ("user-1", "user-2", "user-3"):
+        assert embed(subject=subject, tenant="tenant-a").status_code == 200
     assert embed(subject="user-9", tenant="tenant-a").status_code == 429
     assert embed(subject="user-9", tenant="tenant-b").status_code == 200
 
@@ -151,3 +157,50 @@ class TestLimiterUnit:
         assert limiter.check("embed", budget, "t", "s1", now).allowed
         decision = limiter.check("embed", budget, "t", "s2", now)
         assert decision.scope == "tenant"
+
+    def test_a_subject_rejection_does_not_spend_the_tenant_budget(self):
+        """One subject must not be able to deny service to its whole tenant.
+
+        The tenant counter used to increment before the subject arm ran, so a
+        single token could burn every tenant slot on requests that were rejected
+        anyway and lock out every other subject in that tenant.
+        """
+        limiter = ratelimit.FixedWindowLimiter()
+        budget = self._budget(tenant_limit=4, subject_limit=1)
+        now = 1_000_000.0
+
+        assert limiter.check("embed", budget, "t", "noisy", now).allowed
+        for _ in range(20):
+            decision = limiter.check("embed", budget, "t", "noisy", now)
+            assert not decision.allowed
+            assert decision.scope == "subject"
+
+        # Three tenant slots are left: the noisy subject spent exactly one.
+        for quiet in ("s1", "s2", "s3"):
+            assert limiter.check("embed", budget, "t", quiet, now).allowed
+        assert limiter.check("embed", budget, "t", "s4", now).scope == "tenant"
+
+    def test_a_tenant_rejection_does_not_spend_the_subject_budget(self):
+        limiter = ratelimit.FixedWindowLimiter()
+        budget = self._budget(tenant_limit=1, subject_limit=2)
+        now = 1_000_000.0
+
+        assert limiter.check("embed", budget, "t", "s1", now).allowed
+        for _ in range(5):
+            assert limiter.check("embed", budget, "t", "s2", now).scope == "tenant"
+
+        # s2 was never served, so its own budget is untouched in the next window.
+        assert limiter.check("embed", budget, "t", "s2", now + 60).allowed
+        assert limiter.check("embed", budget, "t", "s2", now + 60).scope == "tenant"
+
+
+def test_a_throttled_subject_does_not_lock_out_its_tenant(limited):
+    """End to end: subject limit 2, tenant limit 3, one noisy caller."""
+    assert embed(subject="noisy").status_code == 200
+    assert embed(subject="noisy").status_code == 200
+    for _ in range(10):
+        response = embed(subject="noisy")
+        assert response.status_code == 429
+        assert "subject" in response.json()["detail"]
+
+    assert embed(subject="quiet").status_code == 200

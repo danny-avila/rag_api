@@ -84,15 +84,27 @@ class FixedWindowLimiter:
         with self._lock:
             self._counters.clear()
 
-    def _hit(self, key, limit: int, window: int, now: float) -> Optional[int]:
-        window_start = now - (now % window)
+    @staticmethod
+    def _window_start(now: float, window: int) -> float:
+        return now - (now % window)
+
+    def _current(self, key, window: int, now: float) -> Tuple[float, int]:
+        window_start = self._window_start(now, window)
         started, count = self._counters.get(key, (window_start, 0))
         if started < window_start:
-            started, count = window_start, 0
-        if count >= limit:
-            return max(1, int(started + window - now))
+            return window_start, 0
+        return started, count
+
+    def _retry_after(self, key, limit: int, window: int, now: float) -> Optional[int]:
+        """Seconds until ``key`` frees a slot, or ``None`` while it still has one."""
+        started, count = self._current(key, window, now)
+        if count < limit:
+            return None
+        return max(1, int(started + window - now))
+
+    def _commit(self, key, window: int, now: float) -> None:
+        started, count = self._current(key, window, now)
         self._counters[key] = (started, count + 1)
-        return None
 
     def _prune(self, now: float, window: int) -> None:
         if len(self._counters) <= _MAX_TRACKED_KEYS:
@@ -112,24 +124,27 @@ class FixedWindowLimiter:
         now: Optional[float] = None,
     ) -> RateLimitDecision:
         now = time.time() if now is None else now
+        window = budget.window_seconds
+        tenant_key = (budget_name, "tenant", tenant)
+        subject_key = (budget_name, "subject", subject)
         with self._lock:
-            self._prune(now, budget.window_seconds)
-            retry_after = self._hit(
-                (budget_name, "tenant", tenant),
-                budget.tenant_limit,
-                budget.window_seconds,
-                now,
+            self._prune(now, window)
+            # Both arms are inspected before either counter moves. Charging the
+            # tenant for a request the subject arm then rejects would let one
+            # subject spend the whole tenant budget on refusals and deny service
+            # to every other subject in that tenant.
+            retry_after = self._retry_after(
+                tenant_key, budget.tenant_limit, window, now
             )
             if retry_after is not None:
                 return RateLimitDecision(False, "tenant", retry_after)
-            retry_after = self._hit(
-                (budget_name, "subject", subject),
-                budget.subject_limit,
-                budget.window_seconds,
-                now,
+            retry_after = self._retry_after(
+                subject_key, budget.subject_limit, window, now
             )
             if retry_after is not None:
                 return RateLimitDecision(False, "subject", retry_after)
+            self._commit(tenant_key, window, now)
+            self._commit(subject_key, window, now)
         return RateLimitDecision(True)
 
 
