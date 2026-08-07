@@ -6,6 +6,7 @@ costs no candidate inference.
 """
 
 import hashlib
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
@@ -14,7 +15,9 @@ from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 
 from app import auth
+from app.services.vector_store.async_pg_vector import AsyncPgVector
 from main import app
+from tests.integration.conftest import DeterministicEmbeddings
 from tests.tokens import APP_SECRET, RAG_SECRET, bearer, strict_token
 
 pytestmark = pytest.mark.integration
@@ -51,6 +54,26 @@ def digest(text_value: str) -> str:
     return hashlib.md5(text_value.encode("utf-8")).hexdigest()
 
 
+def row_uuid_for(engine, store, chunk: str) -> str:
+    """The row id of ``chunk`` *in this store's collection*.
+
+    Digests collide by design — identical content hashes identically — and the
+    embedding table is shared by every collection in the database, so the
+    collection has to be part of the lookup.
+    """
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        return conn.execute(
+            text(
+                "SELECT e.uuid FROM langchain_pg_embedding e "
+                "JOIN langchain_pg_collection c ON c.uuid = e.collection_id "
+                "WHERE c.name = :collection AND e.cmetadata->>'digest' = :digest"
+            ),
+            {"collection": store.collection_name, "digest": digest(chunk)},
+        ).scalar()
+
+
 class RecordingEmbedder:
     """Stands in for the inference call so candidate embeds are countable."""
 
@@ -82,6 +105,156 @@ def seeded(pg_store):
             [Document(page_content=chunk, metadata=metadata)], ids=[file_id]
         )
     return pg_store
+
+
+@pytest.fixture()
+def sibling_collection(pg_url, engine, _create_tables, monkeypatch):
+    """A second PGVector collection in the same database and the same table.
+
+    ``langchain_pg_embedding`` is shared by every collection, so this is what a
+    deployment hosting more than one store actually looks like.
+    """
+    from app.services.vector_store.factory import get_vector_store
+    from tests.conftest import ORIGINAL_PGVECTOR_POST_INIT
+
+    monkeypatch.setattr(AsyncPgVector, "__post_init__", ORIGINAL_PGVECTOR_POST_INIT)
+    embeddings = DeterministicEmbeddings(VECTORS)
+    store = get_vector_store(
+        connection_string=pg_url,
+        embeddings=embeddings,
+        collection_name=f"sibling-{uuid.uuid4().hex}",
+        mode="async",
+        create_extension=False,
+    )
+    yield store
+    store._bind.dispose()
+
+
+class TestCollectionIsolation:
+    """One database, two collections: neither may answer for the other.
+
+    The candidate queries used to match on id alone, so a row belonging to a
+    sibling collection could be reported as existing — manufacturing a 403 for a
+    candidate this store never held — or have its vector handed back and scored.
+    """
+
+    async def test_a_sibling_collections_row_is_not_reported_as_existing(
+        self, seeded, sibling_collection
+    ):
+        shared_digest = digest("alpha chunk")
+        await sibling_collection.aadd_documents(
+            [
+                Document(
+                    page_content="alpha chunk",
+                    metadata={
+                        "file_id": "file-x",
+                        "user_id": "stranger",
+                        "digest": shared_digest,
+                    },
+                )
+            ],
+            ids=["file-x"],
+        )
+
+        existing, authorized = await sibling_collection.probe_candidate_ids(
+            [digest("foreign chunk")], ["user-1"], BASE_TENANTS
+        )
+        # foreign chunk lives only in the seeded collection.
+        assert existing == set()
+        assert authorized == set()
+
+    async def test_a_sibling_collections_vector_is_never_reused(
+        self, seeded, sibling_collection
+    ):
+        foreign = digest("foreign chunk")
+        assert (
+            await sibling_collection.get_vectors_by_ids(
+                [foreign], ["user-2"], BASE_TENANTS
+            )
+            == {}
+        )
+        # The same id, owner and tenant resolve fine in the collection that owns it.
+        assert list(
+            await seeded.get_vectors_by_ids([foreign], ["user-2"], BASE_TENANTS)
+        ) == [foreign]
+
+    async def test_each_collection_sees_only_its_own_copy(
+        self, seeded, sibling_collection
+    ):
+        shared_digest = digest("alpha chunk")
+        await sibling_collection.aadd_documents(
+            [
+                Document(
+                    page_content="alpha chunk",
+                    metadata={
+                        "file_id": "file-x",
+                        "user_id": "stranger",
+                        "digest": shared_digest,
+                    },
+                )
+            ],
+            ids=["file-x"],
+        )
+
+        seeded_existing, seeded_authorized = await seeded.probe_candidate_ids(
+            [shared_digest], ["user-1"], BASE_TENANTS
+        )
+        assert seeded_existing == {shared_digest}
+        assert seeded_authorized == {shared_digest}
+
+        sibling_existing, sibling_authorized = (
+            await sibling_collection.probe_candidate_ids(
+                [shared_digest], ["user-1"], BASE_TENANTS
+            )
+        )
+        # The sibling holds a copy owned by someone else — existing, unauthorized.
+        assert sibling_existing == {shared_digest}
+        assert sibling_authorized == set()
+
+    async def test_a_sibling_collections_row_uuid_resolves_to_nothing(
+        self, seeded, sibling_collection, engine
+    ):
+        """The row id is globally unique, so only the collection filter stops it."""
+        await sibling_collection.aadd_documents(
+            [
+                Document(
+                    page_content="alpha chunk",
+                    metadata={
+                        "file_id": "file-x",
+                        "user_id": "user-1",
+                        "digest": digest("alpha chunk"),
+                    },
+                )
+            ],
+            ids=["file-x"],
+        )
+        sibling_uuid = str(row_uuid_for(engine, sibling_collection, "alpha chunk"))
+
+        assert (
+            await seeded.get_vectors_by_ids([sibling_uuid], ["user-1"], BASE_TENANTS)
+            == {}
+        )
+        existing, authorized = await seeded.probe_candidate_ids(
+            [sibling_uuid], ["user-1"], BASE_TENANTS
+        )
+        assert existing == set()
+        assert authorized == set()
+
+    async def test_a_collection_that_holds_nothing_authorizes_nothing(
+        self, seeded, sibling_collection
+    ):
+        candidates = [digest(chunk) for _, _, chunk, _ in CORPUS]
+        existing, authorized = await sibling_collection.probe_candidate_ids(
+            candidates, ["user-1"], BASE_TENANTS
+        )
+        assert existing == set()
+        assert authorized == set()
+        assert (
+            await sibling_collection.get_vectors_by_ids(
+                candidates, ["user-1"], BASE_TENANTS
+            )
+            == {}
+        )
 
 
 @pytest.fixture()
@@ -120,16 +293,7 @@ class TestStoredVectorLookup:
         assert len(vectors[digest("alpha chunk")]) == 3
 
     async def test_row_uuid_resolves_to_the_stored_vector(self, seeded, engine):
-        from sqlalchemy import text
-
-        with engine.connect() as conn:
-            row_uuid = conn.execute(
-                text(
-                    "SELECT uuid FROM langchain_pg_embedding "
-                    "WHERE cmetadata->>'digest' = :digest"
-                ),
-                {"digest": digest("alpha chunk")},
-            ).scalar()
+        row_uuid = row_uuid_for(engine, seeded, "alpha chunk")
         vectors = await seeded.get_vectors_by_ids(
             [str(row_uuid)], ["user-1"], BASE_TENANTS
         )

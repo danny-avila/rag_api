@@ -242,6 +242,20 @@ class ExtendedPgVector(PGVector):
             self.EmbeddingStore.cmetadata["digest"].astext.in_(wanted),
         )
 
+    def _collection_clause(self, session: Session):
+        """Restrict a query to the collection this store serves, or ``None``.
+
+        ``langchain_pg_embedding`` is shared by every collection in the
+        database, so a candidate lookup that omits ``collection_id`` can see —
+        and reuse the vector of — a row this store does not serve. ``None`` means
+        the collection has not been created yet, which is indistinguishable from
+        it holding no rows.
+        """
+        collection = self.get_collection(session)
+        if collection is None:
+            return None
+        return self.EmbeddingStore.collection_id == collection.uuid
+
     def _scope_clause(self, owners: List[str], tenants: Sequence[Optional[str]]):
         owner_column = self.EmbeddingStore.cmetadata["user_id"].astext
         tenant_column = self.EmbeddingStore.cmetadata["tenant_id"].astext
@@ -268,6 +282,11 @@ class ExtendedPgVector(PGVector):
         authorize-before-egress check: a candidate id that exists in the store
         but resolves to nothing inside the caller's scope must be refused
         *before* its caller-supplied text is sent to the inference gateway.
+
+        "The store" means this store's collection. A row belonging to another
+        collection in the same database is not served here at all, so counting
+        it as existing would only manufacture a 403 for a candidate this
+        deployment never held.
         """
         wanted = list(dict.fromkeys(ids))
         if not wanted:
@@ -275,6 +294,9 @@ class ExtendedPgVector(PGVector):
 
         allowed = list(dict.fromkeys(owners))
         with Session(self._bind) as session:
+            collection_clause = self._collection_clause(session)
+            if collection_clause is None:
+                return set(), set()
             rows = (
                 session.query(
                     self.EmbeddingStore.uuid,
@@ -282,6 +304,7 @@ class ExtendedPgVector(PGVector):
                     self.EmbeddingStore.cmetadata["user_id"].astext,
                     self.EmbeddingStore.cmetadata["tenant_id"].astext,
                 )
+                .filter(collection_clause)
                 .filter(self._candidate_id_clause(wanted))
                 .order_by(self.EmbeddingStore.uuid)
                 .all()
@@ -310,7 +333,9 @@ class ExtendedPgVector(PGVector):
         """Stored chunk vectors for ``ids``, restricted to ``owners`` and ``tenants``.
 
         Scope is part of the SQL predicate: a foreign chunk is never fetched, so
-        it can never be scored, counted, or read into this process.
+        it can never be scored, counted, or read into this process. Collection
+        is part of it too, so a matching digest in a sibling collection cannot
+        have its vector reused here.
         """
         wanted = list(dict.fromkeys(ids))
         allowed = list(dict.fromkeys(owners))
@@ -318,12 +343,16 @@ class ExtendedPgVector(PGVector):
             return {}
 
         with Session(self._bind) as session:
+            collection_clause = self._collection_clause(session)
+            if collection_clause is None:
+                return {}
             rows = (
                 session.query(
                     self.EmbeddingStore.uuid,
                     self.EmbeddingStore.cmetadata,
                     self.EmbeddingStore.embedding,
                 )
+                .filter(collection_clause)
                 .filter(self._candidate_id_clause(wanted))
                 .filter(self._scope_clause(allowed, tenants))
                 .order_by(self.EmbeddingStore.uuid)
