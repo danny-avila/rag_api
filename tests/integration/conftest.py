@@ -5,6 +5,7 @@ PostgreSQL instance with pgvector for production-parity testing.
 """
 
 import hashlib
+import uuid
 from typing import List
 
 import pytest
@@ -162,7 +163,10 @@ def pg_store(pg_url, engine, _create_tables, monkeypatch):
     store = get_vector_store(
         connection_string=pg_url,
         embeddings=embeddings,
-        collection_name=f"integration-{id(embeddings)}",
+        # A fresh collection per test. id() is not usable here: CPython
+        # reuses addresses after collection, so two tests could land in the
+        # same collection and see each other's rows.
+        collection_name=f"integration-{uuid.uuid4().hex}",
         mode="async",
         create_extension=False,
     )
