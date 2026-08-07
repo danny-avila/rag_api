@@ -1,10 +1,13 @@
-"""AtlasMongoVector: the file lookups the document routes read and delete by.
+"""AtlasMongoVector: the scoped file lookups and the indexes they depend on.
 
-These lookups address rows by a caller-supplied file id, so the owner and tenant
-predicate has to be part of the query. The collection below evaluates the
-predicate it is handed, so a method that stops emitting one fails here.
+The Atlas vector-search index accelerates ``$vectorSearch`` only. Every lookup
+here is an ordinary ``find``, so the standard indexes are part of the deployment
+contract rather than a tuning suggestion — and the contract lives in README.md,
+where it drifts silently. These tests pin both halves to the same source.
 """
 
+import re
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
@@ -178,3 +181,36 @@ class TestDeletesAreScoped:
     def test_an_empty_owner_set_deletes_nothing(self, store):
         store.delete_scoped(["file-owned"], [], BASE_TENANTS)
         assert store.get_documents_by_ids(["file-owned"], ["user-1"], BASE_TENANTS)
+
+
+class TestTheIndexesTheLookupsNeed:
+    """Every ordinary ``find`` this store makes has to have an index behind it."""
+
+    def documented_indexes(self):
+        readme = Path(__file__).resolve().parents[2] / "README.md"
+        keys = set()
+        for spec in re.findall(
+            r"createIndex\(\s*(\{.*?\})\s*\)", readme.read_text(encoding="utf-8")
+        ):
+            keys.add(tuple(re.findall(r"(\w+)\s*:\s*1", spec)))
+        return keys
+
+    def test_startup_creates_the_file_id_index(self, store):
+        store.ensure_indexes()
+        created = {tuple(key for key, _ in index["keys"]) for index in store.indexes()}
+        assert ("file_id",) in created
+
+    def test_startup_creates_the_digest_index_the_rerank_probe_needs(self, store):
+        """Candidate ids are normally digests, and each rerank resolves them twice."""
+        store.ensure_indexes()
+        created = {tuple(key for key, _ in index["keys"]) for index in store.indexes()}
+        assert ("digest", "user_id", "tenant_id") in created
+
+    def test_the_created_indexes_match_the_documented_ones(self, store):
+        store.ensure_indexes()
+        created = {tuple(key for key, _ in index["keys"]) for index in store.indexes()}
+        assert created == self.documented_indexes()
+
+    def test_every_index_is_named_so_it_is_recognisable(self, store):
+        store.ensure_indexes()
+        assert all(index["name"] for index in store.indexes())

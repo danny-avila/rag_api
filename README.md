@@ -441,18 +441,43 @@ If your index predates this release:
    this restores exactly the visibility those chunks had before. Run it once,
    after the index reaches **Active**.
 
+5. Make sure the standard `digest` index below exists. The service creates it on
+   startup, so restarting is enough; create it by hand if the database user
+   cannot build indexes. Without it every `/v1/rerank` call scans the whole
+   vector collection twice.
+
 Queries against `file_id` continue to work throughout — only the owner- and
 tenant-scoped paths wait on the rebuild.
 
-#### Create a `file_id` Index (recommended)
+#### Standard indexes
 
-We recommend creating a standard MongoDB index on `file_id` to keep lookups fast. After creating the collection, run the following once (via Atlas UI, Compass, or `mongosh`):
+The Atlas **vector-search** index accelerates `$vectorSearch` and nothing else.
+The document routes and the rerank candidate lookups are ordinary `find` calls,
+so they need ordinary indexes or they scan the collection.
+
+The service creates both on startup, so a fresh deployment needs no manual step.
+`createIndex` is idempotent, and a database user without index privileges only
+produces a warning — the lookups still return the right answers, they just scan.
+To create them yourself (Atlas UI, Compass, or `mongosh`):
 
 ```javascript
 db.getCollection("<COLLECTION_NAME>").createIndex({ file_id: 1 })
+db.getCollection("<COLLECTION_NAME>").createIndex({ digest: 1, user_id: 1, tenant_id: 1 })
 ```
 
-Replace `<COLLECTION_NAME>` with the same collection used by the RAG API. This ensures lookups remain fast even as the number of embedded documents grows.
+Replace `<COLLECTION_NAME>` with the same collection used by the RAG API.
+
+`file_id` serves `/query`, `/documents`, `/documents/{id}/context` and
+`DELETE /documents`. The compound `digest` index serves `/v1/rerank`: candidate
+ids handed back to callers are normally chunk digests rather than Mongo `_id`
+values, and every rerank resolves them twice — once for the authorization probe,
+then again for the stored-vector lookup. Without it each rerank scans the whole
+vector collection twice, and that cost grows with the corpus. The trailing
+`user_id` and `tenant_id` are the scope fields the second lookup filters on, so
+it can be answered from the index instead of fetching rows it then discards.
+
+Existing deployments get both on the next restart; they build in the background
+and need no re-embedding.
 
 
 ### Proxy Configuration

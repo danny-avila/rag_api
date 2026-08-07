@@ -52,6 +52,14 @@ async def lifespan(app: FastAPI):
         await PSQLDatabase.get_pool()  # Initialize the pool
         await ensure_vector_indexes()
 
+    if VECTOR_DB_TYPE == VectorDBType.ATLAS_MONGO:
+        try:
+            vector_store.ensure_indexes()
+        except Exception as exc:
+            # An index-restricted database user must not stop the service. The
+            # lookups still return the right answers, they just scan.
+            logger.warning("Failed to ensure Atlas standard indexes: %s", exc)
+
     yield
 
     # Cleanup logic

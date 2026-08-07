@@ -54,6 +54,25 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             processed_documents.append((new_document, score))
         return processed_documents
 
+    def ensure_indexes(self) -> None:
+        """Create the standard indexes the file and rerank lookups depend on.
+
+        The Atlas *vector-search* index accelerates ``$vectorSearch`` only; the
+        ordinary ``find`` calls below use regular indexes or they scan the whole
+        collection. ``createIndex`` is idempotent, so this is safe to run on
+        every start.
+        """
+        self._collection.create_index([("file_id", 1)], name="rag_file_id")
+        # The rerank authorization probe and the stored-vector lookup both match
+        # candidate ids against `digest`, and candidate ids handed back to
+        # callers are normally digests. The trailing scope fields let the
+        # stored-vector lookup answer from the index instead of fetching rows it
+        # will then discard.
+        self._collection.create_index(
+            [("digest", 1), ("user_id", 1), ("tenant_id", 1)],
+            name="rag_digest_scope",
+        )
+
     @staticmethod
     def _file_scope_query(
         ids: Sequence[str],
