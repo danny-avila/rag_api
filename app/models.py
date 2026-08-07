@@ -70,6 +70,13 @@ class EmbeddingsRequest(BaseModel):
     @field_validator("inputs")
     @classmethod
     def _validate_inputs(cls, inputs: List[EmbeddingInput]) -> List[EmbeddingInput]:
+        """Reject the request on what the caller sent.
+
+        This is the cheap arm of the size limit. It cannot be the only one:
+        NFKC normalization runs in the route and expands compatibility
+        characters, so the route re-checks the aggregate length of the
+        normalized text before any of it reaches the backend.
+        """
         _reject_duplicates([item.id for item in inputs], "input ids")
         total_characters = sum(len(item.text) for item in inputs)
         if total_characters > MAX_EMBEDDING_CHARS:

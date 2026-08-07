@@ -2,6 +2,7 @@
 
 import logging
 import math
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -13,7 +14,12 @@ from app.services import ratelimit
 from app.services import space as space_module
 from app.utils.text import content_hash, normalize_text
 from main import app
-from tests.fakes import FAKE_MODEL, FakeEmbeddingClient, install_fake_space
+from tests.fakes import (
+    FAKE_MODEL,
+    FakeEmbeddingClient,
+    deterministic_vector,
+    install_fake_space,
+)
 from tests.tokens import APP_SECRET, RAG_SECRET, bearer, legacy_token, strict_token
 
 client = TestClient(app)
@@ -120,6 +126,132 @@ def test_input_type_is_constrained(backend):
     assert post([{"id": "a", "text": "x"}], input_type="passage").status_code == 422
 
 
+class TestNormalizedSizeLimit:
+    """The advertised limit is a provider limit, so it binds the sent text.
+
+    NFKC expands compatibility characters — U+FB03 becomes three characters —
+    so a request that fits the limit as written can exceed it as sent. The
+    aggregate is therefore re-checked after normalization, before egress.
+    """
+
+    def test_expansion_past_the_limit_is_rejected(self, backend):
+        # Each ﬃ normalizes to three characters, so this is under the limit as
+        # written and comfortably over it once normalized.
+        text = "ﬃ" * (MAX_EMBEDDING_CHARS // 2)
+        response = post([{"id": "a", "text": text}])
+        assert response.status_code == 422
+        assert str(MAX_EMBEDDING_CHARS) in response.json()["detail"]
+
+    def test_nothing_is_embedded_when_the_normalized_form_is_too_large(self, backend):
+        text = "ﬃ" * (MAX_EMBEDDING_CHARS // 2)
+        assert post([{"id": "a", "text": text}]).status_code == 422
+        assert backend.calls == []
+
+    def test_the_limit_is_measured_across_all_inputs(self, backend):
+        share = MAX_EMBEDDING_CHARS // 6
+        inputs = [{"id": f"i{n}", "text": "ﬃ" * share} for n in range(3)]
+        assert post(inputs).status_code == 422
+        assert backend.calls == []
+
+    def test_expansion_within_the_limit_still_succeeds(self, backend):
+        text = "ﬃ" * (MAX_EMBEDDING_CHARS // 6)
+        response = post([{"id": "a", "text": text}])
+        assert response.status_code == 200
+        assert response.json()["usage"]["total_characters"] == len(text) * 3
+
+    def test_a_request_that_does_not_expand_is_unaffected(self, backend):
+        text = "x" * (MAX_EMBEDDING_CHARS - 1)
+        assert post([{"id": "a", "text": text}]).status_code == 200
+
+
+class TestInputTypeIsHonoured:
+    """``input_type`` selects the encoder, rather than being recorded and ignored."""
+
+    def test_a_query_goes_through_the_query_encoder_when_one_exists(
+        self, backend, monkeypatch
+    ):
+        seen = {}
+
+        def embed_queries(texts):
+            seen["queries"] = list(texts)
+            return [deterministic_vector(text) for text in texts]
+
+        monkeypatch.setattr(backend, "embed_queries", embed_queries, raising=False)
+        assert (
+            post([{"id": "a", "text": "alpha"}], input_type="query").status_code == 200
+        )
+        assert seen["queries"] == ["alpha"]
+        assert backend.calls == []
+
+    def test_a_document_never_goes_through_the_query_encoder(
+        self, backend, monkeypatch
+    ):
+        def explode(texts):
+            raise AssertionError("documents must not use the query encoder")
+
+        monkeypatch.setattr(backend, "embed_queries", explode, raising=False)
+        response = post([{"id": "a", "text": "alpha"}], input_type="document")
+        assert response.status_code == 200
+        assert backend.embedded_texts == ["alpha"]
+
+    def test_the_query_task_prefix_reaches_the_backend(self, backend, monkeypatch):
+        space = install_fake_space(monkeypatch, backend)
+        monkeypatch.setattr(
+            space,
+            "spec",
+            replace(space.spec, query_prefix="Q: ", document_prefix="D: "),
+        )
+        assert (
+            post([{"id": "a", "text": "alpha"}], input_type="query").status_code == 200
+        )
+        assert backend.embedded_texts == ["Q: alpha"]
+
+    def test_the_document_task_prefix_reaches_the_backend(self, backend, monkeypatch):
+        space = install_fake_space(monkeypatch, backend)
+        monkeypatch.setattr(
+            space,
+            "spec",
+            replace(space.spec, query_prefix="Q: ", document_prefix="D: "),
+        )
+        response = post([{"id": "a", "text": "alpha"}], input_type="document")
+        assert response.status_code == 200
+        assert backend.embedded_texts == ["D: alpha"]
+
+    def test_the_two_input_types_produce_different_vectors(self, backend, monkeypatch):
+        space = install_fake_space(monkeypatch, backend)
+        monkeypatch.setattr(
+            space,
+            "spec",
+            replace(space.spec, query_prefix="Q: ", document_prefix="D: "),
+        )
+        as_query = post([{"id": "a", "text": "alpha"}], input_type="query").json()
+        as_document = post([{"id": "a", "text": "alpha"}], input_type="document").json()
+        assert as_query["items"][0]["embedding"] != as_document["items"][0]["embedding"]
+
+    def test_the_content_hash_identifies_the_text_not_the_encoding(
+        self, backend, monkeypatch
+    ):
+        """The hash is the caller's cache key, so the task prefix stays out of it."""
+        space = install_fake_space(monkeypatch, backend)
+        monkeypatch.setattr(
+            space,
+            "spec",
+            replace(space.spec, query_prefix="Q: ", document_prefix="D: "),
+        )
+        as_query = post([{"id": "a", "text": "alpha"}], input_type="query").json()
+        as_document = post([{"id": "a", "text": "alpha"}], input_type="document").json()
+        assert as_query["items"][0]["content_hash"] == content_hash("alpha")
+        assert (
+            as_query["items"][0]["content_hash"]
+            == as_document["items"][0]["content_hash"]
+        )
+
+    def test_an_unprefixed_space_is_unchanged_by_the_input_type(self, backend):
+        as_query = post([{"id": "a", "text": "alpha"}], input_type="query").json()
+        as_document = post([{"id": "a", "text": "alpha"}], input_type="document").json()
+        assert as_query["items"] == as_document["items"]
+
+
 def test_unknown_space_is_rejected(backend):
     assert post([{"id": "a", "text": "x"}], space="chat-v2").status_code == 400
 
@@ -152,6 +284,30 @@ def test_input_text_never_reaches_the_logs_on_failure(backend, caplog, monkeypat
     with caplog.at_level(logging.DEBUG):
         assert post([{"id": "a", "text": secret}]).status_code == 503
     assert secret not in caplog.text
+
+
+def test_a_provider_that_echoes_the_input_still_leaks_nothing(
+    backend, caplog, monkeypatch
+):
+    """Gateways routinely quote the rejected input back in the error message.
+
+    SpaceBackendError wraps that message verbatim, so logging the exception —
+    or its traceback — would write the caller's text into the log despite this
+    endpoint's no-raw-text guarantee.
+    """
+    secret = "correcthorsebatterystaple"
+    install_fake_space(
+        monkeypatch,
+        FakeEmbeddingClient(error=RuntimeError(f"input rejected: '{secret}'")),
+    )
+    with caplog.at_level(logging.DEBUG):
+        response = post([{"id": "a", "text": secret}])
+    assert response.status_code == 503
+    assert secret not in caplog.text
+    assert secret not in response.text
+    # The failure is still diagnosable: the class chain identifies the cause.
+    assert "SpaceBackendError" in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 class TestAuthorizeBeforeEgress:
