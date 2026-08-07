@@ -271,7 +271,11 @@ POST /v1/rerank
 ```
 
 Limits: 64 inputs and 256,000 aggregate characters per embeddings call; 50
-candidates and `top_n <= 25` per rerank call. Caller ids are preserved and tie
+candidates, 8,000 query characters and `top_n <= 25` per rerank call. The
+character limits are provider limits, so they bind the payload that is actually
+sent — after NFKC normalization and including the space's task prefix, which
+applies to every input. Over-limit requests are rejected with `422` before any
+text reaches the backend. Caller ids are preserved and tie
 ordering is deterministic (ties break on the candidate's position in the
 request). `content_hash` is the SHA-256 of the NFKC-normalized,
 whitespace-collapsed text that was embedded. Vectors leave the service

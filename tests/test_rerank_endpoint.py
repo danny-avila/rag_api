@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 
 from app import auth
 from app.config import vector_store
-from app.constants import MAX_RERANK_CANDIDATES, MAX_RERANK_TOP_N
+from app.constants import (
+    MAX_EMBEDDING_CHARS,
+    MAX_QUERY_CHARS,
+    MAX_RERANK_CANDIDATES,
+    MAX_RERANK_TOP_N,
+)
 from app.services import embedding as embedding_service
 from app.services import ratelimit
 from main import app
@@ -509,3 +514,38 @@ def test_a_store_that_cannot_be_probed_refuses_rerank(backend, monkeypatch):
     response = rerank(blended_candidates())
     assert response.status_code == 503
     assert backend.calls == []
+
+
+class TestTheQueryIsBounded:
+    """The query is embedded on its own, so the candidate budget never covers it.
+
+    Without a limit of its own an authenticated caller hands the gateway an
+    arbitrarily large query and gets the provider's refusal back as a 503 —
+    inference paid for, memory spent, and a server-fault status for a request
+    the service could have rejected.
+    """
+
+    def test_a_query_at_the_limit_is_accepted(self, backend, stored):
+        response = rerank(blended_candidates(), query="q" * MAX_QUERY_CHARS)
+        assert response.status_code == 200
+
+    def test_an_oversized_query_is_rejected(self, backend, stored):
+        response = rerank(blended_candidates(), query="q" * (MAX_QUERY_CHARS + 1))
+        assert response.status_code == 422
+
+    def test_an_oversized_query_never_reaches_the_backend(self, backend, stored):
+        assert (
+            rerank(blended_candidates(), query="q" * (MAX_QUERY_CHARS + 1)).status_code
+            == 422
+        )
+        assert backend.calls == []
+
+    def test_the_bound_holds_even_when_the_candidates_are_tiny(self, backend, stored):
+        """The candidate aggregate is the check the query used to hide behind."""
+        candidates = [{"id": "c-alpha", "text": "a"}]
+        response = rerank(candidates, query="q" * (MAX_EMBEDDING_CHARS - 1))
+        assert response.status_code == 422
+        assert backend.calls == []
+
+    def test_an_empty_query_is_still_rejected(self, backend, stored):
+        assert rerank(blended_candidates(), query="").status_code == 422

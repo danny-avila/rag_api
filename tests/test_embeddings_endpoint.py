@@ -383,3 +383,85 @@ class TestAuthorizeBeforeEgress:
         ):
             monkeypatch.setattr(vector_store, name, explode, raising=False)
         assert post([{"id": "a", "text": "hello"}]).status_code == 200
+
+
+class TestTaskPrefixesCountTowardTheLimit:
+    """The limit binds the payload, and the task prefix is part of the payload.
+
+    ``EmbeddingSpace.embed`` prepends the space's prefix to every input, so a
+    request measured on caller text alone can pass the check and still exceed
+    the provider limit — by the prefix length times up to 64 inputs.
+    """
+
+    def prefixed(self, backend, monkeypatch, prefix):
+        space = install_fake_space(monkeypatch, backend)
+        monkeypatch.setattr(
+            space,
+            "spec",
+            replace(space.spec, query_prefix=prefix, document_prefix=prefix),
+        )
+        return space
+
+    def test_a_request_at_the_boundary_is_rejected_once_prefixed(
+        self, backend, monkeypatch
+    ):
+        self.prefixed(backend, monkeypatch, "Instruct: retrieve\n")
+        response = post(
+            [{"id": "a", "text": "x" * MAX_EMBEDDING_CHARS}], input_type="query"
+        )
+        assert response.status_code == 422
+        assert str(MAX_EMBEDDING_CHARS) in response.json()["detail"]
+
+    def test_nothing_is_embedded_when_the_prefixed_payload_is_too_large(
+        self, backend, monkeypatch
+    ):
+        self.prefixed(backend, monkeypatch, "Instruct: retrieve\n")
+        assert (
+            post(
+                [{"id": "a", "text": "x" * MAX_EMBEDDING_CHARS}], input_type="query"
+            ).status_code
+            == 422
+        )
+        assert backend.calls == []
+
+    def test_the_prefix_is_charged_once_per_input(self, backend, monkeypatch):
+        prefix_length = 100
+        self.prefixed(backend, monkeypatch, "p" * prefix_length)
+        share = MAX_EMBEDDING_CHARS // MAX_EMBEDDING_INPUTS
+
+        exact = [
+            {"id": f"i{n}", "text": "x" * (share - prefix_length)}
+            for n in range(MAX_EMBEDDING_INPUTS)
+        ]
+        assert post(exact, input_type="query").status_code == 200
+
+        # One more character per input: still under the limit as written, over
+        # it once each input carries the prefix.
+        over = [
+            {"id": f"i{n}", "text": "x" * (share - prefix_length + 1)}
+            for n in range(MAX_EMBEDDING_INPUTS)
+        ]
+        assert sum(len(item["text"]) for item in over) < MAX_EMBEDDING_CHARS
+        assert post(over, input_type="query").status_code == 422
+
+    def test_the_document_prefix_is_charged_on_documents(self, backend, monkeypatch):
+        self.prefixed(backend, monkeypatch, "Instruct: retrieve\n")
+        response = post(
+            [{"id": "a", "text": "x" * MAX_EMBEDDING_CHARS}], input_type="document"
+        )
+        assert response.status_code == 422
+        assert backend.calls == []
+
+    def test_expansion_and_prefix_are_counted_together(self, backend, monkeypatch):
+        """NFKC expansion and the prefix both apply to the same payload."""
+        self.prefixed(backend, monkeypatch, "p" * 1000)
+        # Each ﬃ normalizes to three characters, landing just under the limit;
+        # the 1,000-character prefix is what carries the payload over it.
+        text = "ﬃ" * (MAX_EMBEDDING_CHARS // 3 - 300)
+        assert len(text) < MAX_EMBEDDING_CHARS
+        assert len(text) * 3 < MAX_EMBEDDING_CHARS
+        assert post([{"id": "a", "text": text}], input_type="query").status_code == 422
+
+    def test_an_unprefixed_space_still_accepts_the_full_payload(self, backend):
+        response = post([{"id": "a", "text": "x" * MAX_EMBEDDING_CHARS}])
+        assert response.status_code == 200

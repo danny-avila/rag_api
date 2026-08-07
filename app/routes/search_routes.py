@@ -118,18 +118,18 @@ async def create_embeddings(
             detail=f"Inputs normalize to empty text: {empty}",
         )
 
-    # The model validator sizes the request as the caller sent it; NFKC is what
-    # the backend actually receives, and compatibility characters expand under
-    # it (one U+FB03 becomes three characters). The advertised limit is a
-    # provider limit, so it is re-checked against the text that will be sent —
-    # still before anything leaves the process.
-    normalized_characters = sum(len(text) for text in texts)
-    if normalized_characters > MAX_EMBEDDING_CHARS:
+    # The model validator sizes the request as the caller sent it. The backend
+    # receives something else: NFKC expands compatibility characters (one U+FB03
+    # becomes three), and the space prepends its task prefix to every input. The
+    # advertised limit is a provider limit, so it is re-checked against the exact
+    # payload that will be sent — still before anything leaves the process.
+    payload_characters = space.payload_characters(texts, body.input_type)
+    if payload_characters > MAX_EMBEDDING_CHARS:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                f"inputs normalize to {normalized_characters} characters, "
-                f"which exceeds the {MAX_EMBEDDING_CHARS} limit"
+                f"inputs total {payload_characters} characters once normalized "
+                f"and prefixed, which exceeds the {MAX_EMBEDDING_CHARS} limit"
             ),
         )
 

@@ -7,6 +7,7 @@ from typing import List, Literal, Optional
 from app.constants import (
     MAX_EMBEDDING_CHARS,
     MAX_EMBEDDING_INPUTS,
+    MAX_QUERY_CHARS,
     MAX_RERANK_CANDIDATES,
     MAX_RERANK_TOP_N,
 )
@@ -115,7 +116,10 @@ class RerankCandidate(BaseModel):
 
 class RerankRequest(BaseModel):
     profile: str = Field(min_length=1)
-    query: str = Field(min_length=1)
+    # Bounded here rather than in the route: the query is embedded on its own, so
+    # the aggregate candidate budget below never covers it, and an unbounded one
+    # reaches the provider and comes back as a 503 instead of a 422.
+    query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     candidates: List[RerankCandidate] = Field(
         min_length=1, max_length=MAX_RERANK_CANDIDATES
     )

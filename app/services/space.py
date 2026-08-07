@@ -134,6 +134,16 @@ class EmbeddingSpace:
             ) from exc
         return self._finalize(vectors, len(texts))
 
+    def payload_characters(self, texts: List[str], input_type: str) -> int:
+        """Characters :meth:`embed` would actually send for ``texts``.
+
+        The task prefix is prepended to every input, so the caller's text is not
+        the payload. The size limit is a provider limit and has to bind what
+        leaves the process, prefix included.
+        """
+        prefix_length = len(self.spec.prefix_for(input_type))
+        return sum(len(text) for text in texts) + prefix_length * len(texts)
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         return self.embed(texts, INPUT_TYPE_DOCUMENT)
 
