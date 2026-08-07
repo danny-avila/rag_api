@@ -9,11 +9,12 @@ from fastapi.testclient import TestClient
 
 from app import auth
 from app.constants import MAX_EMBEDDING_CHARS, MAX_EMBEDDING_INPUTS
+from app.services import ratelimit
 from app.services import space as space_module
 from app.utils.text import content_hash, normalize_text
 from main import app
 from tests.fakes import FAKE_MODEL, FakeEmbeddingClient, install_fake_space
-from tests.tokens import APP_SECRET, RAG_SECRET, bearer, strict_token
+from tests.tokens import APP_SECRET, RAG_SECRET, bearer, legacy_token, strict_token
 
 client = TestClient(app)
 
@@ -151,3 +152,78 @@ def test_input_text_never_reaches_the_logs_on_failure(backend, caplog, monkeypat
     with caplog.at_level(logging.DEBUG):
         assert post([{"id": "a", "text": secret}]).status_code == 503
     assert secret not in caplog.text
+
+
+class TestAuthorizeBeforeEgress:
+    """Nothing is embedded until the request is fully authorized.
+
+    Text sent to the inference gateway has left the trust boundary whether or
+    not the caller ever sees a response, so every rejection has to happen before
+    the backend is touched.
+    """
+
+    def test_a_token_without_the_embed_scope_embeds_nothing(self, backend):
+        response = post(
+            [{"id": "a", "text": "secret"}], token=strict_token(scopes=["rag:rerank"])
+        )
+        assert response.status_code == 403
+        assert backend.calls == []
+
+    def test_the_system_tenant_embeds_nothing(self, backend):
+        response = post(
+            [{"id": "a", "text": "secret"}], token=strict_token(tenant="__SYSTEM__")
+        )
+        assert response.status_code == 403
+        assert backend.calls == []
+
+    def test_an_unauthenticated_request_embeds_nothing(self, backend):
+        response = client.post(
+            "/v1/embeddings",
+            json={
+                "space": SPACE,
+                "input_type": "query",
+                "inputs": [{"id": "a", "text": "secret"}],
+            },
+        )
+        assert response.status_code == 401
+        assert backend.calls == []
+
+    def test_a_session_token_embeds_nothing(self, backend):
+        response = post(
+            [{"id": "a", "text": "secret"}], token=legacy_token(secret=APP_SECRET)
+        )
+        assert response.status_code == 401
+        assert backend.calls == []
+
+    def test_an_over_limit_request_embeds_nothing(self, backend):
+        inputs = [{"id": f"i{n}", "text": "x"} for n in range(MAX_EMBEDDING_INPUTS + 1)]
+        assert post(inputs).status_code == 422
+        assert backend.calls == []
+
+    def test_an_unknown_space_embeds_nothing(self, backend):
+        assert post([{"id": "a", "text": "secret"}], space="chat-v2").status_code == 400
+        assert backend.calls == []
+
+    def test_a_rate_limited_request_embeds_nothing(self, backend, monkeypatch):
+        monkeypatch.setenv("RAG_RATE_LIMIT_ENABLED", "true")
+        monkeypatch.setenv("RAG_RATE_LIMIT_EMBED_SUBJECT", "1")
+        ratelimit.reset()
+        assert post([{"id": "a", "text": "first"}]).status_code == 200
+        assert len(backend.calls) == 1
+        assert post([{"id": "a", "text": "second"}]).status_code == 429
+        assert len(backend.calls) == 1
+
+    def test_the_endpoint_reads_no_document_store_at_all(self, backend, monkeypatch):
+        """/v1/embeddings only ever embeds text the caller itself supplied."""
+        from app.config import vector_store
+
+        def explode(*args, **kwargs):
+            raise AssertionError("the embeddings path must not touch the store")
+
+        for name in (
+            "get_vectors_by_ids",
+            "probe_candidate_ids",
+            "get_documents_by_ids",
+        ):
+            monkeypatch.setattr(vector_store, name, explode, raising=False)
+        assert post([{"id": "a", "text": "hello"}]).status_code == 200

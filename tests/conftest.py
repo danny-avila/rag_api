@@ -3,13 +3,19 @@ import os
 
 import pytest
 
-from app.services.vector_store.async_pg_vector import AsyncPgVector
-
 # Set environment variables early so config picks up test settings.
 os.environ["TESTING"] = "1"
 # Set DB_HOST (and DSN) to dummy values to avoid real connection attempts.
 os.environ["DB_HOST"] = "localhost"  # or any dummy value
 os.environ["DSN"] = "dummy://"
+# The application ships no fallback credentials, so the harness supplies its
+# own throwaway values before app.config is imported. These reach a container
+# that holds test data only.
+os.environ.setdefault("POSTGRES_DB", "rag_api_test_db")
+os.environ.setdefault("POSTGRES_USER", "rag_api_test_user")
+os.environ.setdefault("POSTGRES_PASSWORD", "rag_api_test_password")
+
+from app.services.vector_store.async_pg_vector import AsyncPgVector
 
 # -- Patch the vector store classes to bypass DB connection --
 

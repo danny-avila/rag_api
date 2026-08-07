@@ -1,4 +1,4 @@
-from typing import Callable, Optional, List, Tuple, Dict, Any, TypeVar
+from typing import Callable, Optional, List, Sequence, Set, Tuple, Dict, Any, TypeVar
 import asyncio
 from concurrent.futures import Executor
 from langchain_core.documents import Document
@@ -59,11 +59,27 @@ class AsyncPgVector(ExtendedPgVector):
         return await self._run_in_executor(executor, super().get_documents_by_ids, ids)
 
     async def get_vectors_by_ids(
-        self, ids: List[str], owners: List[str], executor=None
+        self,
+        ids: List[str],
+        owners: List[str],
+        tenants: Sequence[Optional[str]] = (None,),
+        executor=None,
     ) -> Dict[str, List[float]]:
         executor = executor or self._get_thread_pool()
         return await self._run_in_executor(
-            executor, super().get_vectors_by_ids, ids, owners
+            executor, super().get_vectors_by_ids, ids, owners, tenants
+        )
+
+    async def probe_candidate_ids(
+        self,
+        ids: List[str],
+        owners: List[str],
+        tenants: Sequence[Optional[str]] = (None,),
+        executor=None,
+    ) -> Tuple[Set[str], Set[str]]:
+        executor = executor or self._get_thread_pool()
+        return await self._run_in_executor(
+            executor, super().probe_candidate_ids, ids, owners, tenants
         )
 
     async def delete(

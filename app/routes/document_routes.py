@@ -88,6 +88,14 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
 )
+from app.auth import BASE_TENANT_ID
+from app.scope import (
+    PUBLIC_OWNER,
+    file_clause,
+    files_clause,
+    resolve_scope,
+    writer_tenant,
+)
 from app.services import embedding as embedding_service
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
@@ -183,42 +191,9 @@ def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]
     return ordered_documents
 
 
-PUBLIC_OWNER = "public"
-
-
-def resolve_owner_scope(request: Request, entity_id: Optional[str] = None) -> List[str]:
-    """Owners whose chunks the caller is allowed to see.
-
-    The result goes into the vector-store predicate *before* ranking. Nothing
-    downstream re-derives authorization from what the search returned — the old
-    "inspect ``documents[0]``" check authorized an entire result set from a
-    single hit and could not see the other hits at all.
-    """
-    principal = getattr(request.state, "principal", None)
-    if principal is None:
-        # No signing key configured anywhere: preserve the unauthenticated
-        # deployment's single-owner behaviour rather than opening the store.
-        return [entity_id] if entity_id else [PUBLIC_OWNER]
-
-    owners = {principal.subject}
-    if entity_id:
-        if not principal.permits_entity(entity_id):
-            logger.warning(
-                "Denied entity access | subject=%s entity=%s",
-                principal.subject,
-                entity_id,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized for the requested entity",
-            )
-        owners.add(entity_id)
-    return sorted(owners)
-
-
-def scoped_filter(file_clause: dict, owners: List[str]) -> dict:
-    """Combine the file predicate with the owner predicate for the store query."""
-    return {"$and": [file_clause, {"user_id": {"$in": owners}}]}
+INTERNAL_ERROR_DETAIL = (
+    "The request could not be completed. See the service logs for details."
+)
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -231,7 +206,7 @@ def calculate_num_batches(total: int, batch_size: int) -> int:
 def get_user_id(request: Request, entity_id: str = None) -> str:
     """Extract user ID from request or entity_id."""
     if not hasattr(request.state, "user"):
-        return entity_id if entity_id else "public"
+        return entity_id if entity_id else PUBLIC_OWNER
     else:
         return entity_id if entity_id else request.state.user.get("id")
 
@@ -305,6 +280,17 @@ def build_ingestion_context(
     if include_memory:
         parts.append(get_process_memory_details())
     return " | ".join(parts)
+
+
+def resolve_writer(request: Request, entity_id: Optional[str] = None) -> tuple:
+    """``(owner, tenant)`` to stamp on the chunks this request writes.
+
+    Runs the same entity authorization as the read path: writing into another
+    entity's namespace would let a caller poison a knowledge base it cannot
+    read.
+    """
+    resolve_scope(request, entity_id)
+    return get_user_id(request, entity_id), writer_tenant(request)
 
 
 async def save_upload_file_async(file: UploadFile, temp_file_path: str) -> None:
@@ -450,7 +436,7 @@ async def get_all_ids(request: Request):
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 @router.get("/health")
@@ -509,7 +495,7 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 @router.delete("/documents")
@@ -547,7 +533,7 @@ async def delete_documents(request: Request, document_ids: List[str] = Body(...)
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 # Shared with POST /v1/rerank so a rerank following a retrieval on the same
@@ -560,8 +546,8 @@ async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
 ):
-    owners = resolve_owner_scope(request, body.entity_id)
-    query_filter = scoped_filter({"file_id": {"$eq": body.file_id}}, owners)
+    scope = resolve_scope(request, body.entity_id)
+    query_filter = scope.predicate(file_clause(body.file_id))
 
     try:
         embedding = get_cached_query_embedding(body.query)
@@ -595,7 +581,7 @@ async def query_embeddings_by_file_id(
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 async def _process_documents_async_pipeline(
@@ -961,10 +947,14 @@ def _prepare_documents_sync(
     file_id: str,
     user_id: str,
     clean_content: bool,
+    tenant_id: str = BASE_TENANT_ID,
 ) -> List[Document]:
     """
     Synchronous document preparation - runs in executor to avoid blocking event loop.
     Handles text splitting, cleaning, and metadata preparation.
+
+    ``tenant_id`` is recorded on every chunk so the retrieval predicate can scope
+    by tenant in the store rather than trusting a later filter.
     """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP
@@ -983,6 +973,7 @@ def _prepare_documents_sync(
             metadata={
                 "file_id": file_id,
                 "user_id": user_id,
+                "tenant_id": tenant_id,
                 "digest": generate_digest(doc.page_content),
                 **(doc.metadata or {}),
             },
@@ -1001,6 +992,7 @@ async def store_data_in_vector_db(
     filename: Optional[str] = None,
     content_type: Optional[str] = None,
     temp_file_path: Optional[str] = None,
+    tenant_id: str = BASE_TENANT_ID,
 ) -> bool:
     start_time = time.perf_counter()
     # Run document preparation in executor to avoid blocking the event loop
@@ -1012,6 +1004,7 @@ async def store_data_in_vector_db(
         file_id,
         user_id,
         clean_content,
+        tenant_id,
     )
 
     logger.info(
@@ -1099,7 +1092,7 @@ async def store_data_in_vector_db(
 async def embed_local_file(
     document: StoreDocument, request: Request, entity_id: str = None
 ):
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
     file_path = validate_file_path(RAG_UPLOAD_DIR, document.filepath)
 
     # Check if the file exists and if it is within the allowed upload directory
@@ -1147,6 +1140,7 @@ async def embed_local_file(
             filename=document.filename,
             content_type=document.file_content_type,
             temp_file_path=file_path,
+            tenant_id=tenant_id,
         )
 
         if result:
@@ -1207,7 +1201,7 @@ async def embed_file(
     response_message = "File processed successfully."
     known_type = None
 
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
     validated_file_path = _make_unique_temp_path(user_id, file.filename)
 
     if validated_file_path is None:
@@ -1261,6 +1255,7 @@ async def embed_file(
             filename=file.filename,
             content_type=file.content_type,
             temp_file_path=validated_file_path,
+            tenant_id=tenant_id,
         )
 
         if not result:
@@ -1374,7 +1369,7 @@ async def embed_file_upload(
     uploaded_file: UploadFile = File(...),
     entity_id: str = Form(None),
 ):
-    user_id = get_user_id(request, entity_id)
+    user_id, tenant_id = resolve_writer(request, entity_id)
 
     validated_temp_file_path = _make_unique_temp_path(user_id, uploaded_file.filename)
 
@@ -1421,6 +1416,7 @@ async def embed_file_upload(
             filename=uploaded_file.filename,
             content_type=uploaded_file.content_type,
             temp_file_path=validated_temp_file_path,
+            tenant_id=tenant_id,
         )
 
         if not result:
@@ -1465,8 +1461,8 @@ async def embed_file_upload(
 
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody):
-    owners = resolve_owner_scope(request, body.entity_id)
-    query_filter = scoped_filter({"file_id": {"$in": body.file_ids}}, owners)
+    scope = resolve_scope(request, body.entity_id)
+    query_filter = scope.predicate(files_clause(body.file_ids))
 
     try:
         # Get the embedding of the query text
@@ -1510,7 +1506,7 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
             str(e),
             traceback.format_exc(),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
 @router.post("/text")

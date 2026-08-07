@@ -39,6 +39,14 @@ CORPUS = [
     {"file_id": "file-shared", "user_id": "user-1", "chunk": "shared owner chunk"},
     {"file_id": "file-shared", "user_id": "user-2", "chunk": "shared foreign chunk"},
     {"file_id": "file-agent", "user_id": "agent-7", "chunk": "agent chunk"},
+    # Same owner, different tenant, and a pre-tenant chunk with no tenant_id.
+    {
+        "file_id": "file-owned",
+        "user_id": "user-1",
+        "tenant_id": "tenant-b",
+        "chunk": "other tenant chunk",
+    },
+    {"file_id": "file-legacy", "user_id": "user-1", "chunk": "untagged legacy chunk"},
 ]
 
 
@@ -74,6 +82,8 @@ def captured_filters(monkeypatch):
         hits = []
         for position, row in enumerate(CORPUS):
             metadata = {"file_id": row["file_id"], "user_id": row["user_id"]}
+            if "tenant_id" in row:
+                metadata["tenant_id"] = row["tenant_id"]
             if filter is not None and not _matches(metadata, filter):
                 continue
             hits.append(
@@ -108,11 +118,19 @@ def strict_auth(monkeypatch):
     auth.reset_settings()
 
 
-def owners_in(predicate: Dict[str, Any]) -> List[str]:
+def _clause(predicate: Dict[str, Any], key: str) -> List[Any]:
     for clause in predicate["$and"]:
-        if "user_id" in clause:
-            return clause["user_id"]["$in"]
-    raise AssertionError(f"no owner predicate in {predicate}")
+        if key in clause:
+            return clause[key]["$in"]
+    raise AssertionError(f"no {key} predicate in {predicate}")
+
+
+def owners_in(predicate: Dict[str, Any]) -> List[str]:
+    return _clause(predicate, "user_id")
+
+
+def tenants_in(predicate: Dict[str, Any]) -> List[Any]:
+    return _clause(predicate, "tenant_id")
 
 
 def test_owner_predicate_is_part_of_the_store_query(captured_filters, strict_auth):
@@ -273,3 +291,68 @@ def test_tenant_claim_does_not_widen_owner_scope(captured_filters, strict_auth):
         headers=bearer(token),
     )
     assert owners_in(captured_filters[0]) == ["user-1"]
+
+
+class TestTenantScope:
+    """Tenant is part of the store predicate, alongside owner and file id."""
+
+    def _query(self, file_id, tenant, subject="user-1"):
+        return client.post(
+            "/query",
+            json={"query": "q", "file_id": file_id, "k": 10},
+            headers=bearer(strict_token(subject=subject, tenant=tenant)),
+        )
+
+    def test_the_predicate_carries_tenant_owner_and_file(
+        self, captured_filters, strict_auth
+    ):
+        self._query("file-owned", "tenant-a")
+        predicate = captured_filters[0]
+        assert tenants_in(predicate) == ["tenant-a"]
+        assert owners_in(predicate) == ["user-1"]
+        assert {"file_id": {"$eq": "file-owned"}} in predicate["$and"]
+
+    def test_the_same_owner_in_another_tenant_is_invisible(
+        self, captured_filters, strict_auth
+    ):
+        response = self._query("file-owned", "tenant-a")
+        assert response.status_code == 200
+        # Only the tenant-b copy carries tenant_id; everything else is untagged.
+        assert response.json() == []
+
+    def test_base_tenant_absorbs_chunks_written_before_tenants_existed(
+        self, captured_filters, strict_auth
+    ):
+        response = self._query("file-legacy", BASE_TENANT)
+        assert response.status_code == 200
+        assert tenants_in(captured_filters[0]) == [BASE_TENANT, None]
+        assert len(response.json()) == 1
+
+    def test_a_real_tenant_never_absorbs_untagged_chunks(
+        self, captured_filters, strict_auth
+    ):
+        response = self._query("file-legacy", "tenant-a")
+        assert response.status_code == 200
+        assert tenants_in(captured_filters[0]) == ["tenant-a"]
+        assert response.json() == []
+
+    def test_a_foreign_tenants_chunk_is_invisible(self, captured_filters, strict_auth):
+        response = self._query("file-owned", "tenant-b", subject="user-2")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_query_multiple_is_tenant_scoped_too(self, captured_filters, strict_auth):
+        response = client.post(
+            "/query_multiple",
+            json={"query": "q", "file_ids": ["file-owned", "file-legacy"], "k": 10},
+            headers=bearer(strict_token(subject="user-1", tenant="tenant-a")),
+        )
+        assert response.status_code == 404
+        assert tenants_in(captured_filters[0]) == ["tenant-a"]
+
+    def test_system_tenant_is_refused_before_any_store_query(
+        self, captured_filters, strict_auth
+    ):
+        response = self._query("file-owned", "__SYSTEM__")
+        assert response.status_code == 403
+        assert captured_filters == []

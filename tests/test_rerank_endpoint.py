@@ -17,6 +17,7 @@ from app import auth
 from app.config import vector_store
 from app.constants import MAX_RERANK_CANDIDATES, MAX_RERANK_TOP_N
 from app.services import embedding as embedding_service
+from app.services import ratelimit
 from main import app
 from tests.fakes import FakeEmbeddingClient
 from tests.tokens import APP_SECRET, RAG_SECRET, bearer, strict_token
@@ -51,27 +52,74 @@ def backend(monkeypatch):
     )
     monkeypatch.setattr("app.services.embedding.embed_texts", fake.embed_documents)
     monkeypatch.setattr(
-        vector_store, "get_vectors_by_ids", lambda ids, owners: {}, raising=False
+        vector_store,
+        "get_vectors_by_ids",
+        lambda ids, owners, tenants=(None,), executor=None: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        vector_store,
+        "probe_candidate_ids",
+        lambda ids, owners, tenants=(None,), executor=None: (set(), set()),
+        raising=False,
     )
     return fake
 
 
+class FakeStore:
+    """Store stub that records how it was scoped and answers both lookups.
+
+    ``rows`` maps a candidate id to ``(owner, tenant, vector)`` so the probe and
+    the vector lookup answer from one source of truth, exactly as the database
+    does.
+    """
+
+    def __init__(self):
+        self.rows: Dict[str, tuple] = {}
+        self.probe_calls: List[Dict[str, object]] = []
+        self.vector_calls: List[Dict[str, object]] = []
+
+    def add(self, candidate_id, vector, owner="user-1", tenant="__BASE__"):
+        self.rows[candidate_id] = (owner, tenant, vector)
+
+    def probe_candidate_ids(self, ids, owners, tenants=(None,), executor=None):
+        self.probe_calls.append(
+            {"ids": list(ids), "owners": list(owners), "tenants": list(tenants)}
+        )
+        existing, authorized = set(), set()
+        for candidate_id in ids:
+            if candidate_id not in self.rows:
+                continue
+            owner, tenant, _ = self.rows[candidate_id]
+            existing.add(candidate_id)
+            if owner in owners and tenant in tenants:
+                authorized.add(candidate_id)
+        return existing, authorized
+
+    def get_vectors_by_ids(self, ids, owners, tenants=(None,), executor=None):
+        self.vector_calls.append(
+            {"ids": list(ids), "owners": list(owners), "tenants": list(tenants)}
+        )
+        found = {}
+        for candidate_id in ids:
+            if candidate_id not in self.rows:
+                continue
+            owner, tenant, vector = self.rows[candidate_id]
+            if owner in owners and tenant in tenants:
+                found[candidate_id] = vector
+        return found
+
+
 @pytest.fixture
 def stored(monkeypatch):
-    """Install a store stub and record the (ids, owners) it is queried with."""
-    calls: List[Dict[str, List[str]]] = []
-    contents: Dict[str, List[float]] = {}
-
-    def lookup(ids, owners):
-        calls.append({"ids": list(ids), "owners": list(owners)})
-        return {
-            candidate_id: contents[candidate_id]
-            for candidate_id in ids
-            if candidate_id in contents
-        }
-
-    monkeypatch.setattr(vector_store, "get_vectors_by_ids", lookup, raising=False)
-    return {"calls": calls, "contents": contents}
+    store = FakeStore()
+    monkeypatch.setattr(
+        vector_store, "probe_candidate_ids", store.probe_candidate_ids, raising=False
+    )
+    monkeypatch.setattr(
+        vector_store, "get_vectors_by_ids", store.get_vectors_by_ids, raising=False
+    )
+    return store
 
 
 def rerank(candidates, profile="fast-v1", top_n=None, token=None, query=QUERY):
@@ -201,14 +249,14 @@ def test_unknown_profile_is_rejected(backend):
 
 
 def test_stored_vectors_are_reused_and_only_gaps_are_embedded(backend, stored):
-    stored["contents"]["c-alpha"] = VECTORS["alpha"]
-    stored["contents"]["c-beta"] = VECTORS["beta"]
+    stored.add("c-alpha", VECTORS["alpha"])
+    stored.add("c-beta", VECTORS["beta"])
 
     response = rerank(blended_candidates())
     assert response.status_code == 200
     # Query embed + the one vectorless candidate, and nothing else.
     assert backend.embedded_texts == [QUERY, "gamma"]
-    assert stored["calls"][0]["ids"] == ["c-alpha", "c-beta", "c-gamma"]
+    assert stored.vector_calls[0]["ids"] == ["c-alpha", "c-beta", "c-gamma"]
 
 
 def test_fully_stored_candidates_cost_no_candidate_inference(backend, stored):
@@ -217,7 +265,7 @@ def test_fully_stored_candidates_cost_no_candidate_inference(backend, stored):
         ("c-beta", "beta"),
         ("c-gamma", "gamma"),
     ):
-        stored["contents"][candidate_id] = VECTORS[text]
+        stored.add(candidate_id, VECTORS[text])
 
     assert rerank(blended_candidates()).status_code == 200
     assert backend.embedded_texts == [QUERY]
@@ -226,22 +274,111 @@ def test_fully_stored_candidates_cost_no_candidate_inference(backend, stored):
 def test_stored_lookup_is_scoped_to_the_tokens_owners(backend, stored):
     token = strict_token(subject="user-1", entities=["agent-7", "agent-9"])
     assert rerank(blended_candidates(), token=token).status_code == 200
-    assert stored["calls"][0]["owners"] == ["agent-7", "agent-9", "user-1"]
+    assert stored.vector_calls[0]["owners"] == ["agent-7", "agent-9", "user-1"]
 
 
 def test_stored_lookup_is_scoped_to_the_subject_alone_without_entities(backend, stored):
     assert rerank(blended_candidates()).status_code == 200
-    assert stored["calls"][0]["owners"] == ["user-1"]
+    assert stored.vector_calls[0]["owners"] == ["user-1"]
 
 
-def test_store_failure_degrades_to_inference_rather_than_failing(backend, monkeypatch):
-    def explode(ids, owners):
+def test_lookup_is_scoped_to_the_tokens_tenant(backend, stored):
+    token = strict_token(subject="user-1", tenant="tenant-a")
+    assert rerank(blended_candidates(), token=token).status_code == 200
+    assert stored.vector_calls[0]["tenants"] == ["tenant-a"]
+    assert stored.probe_calls[0]["tenants"] == ["tenant-a"]
+
+
+def test_base_tenant_also_matches_chunks_written_before_tenants_were_recorded(
+    backend, stored
+):
+    assert rerank(blended_candidates()).status_code == 200
+    assert stored.vector_calls[0]["tenants"] == ["__BASE__", None]
+
+
+def test_vector_lookup_failure_degrades_to_inference(backend, stored, monkeypatch):
+    """Losing stored vectors costs inference; it does not lose authorization."""
+
+    def explode(ids, owners, tenants=(None,), executor=None):
         raise RuntimeError("store is down")
 
     monkeypatch.setattr(vector_store, "get_vectors_by_ids", explode, raising=False)
     response = rerank(blended_candidates())
     assert response.status_code == 200
     assert len(response.json()["results"]) == 3
+
+
+class TestAuthorizeBeforeEgress:
+    """No candidate text may reach the gateway before scope is verified."""
+
+    def test_a_foreign_candidate_is_refused_and_nothing_is_embedded(
+        self, backend, stored
+    ):
+        stored.add("c-alpha", VECTORS["alpha"], owner="user-2")
+        response = rerank(blended_candidates())
+        assert response.status_code == 403
+        assert backend.calls == []
+
+    def test_a_cross_tenant_candidate_is_refused_and_nothing_is_embedded(
+        self, backend, stored
+    ):
+        stored.add("c-alpha", VECTORS["alpha"], owner="user-1", tenant="tenant-b")
+        response = rerank(
+            blended_candidates(),
+            token=strict_token(subject="user-1", tenant="tenant-a"),
+        )
+        assert response.status_code == 403
+        assert backend.calls == []
+
+    def test_authorization_runs_before_the_vector_lookup(self, backend, stored):
+        stored.add("c-alpha", VECTORS["alpha"], owner="user-2")
+        assert rerank(blended_candidates()).status_code == 403
+        assert stored.probe_calls != []
+        assert stored.vector_calls == []
+
+    def test_ids_that_match_nothing_in_the_store_are_unaffected(self, backend, stored):
+        candidates = [{"id": "web-scrape-1", "text": "gamma", "base_score": 1.0}]
+        assert rerank(candidates).status_code == 200
+        assert backend.embedded_texts == [QUERY, "gamma"]
+
+    def test_a_digest_shared_with_another_owner_is_still_authorized(
+        self, backend, stored
+    ):
+        """Identical chunk content collides on digest; owning a copy is enough."""
+        stored.add("c-alpha", VECTORS["alpha"], owner="user-1")
+        assert rerank(blended_candidates()).status_code == 200
+
+    def test_probe_failure_fails_closed_rather_than_embedding(
+        self, backend, stored, monkeypatch
+    ):
+        def explode(ids, owners, tenants=(None,), executor=None):
+            raise RuntimeError("store is down")
+
+        monkeypatch.setattr(vector_store, "probe_candidate_ids", explode, raising=False)
+        response = rerank(blended_candidates())
+        assert response.status_code == 503
+        assert backend.calls == []
+        assert "store is down" not in response.text
+
+    def test_unauthorized_requests_never_reach_the_backend(self, backend, stored):
+        no_scope = strict_token(subject="user-1", scopes=["rag:embed"])
+        assert rerank(blended_candidates(), token=no_scope).status_code == 403
+        system = strict_token(subject="user-1", tenant="__SYSTEM__")
+        assert rerank(blended_candidates(), token=system).status_code == 403
+        assert rerank(blended_candidates(), profile="slow-v9").status_code == 400
+        assert backend.calls == []
+        assert stored.probe_calls == []
+
+    def test_rate_limited_requests_never_reach_the_backend(
+        self, backend, stored, monkeypatch
+    ):
+        monkeypatch.setenv("RAG_RATE_LIMIT_ENABLED", "true")
+        monkeypatch.setenv("RAG_RATE_LIMIT_RERANK_SUBJECT", "1")
+        ratelimit.reset()
+        assert rerank(blended_candidates()).status_code == 200
+        calls_after_first = len(backend.calls)
+        assert rerank(blended_candidates()).status_code == 429
+        assert len(backend.calls) == calls_after_first
 
 
 def test_embedding_backend_failure_returns_503(backend, monkeypatch):

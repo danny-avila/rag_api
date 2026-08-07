@@ -1,14 +1,15 @@
 # app/routes/search_routes.py
-"""Strict service endpoints for the LibreChat search stack.
+"""Strict service endpoints for embedding and reranking.
 
 ``POST /v1/embeddings`` serves the substitution-locked ``chat-v1`` space.
-``POST /v1/rerank`` serves the ``fast-v1`` profile as embed-blend v0.
+``POST /v1/rerank`` serves the ``fast-v1`` profile as embed-blend.
 
 Neither endpoint returns candidate text, and neither logs query or candidate
 text — only lengths and non-reversible fingerprints.
 """
 
 import asyncio
+import inspect
 import traceback
 from typing import Dict, List, Optional, Sequence
 
@@ -30,6 +31,8 @@ from app.models import (
     RerankResponse,
     RerankResult,
 )
+from app.scope import ScopeFilter, token_scope
+from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.services import embedding as embedding_service
 from app.services import ratelimit
 from app.services.rerank import (
@@ -132,22 +135,96 @@ async def create_embeddings(
     )
 
 
+async def _call_store(request: Request, method_name: str, *args):
+    """Invoke a store method, handing the async store this request's executor.
+
+    The async store caches ``loop._default_executor`` when none is supplied, and
+    that executor belongs to whichever event loop ran first — it is already shut
+    down by the next request.
+    """
+    method = getattr(vector_store, method_name, None)
+    if method is None:
+        return None
+    if isinstance(vector_store, AsyncPgVector):
+        result = method(*args, executor=_executor(request))
+    else:
+        result = method(*args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _authorize_candidates(
+    request: Request, ids: Sequence[str], scope: ScopeFilter
+) -> None:
+    """Refuse candidates that exist in the store outside the caller's scope.
+
+    This runs *before* any text leaves the process. A caller who names another
+    owner's chunk and supplies its text must not have that text embedded: the
+    unauthorized content would leave the trust boundary even though the caller
+    never sees it in a response. Ids that match nothing in the store —
+    web-scrape candidates, synthetic ids — are unaffected.
+
+    The probe reads metadata only, never vectors or document text. If it cannot
+    run, the request fails closed: without it there is no way to tell a foreign
+    candidate from a fresh one.
+    """
+    if not hasattr(vector_store, "probe_candidate_ids"):
+        return
+    try:
+        probed = await _call_store(
+            request,
+            "probe_candidate_ids",
+            list(ids),
+            list(scope.owners),
+            scope.tenant_values(),
+        )
+        existing, authorized = probed
+    except Exception as exc:
+        logger.error(
+            "Candidate authorization probe failed | %s: %s", type(exc).__name__, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Candidate authorization is unavailable",
+        )
+
+    foreign = sorted(existing - authorized)
+    if foreign:
+        logger.warning(
+            "Refused out-of-scope rerank candidates | tenant=%s owners=%s count=%d",
+            scope.tenant,
+            ",".join(scope.owners),
+            len(foreign),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Candidates outside the caller's scope: {foreign}",
+        )
+
+
 async def _stored_vectors(
-    request: Request, ids: Sequence[str], owners: Sequence[str]
+    request: Request, ids: Sequence[str], scope: ScopeFilter
 ) -> Dict[str, List[float]]:
-    """Candidate vectors already in the store, scoped to owners the token permits.
+    """Candidate vectors already in the store, scoped to the caller's tenant and owners.
 
     A store failure degrades to "no stored vectors" — the vectorless path still
-    produces a correct ranking, just at the cost of candidate inference.
+    produces a correct ranking, at the cost of candidate inference. That is safe
+    only because :func:`_authorize_candidates` has already run and fails closed.
     """
-    lookup = getattr(vector_store, "get_vectors_by_ids", None)
-    if lookup is None or not owners:
+    if not hasattr(vector_store, "get_vectors_by_ids") or not scope.owners:
         return {}
     try:
-        result = lookup(list(ids), list(owners))
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
+        return (
+            await _call_store(
+                request,
+                "get_vectors_by_ids",
+                list(ids),
+                list(scope.owners),
+                scope.tenant_values(),
+            )
+            or {}
+        )
     except Exception as exc:
         logger.warning(
             "Stored candidate vector lookup failed, falling back to inference | %s: %s",
@@ -171,10 +248,12 @@ async def rerank(
 
     _enforce_budget(ratelimit.BUDGET_RERANK, principal)
 
-    owners = sorted({principal.subject} | set(principal.entities))
-    stored = await _stored_vectors(
-        request, [candidate.id for candidate in body.candidates], owners
-    )
+    # Authorize before egress: every candidate is scope-checked against the
+    # store before a single character of candidate text reaches the gateway.
+    scope = token_scope(request)
+    candidate_ids = [candidate.id for candidate in body.candidates]
+    await _authorize_candidates(request, candidate_ids, scope)
+    stored = await _stored_vectors(request, candidate_ids, scope)
 
     pending: List[int] = []
     pending_texts: List[str] = []

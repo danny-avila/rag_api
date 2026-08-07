@@ -16,8 +16,6 @@ import pytest
 
 from app.services.space import EmbeddingSpace, SpaceSpec, _build_openai_client
 
-pytestmark = pytest.mark.integration
-
 BASE_URL = os.getenv("RAG_GATEWAY_TEST_BASEURL")
 API_KEY = os.getenv("RAG_GATEWAY_TEST_API_KEY")
 

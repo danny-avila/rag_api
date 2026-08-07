@@ -54,9 +54,37 @@ VECTOR_DB_TYPE = VectorDBType(
 POSTGRES_USE_UNIX_SOCKET = (
     get_env_variable("POSTGRES_USE_UNIX_SOCKET", "False").lower() == "true"
 )
-POSTGRES_DB = get_env_variable("POSTGRES_DB", "mydatabase")
-POSTGRES_USER = get_env_variable("POSTGRES_USER", "myuser")
-POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "mypassword")
+
+
+def require_env_variable(var_name: str, allow_empty: bool = False) -> str:
+    """Read a required credential, refusing to invent one.
+
+    A working fallback default is the defect, not the convenience: a sample
+    user/password pair baked into the code is exactly how a database ends up
+    reachable with credentials that are public in a compose file.
+    """
+    value = os.getenv(var_name)
+    if value is None or (value == "" and not allow_empty):
+        raise ValueError(
+            f"Environment variable '{var_name}' is required and has no default. "
+            "Set it in the environment or in your .env file."
+        )
+    return value
+
+
+# Credentials are required only for the backend that actually uses them.
+if VECTOR_DB_TYPE == VectorDBType.PGVECTOR:
+    POSTGRES_DB = require_env_variable("POSTGRES_DB")
+    POSTGRES_USER = require_env_variable("POSTGRES_USER")
+    # Unix-socket peer authentication legitimately carries no password.
+    POSTGRES_PASSWORD = require_env_variable(
+        "POSTGRES_PASSWORD", allow_empty=POSTGRES_USE_UNIX_SOCKET
+    )
+else:
+    POSTGRES_DB = get_env_variable("POSTGRES_DB", "")
+    POSTGRES_USER = get_env_variable("POSTGRES_USER", "")
+    POSTGRES_PASSWORD = get_env_variable("POSTGRES_PASSWORD", "")
+
 DB_HOST = get_env_variable("DB_HOST", "db")
 DB_PORT = get_env_variable("DB_PORT", "5432")
 PGVECTOR_CREATE_EXTENSION = get_env_variable(

@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from typing import Optional, Any, Dict, List, Sequence, Union
+from typing import Optional, Any, Dict, List, Sequence, Set, Tuple, Union
 import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy import delete
@@ -170,6 +170,17 @@ class ExtendedPgVector(PGVector):
             return self.EmbeddingStore.cmetadata[field].astext == str(filter_value)
         elif operator == "$ne":
             return self.EmbeddingStore.cmetadata[field].astext != str(filter_value)
+        elif operator == "$in" and any(item is None for item in filter_value):
+            # MongoDB's `$in: [null]` matches documents where the field is null
+            # *or absent*. Scope predicates depend on that to treat chunks
+            # written before tenants were recorded as base-tenant content, so
+            # the same semantic is implemented here rather than dropping the
+            # null and silently narrowing the filter.
+            column = self.EmbeddingStore.cmetadata[field].astext
+            present = [str(item) for item in filter_value if item is not None]
+            if not present:
+                return column.is_(None)
+            return sqlalchemy.or_(column.in_(present), column.is_(None))
 
         return super()._handle_field_filter(field, value)
 
@@ -219,22 +230,91 @@ class ExtendedPgVector(PGVector):
             session.execute(stmt)
             session.commit()
 
+    def _candidate_id_clause(self, wanted: List[str]):
+        """Match a caller's candidate id against the two per-chunk handles.
+
+        ``custom_id`` is the file id and is shared by every chunk of a file, so
+        it identifies no single vector; the row ``uuid`` and the chunk
+        ``digest`` recorded in metadata are the handles a caller can hold.
+        """
+        return sqlalchemy.or_(
+            sqlalchemy.cast(self.EmbeddingStore.uuid, sqlalchemy.String).in_(wanted),
+            self.EmbeddingStore.cmetadata["digest"].astext.in_(wanted),
+        )
+
+    def _scope_clause(self, owners: List[str], tenants: Sequence[Optional[str]]):
+        owner_column = self.EmbeddingStore.cmetadata["user_id"].astext
+        tenant_column = self.EmbeddingStore.cmetadata["tenant_id"].astext
+        present = [str(tenant) for tenant in tenants if tenant is not None]
+        if any(tenant is None for tenant in tenants):
+            tenant_clause = (
+                sqlalchemy.or_(tenant_column.in_(present), tenant_column.is_(None))
+                if present
+                else tenant_column.is_(None)
+            )
+        else:
+            tenant_clause = tenant_column.in_(present)
+        return sqlalchemy.and_(owner_column.in_(owners), tenant_clause)
+
+    def probe_candidate_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> Tuple[Set[str], Set[str]]:
+        """``(ids that exist at all, ids that exist within scope)``.
+
+        Metadata only — no vectors, no document text. This is the
+        authorize-before-egress check: a candidate id that exists in the store
+        but resolves to nothing inside the caller's scope must be refused
+        *before* its caller-supplied text is sent to the inference gateway.
+        """
+        wanted = list(dict.fromkeys(ids))
+        if not wanted:
+            return set(), set()
+
+        allowed = list(dict.fromkeys(owners))
+        with Session(self._bind) as session:
+            rows = (
+                session.query(
+                    self.EmbeddingStore.uuid,
+                    self.EmbeddingStore.cmetadata["digest"].astext,
+                    self.EmbeddingStore.cmetadata["user_id"].astext,
+                    self.EmbeddingStore.cmetadata["tenant_id"].astext,
+                )
+                .filter(self._candidate_id_clause(wanted))
+                .order_by(self.EmbeddingStore.uuid)
+                .all()
+            )
+
+        requested = set(wanted)
+        tenant_values = set(tenants)
+        existing: Set[str] = set()
+        authorized: Set[str] = set()
+        for row_uuid, row_digest, row_owner, row_tenant in rows:
+            in_scope = row_owner in allowed and row_tenant in tenant_values
+            for key in (str(row_uuid), row_digest):
+                if key not in requested:
+                    continue
+                existing.add(key)
+                if in_scope:
+                    authorized.add(key)
+        return existing, authorized
+
     def get_vectors_by_ids(
-        self, ids: Sequence[str], owners: Sequence[str]
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]] = (None,),
     ) -> Dict[str, List[float]]:
-        """Stored chunk vectors for ``ids``, restricted to ``owners``.
+        """Stored chunk vectors for ``ids``, restricted to ``owners`` and ``tenants``.
 
-        A candidate id resolves against the row's ``uuid`` or the chunk
-        ``digest`` recorded in metadata — the two per-chunk handles a caller can
-        actually hold (``custom_id`` is the file id and is shared by every chunk
-        of a file, so it identifies no single vector).
-
-        Ownership is part of the SQL predicate: a foreign chunk is never
-        fetched, so it can never be scored or counted.
+        Scope is part of the SQL predicate: a foreign chunk is never fetched, so
+        it can never be scored, counted, or read into this process.
         """
         wanted = list(dict.fromkeys(ids))
         allowed = list(dict.fromkeys(owners))
-        if not wanted or not allowed:
+        if not wanted or not allowed or not tenants:
             return {}
 
         with Session(self._bind) as session:
@@ -244,15 +324,8 @@ class ExtendedPgVector(PGVector):
                     self.EmbeddingStore.cmetadata,
                     self.EmbeddingStore.embedding,
                 )
-                .filter(
-                    sqlalchemy.or_(
-                        sqlalchemy.cast(
-                            self.EmbeddingStore.uuid, sqlalchemy.String
-                        ).in_(wanted),
-                        self.EmbeddingStore.cmetadata["digest"].astext.in_(wanted),
-                    )
-                )
-                .filter(self.EmbeddingStore.cmetadata["user_id"].astext.in_(allowed))
+                .filter(self._candidate_id_clause(wanted))
+                .filter(self._scope_clause(allowed, tenants))
                 .order_by(self.EmbeddingStore.uuid)
                 .all()
             )

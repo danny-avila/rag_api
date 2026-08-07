@@ -1,6 +1,6 @@
 import copy
 import hashlib
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Set, Tuple
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_mongodb import MongoDBAtlasVectorSearch
@@ -78,26 +78,72 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             for doc in self._collection.find({"file_id": {"$in": ids}})
         ]
 
+    @staticmethod
+    def _candidate_id_query(wanted: List[str]) -> dict:
+        return {"$or": [{"_id": {"$in": wanted}}, {"digest": {"$in": wanted}}]}
+
+    def probe_candidate_ids(
+        self,
+        ids: List[str],
+        owners: List[str],
+        tenants: Sequence[Optional[str]] = (None,),
+    ) -> Tuple[Set[str], Set[str]]:
+        """``(ids that exist at all, ids that exist within scope)`` — metadata only.
+
+        Mirrors the pgvector probe so authorize-before-egress behaves identically
+        on both backends.
+        """
+        wanted = list(dict.fromkeys(ids))
+        if not wanted:
+            return set(), set()
+
+        allowed = set(dict.fromkeys(owners))
+        tenant_values = set(tenants)
+        cursor = self._collection.find(
+            self._candidate_id_query(wanted),
+            {"_id": 1, "digest": 1, "user_id": 1, "tenant_id": 1},
+        ).sort("_id", 1)
+
+        requested = set(wanted)
+        existing: Set[str] = set()
+        authorized: Set[str] = set()
+        for doc in cursor:
+            in_scope = (
+                doc.get("user_id") in allowed and doc.get("tenant_id") in tenant_values
+            )
+            for key in (doc.get("_id"), doc.get("digest")):
+                if key not in requested:
+                    continue
+                existing.add(key)
+                if in_scope:
+                    authorized.add(key)
+        return existing, authorized
+
     def get_vectors_by_ids(
-        self, ids: List[str], owners: List[str]
+        self,
+        ids: List[str],
+        owners: List[str],
+        tenants: Sequence[Optional[str]] = (None,),
     ) -> dict[str, List[float]]:
-        """Stored chunk vectors for ``ids``, restricted to ``owners``.
+        """Stored chunk vectors for ``ids``, restricted to ``owners`` and ``tenants``.
 
         Mirrors the pgvector resolution: a candidate id matches the document
-        ``_id`` or its chunk ``digest``, and ownership is part of the query
-        predicate rather than a post-filter.
+        ``_id`` or its chunk ``digest``, and scope is part of the query predicate
+        rather than a post-filter. ``None`` in ``tenants`` matches missing
+        fields, which is MongoDB's own ``$in: [null]`` semantic.
         """
         wanted = list(dict.fromkeys(ids))
         allowed = list(dict.fromkeys(owners))
-        if not wanted or not allowed:
+        if not wanted or not allowed or not tenants:
             return {}
 
         embedding_key = getattr(self, "_embedding_key", "embedding")
         cursor = self._collection.find(
             {
                 "$and": [
-                    {"$or": [{"_id": {"$in": wanted}}, {"digest": {"$in": wanted}}]},
+                    self._candidate_id_query(wanted),
                     {"user_id": {"$in": allowed}},
+                    {"tenant_id": {"$in": list(tenants)}},
                 ]
             },
             {"_id": 1, "digest": 1, embedding_key: 1},

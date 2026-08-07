@@ -63,6 +63,16 @@ docker compose build --no-cache
 
 ### Environment Variables
 
+Copy `.env.example` to `.env` and replace every `REPLACE_ME_*` placeholder. The
+database credentials ship **no fallback defaults** — the service refuses to
+start without them, and the compose files use `${VAR:?}` so `docker compose up`
+fails loudly rather than bringing up a database whose credentials are public in
+this repository:
+
+- `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`: **required** when
+  `VECTOR_DB_TYPE=pgvector`. `POSTGRES_PASSWORD` may be empty only when
+  `POSTGRES_USE_UNIX_SOCKET=True`, where peer authentication carries no password.
+
 The following environment variables are required to run the application:
 
 - `RAG_OPENAI_API_KEY`: The API key for OpenAI API Embeddings (if using default settings).
@@ -72,9 +82,9 @@ The following environment variables are required to run the application:
     - Note: When using with LibreChat, you can also set `HTTP_PROXY` and `HTTPS_PROXY` environment variables in the `docker-compose.override.yml` file (see [Proxy Configuration](#proxy-configuration) section below)
 - `VECTOR_DB_TYPE`: (Optional) select vector database type, default to `pgvector`.
 - `POSTGRES_USE_UNIX_SOCKET`: (Optional) Set to "True" when connecting to the PostgreSQL database server with Unix Socket.
-- `POSTGRES_DB`: (Optional) The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`.
-- `POSTGRES_USER`: (Optional) The username for connecting to the PostgreSQL database.
-- `POSTGRES_PASSWORD`: (Optional) The password for connecting to the PostgreSQL database.
+- `POSTGRES_DB`: The name of the PostgreSQL database, used when `VECTOR_DB_TYPE=pgvector`. Required, no default.
+- `POSTGRES_USER`: The username for connecting to the PostgreSQL database. Required, no default.
+- `POSTGRES_PASSWORD`: The password for connecting to the PostgreSQL database. Required, no default (may be empty only under `POSTGRES_USE_UNIX_SOCKET=True`).
 - `DB_HOST`: (Optional) The hostname or IP address of the PostgreSQL database server.
 - `DB_PORT`: (Optional) The port number of the PostgreSQL database server.
 - `PGVECTOR_CREATE_EXTENSION`: (Optional) Set to "False" to skip the `CREATE EXTENSION IF NOT EXISTS vector` call on startup. Default is "True". Use this when the `vector` extension is already installed on a managed Postgres (e.g. RDS, Azure Database for PostgreSQL) and the application user is not a superuser.
@@ -173,11 +183,39 @@ agent's knowledge-base files. Strict tokens must list that id in their
 at face value — which is the reason to flip `RAG_AUTH_ACCEPT_LEGACY` off once
 the migration lands.
 
-Retrieval is scoped by document owner. `/query` and `/query_multiple` put that
-scope into the vector-store predicate, so a file belonging to another owner
-matches nothing rather than being filtered out after ranking. Documents written
-before `user_id` was recorded in chunk metadata are no longer visible to any
-caller; re-embed them if you still need them.
+### Retrieval scope
+
+Retrieval is scoped by `(tenant, owner/entity, file_id)`, and all three go into
+the vector-store predicate before ranking. A chunk outside the caller's scope
+matches nothing rather than being filtered out of the result set afterwards.
+There is one scope builder (`app/scope.py`); no route writes its own scope
+clause.
+
+Chunks record the writing caller's `tenant_id` and `user_id`. Chunks written
+before `tenant_id` existed carry no value and normalize to the base tenant
+`__BASE__`, so a single-tenant deployment reads them exactly as before while a
+named tenant never absorbs untagged content. Documents written before `user_id`
+was recorded are no longer visible to any caller; re-embed them if you still
+need them.
+
+Writes are scoped too: uploading under an `entity_id` the token does not permit
+is refused, so a caller cannot plant content in a knowledge base it cannot read.
+
+### Authorize before egress
+
+Rerank and embedding send text to an inference provider. That text has left the
+trust boundary whether or not the caller ever sees a response, so authorization
+happens before the call rather than as a filter on its result:
+
+- `/v1/rerank` probes every candidate id against the store — metadata only, no
+  vectors and no document text. An id that exists but resolves to nothing inside
+  the caller's scope makes the whole request `403`, and nothing is embedded. Ids
+  that match nothing in the store (web-scrape candidates, synthetic ids) are
+  unaffected. If the probe cannot run, the request fails closed with `503`
+  rather than embedding text it could not check.
+- `/v1/embeddings` reads no store at all: it embeds only text the authenticated
+  caller supplied in the request body. Scope, quota and limit rejections all
+  happen before the backend is called.
 
 ### Search service endpoints
 

@@ -29,14 +29,22 @@ VECTORS = {
     "beta chunk": [0.9, 0.4358898943540674, 0.0],
     "gamma chunk": [0.8, 0.6, 0.0],
     "foreign chunk": [0.0, 1.0, 0.0],
+    "tenant chunk": [0.7, 0.7141428428542851, 0.0],
 }
 
+# (file_id, user_id, chunk, tenant_id) — a None tenant models a chunk written
+# before tenants were recorded.
 CORPUS = [
-    ("file-a", "user-1", "alpha chunk"),
-    ("file-a", "user-1", "beta chunk"),
-    ("file-b", "agent-7", "gamma chunk"),
-    ("file-c", "user-2", "foreign chunk"),
+    ("file-a", "user-1", "alpha chunk", None),
+    ("file-a", "user-1", "beta chunk", None),
+    ("file-b", "agent-7", "gamma chunk", None),
+    ("file-c", "user-2", "foreign chunk", None),
+    ("file-d", "user-1", "tenant chunk", "tenant-a"),
 ]
+
+
+# The base tenant also matches chunks written before tenants were recorded.
+BASE_TENANTS = ["__BASE__", None]
 
 
 def digest(text_value: str) -> str:
@@ -62,19 +70,16 @@ class RecordingEmbedder:
 @pytest.fixture()
 def seeded(pg_store):
     pg_store.embedding_function.vectors = VECTORS
-    for file_id, user_id, chunk in CORPUS:
+    for file_id, user_id, chunk, tenant_id in CORPUS:
+        metadata = {
+            "file_id": file_id,
+            "user_id": user_id,
+            "digest": digest(chunk),
+        }
+        if tenant_id is not None:
+            metadata["tenant_id"] = tenant_id
         pg_store.add_documents(
-            [
-                Document(
-                    page_content=chunk,
-                    metadata={
-                        "file_id": file_id,
-                        "user_id": user_id,
-                        "digest": digest(chunk),
-                    },
-                )
-            ],
-            ids=[file_id],
+            [Document(page_content=chunk, metadata=metadata)], ids=[file_id]
         )
     return pg_store
 
@@ -108,7 +113,9 @@ def rerank(candidates, token=None):
 
 class TestStoredVectorLookup:
     async def test_digest_resolves_to_the_stored_vector(self, seeded):
-        vectors = await seeded.get_vectors_by_ids([digest("alpha chunk")], ["user-1"])
+        vectors = await seeded.get_vectors_by_ids(
+            [digest("alpha chunk")], ["user-1"], BASE_TENANTS
+        )
         assert list(vectors) == [digest("alpha chunk")]
         assert len(vectors[digest("alpha chunk")]) == 3
 
@@ -123,25 +130,38 @@ class TestStoredVectorLookup:
                 ),
                 {"digest": digest("alpha chunk")},
             ).scalar()
-        vectors = await seeded.get_vectors_by_ids([str(row_uuid)], ["user-1"])
+        vectors = await seeded.get_vectors_by_ids(
+            [str(row_uuid)], ["user-1"], BASE_TENANTS
+        )
         assert list(vectors) == [str(row_uuid)]
 
     async def test_foreign_owners_vector_is_never_returned(self, seeded):
         foreign = digest("foreign chunk")
-        assert await seeded.get_vectors_by_ids([foreign], ["user-1"]) == {}
-        assert list(await seeded.get_vectors_by_ids([foreign], ["user-2"])) == [foreign]
+        assert (
+            await seeded.get_vectors_by_ids([foreign], ["user-1"], BASE_TENANTS) == {}
+        )
+        assert list(
+            await seeded.get_vectors_by_ids([foreign], ["user-2"], BASE_TENANTS)
+        ) == [foreign]
 
     async def test_unknown_ids_resolve_to_nothing(self, seeded):
-        assert await seeded.get_vectors_by_ids(["not-a-real-id"], ["user-1"]) == {}
+        assert (
+            await seeded.get_vectors_by_ids(["not-a-real-id"], ["user-1"], BASE_TENANTS)
+            == {}
+        )
 
     async def test_empty_owner_scope_resolves_to_nothing(self, seeded):
-        assert await seeded.get_vectors_by_ids([digest("alpha chunk")], []) == {}
+        assert (
+            await seeded.get_vectors_by_ids([digest("alpha chunk")], [], BASE_TENANTS)
+            == {}
+        )
 
     async def test_a_non_uuid_candidate_id_does_not_break_the_query(self, seeded):
         """The uuid arm casts the column, never the caller's string."""
         result = await seeded.get_vectors_by_ids(
             ["'; DROP TABLE langchain_pg_embedding; --", digest("alpha chunk")],
             ["user-1"],
+            BASE_TENANTS,
         )
         assert list(result) == [digest("alpha chunk")]
 
@@ -165,14 +185,36 @@ class TestRerankOverStoredVectors:
         assert rerank(candidates).status_code == 200
         assert rerank_client.documents == ["gamma chunk"]
 
-    def test_a_foreign_candidate_id_never_reads_the_foreign_vector(self, rerank_client):
-        """The id resolves to a stored row, but not for this subject."""
+    def test_a_foreign_candidate_id_is_refused_before_any_egress(self, rerank_client):
+        """The id resolves to a stored row, but not for this subject.
+
+        Falling through to inference on the caller-supplied text would ship
+        content the caller cannot read out to the gateway, so the request is
+        refused instead of quietly proceeding.
+        """
         candidates = [
             {"id": digest("foreign chunk"), "text": "gamma chunk", "base_score": 1.0}
         ]
-        assert rerank(candidates).status_code == 200
-        # Falls through to inference on the caller-supplied text instead.
-        assert rerank_client.documents == ["gamma chunk"]
+        response = rerank(candidates)
+        assert response.status_code == 403
+        assert rerank_client.documents == []
+        assert rerank_client.queries == []
+
+    def test_a_cross_tenant_candidate_is_refused_before_any_egress(self, rerank_client):
+        candidates = [
+            {"id": digest("tenant chunk"), "text": "gamma chunk", "base_score": 1.0}
+        ]
+        response = rerank(candidates)
+        assert response.status_code == 403
+        assert rerank_client.documents == []
+
+    def test_the_owning_tenant_reaches_its_own_chunk(self, rerank_client):
+        token = strict_token(subject="user-1", tenant="tenant-a")
+        candidates = [
+            {"id": digest("tenant chunk"), "text": "gamma chunk", "base_score": 1.0}
+        ]
+        assert rerank(candidates, token=token).status_code == 200
+        assert rerank_client.documents == []
 
     def test_permitted_entity_vectors_are_reachable(self, rerank_client):
         token = strict_token(subject="user-1", entities=["agent-7"])
@@ -186,8 +228,9 @@ class TestRerankOverStoredVectors:
         candidates = [
             {"id": digest("gamma chunk"), "text": "gamma chunk", "base_score": 1.0}
         ]
-        assert rerank(candidates).status_code == 200
-        assert rerank_client.documents == ["gamma chunk"]
+        response = rerank(candidates)
+        assert response.status_code == 403
+        assert rerank_client.documents == []
 
     def test_blend_over_stored_vectors_is_not_pure_embedding_order(self, rerank_client):
         token = strict_token(subject="user-1", entities=["agent-7"])

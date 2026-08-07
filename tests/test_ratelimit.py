@@ -40,7 +40,16 @@ def limited(monkeypatch):
     )
     monkeypatch.setattr("app.services.embedding.embed_texts", fake.embed_documents)
     monkeypatch.setattr(
-        vector_store, "get_vectors_by_ids", lambda ids, owners: {}, raising=False
+        vector_store,
+        "get_vectors_by_ids",
+        lambda ids, owners, tenants=(None,), executor=None: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        vector_store,
+        "probe_candidate_ids",
+        lambda ids, owners, tenants=(None,), executor=None: (set(), set()),
+        raising=False,
     )
     return fake
 
