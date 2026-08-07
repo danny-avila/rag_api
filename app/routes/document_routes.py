@@ -966,16 +966,20 @@ def _prepare_documents_sync(
         for doc in documents:
             doc.page_content = clean_text(doc.page_content)
 
-    # Preparing documents with page content and metadata for insertion.
+    # Loader metadata is untrusted: it comes from the uploaded file itself, and
+    # several loaders preserve document properties verbatim. It is merged first
+    # so the request's verified identity always wins — a crafted property named
+    # tenant_id, user_id, file_id or digest would otherwise overwrite the value
+    # taken from the token and stamp these chunks into another tenant.
     return [
         Document(
             page_content=doc.page_content,
             metadata={
+                **(doc.metadata or {}),
                 "file_id": file_id,
                 "user_id": user_id,
                 "tenant_id": tenant_id,
                 "digest": generate_digest(doc.page_content),
-                **(doc.metadata or {}),
             },
         )
         for doc in documents
