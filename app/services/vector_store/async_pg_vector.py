@@ -44,19 +44,50 @@ class AsyncPgVector(ExtendedPgVector):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(executor, wrapper)
 
-    async def get_all_ids(self, executor=None) -> list[str]:
+    async def get_all_ids(
+        self,
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+        executor=None,
+    ) -> list[str]:
         executor = executor or self._get_thread_pool()
-        return await self._run_in_executor(executor, super().get_all_ids)
+        return await self._run_in_executor(
+            executor, super().get_all_ids, owners, tenants
+        )
 
-    async def get_filtered_ids(self, ids: list[str], executor=None) -> list[str]:
+    async def get_filtered_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+        executor=None,
+    ) -> list[str]:
         executor = executor or self._get_thread_pool()
-        return await self._run_in_executor(executor, super().get_filtered_ids, ids)
+        return await self._run_in_executor(
+            executor, super().get_filtered_ids, ids, owners, tenants
+        )
 
     async def get_documents_by_ids(
-        self, ids: list[str], executor=None
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+        executor=None,
     ) -> list[Document]:
         executor = executor or self._get_thread_pool()
-        return await self._run_in_executor(executor, super().get_documents_by_ids, ids)
+        return await self._run_in_executor(
+            executor, super().get_documents_by_ids, ids, owners, tenants
+        )
+
+    async def delete_scoped(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+        executor=None,
+    ) -> None:
+        executor = executor or self._get_thread_pool()
+        await self._run_in_executor(executor, self._delete_scoped, ids, owners, tenants)
 
     async def get_vectors_by_ids(
         self,

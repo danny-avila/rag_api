@@ -211,6 +211,31 @@ need them.
 Writes are scoped too: uploading under an `entity_id` the token does not permit
 is refused, so a caller cannot plant content in a knowledge base it cannot read.
 
+The file-addressed routes are scoped by the same builder, because a file id is
+caller-supplied and proves nothing about who may read it:
+
+| Route | Scope |
+| --- | --- |
+| `GET /ids` | lists only the caller's own file ids |
+| `GET /documents?ids=` | chunks the caller owns; anything else is `404` |
+| `GET /documents/{id}/context` | as above, for one file |
+| `DELETE /documents` | deletes only the caller's rows for those ids |
+
+Each accepts an optional `entity_id` query parameter, with the same rule as
+`/query`: strict tokens must list the id in their `entities` claim, legacy
+tokens are taken at face value. A file outside the scope reads as "not found"
+rather than "found but refused", so none of these routes is an existence oracle.
+
+The scope is inside the `DELETE` predicate rather than beside it. Two owners can
+hold rows under one file id — the id is chosen by whoever uploads — so a delete
+that filtered on the id alone would take both.
+
+**Upgrade note.** Files embedded under an `entity_id` (agent knowledge bases)
+are owned by that entity, so deleting or reading them needs `entity_id` on these
+routes just as querying them already does. A client that deletes an agent's file
+with a plain user token and no `entity_id` now gets `404` and leaves the chunks
+in place; pass the entity the file was uploaded under to remove them.
+
 ### Authorize before egress
 
 Rerank and embedding send text to an inference provider. That text has left the

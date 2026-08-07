@@ -55,18 +55,21 @@ def reset_request_scoped_settings():
 
 
 class DummyVectorStore:
-    def get_all_ids(self) -> list[str]:
+    def get_all_ids(self, owners, tenants) -> list[str]:
         return ["testid1", "testid2"]
 
-    def get_filtered_ids(self, ids) -> list[str]:
+    def get_filtered_ids(self, ids, owners, tenants) -> list[str]:
         dummy_ids = ["testid1", "testid2"]
         return [id for id in dummy_ids if id in ids]
 
-    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+    async def get_documents_by_ids(self, ids, owners, tenants) -> list[Document]:
         return [
             Document(page_content="Test content", metadata={"file_id": id})
             for id in ids
         ]
+
+    def delete_scoped(self, ids, owners, tenants) -> None:
+        return None
 
     def similarity_search_with_score_by_vector(self, embedding, k: int, filter: dict):
         doc = Document(

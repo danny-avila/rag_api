@@ -54,16 +54,69 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             processed_documents.append((new_document, score))
         return processed_documents
 
-    def get_all_ids(self) -> list[str]:
-        # Return unique file_id fields in self._collection
-        return self._collection.distinct("file_id")
+    @staticmethod
+    def _file_scope_query(
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> dict:
+        """``(file id, owner, tenant)`` — the predicate the file routes read by.
 
-    def get_filtered_ids(self, ids: list[str]) -> list[str]:
-        # Return unique file_id fields filtered by the provided ids
-        return self._collection.distinct("file_id", {"file_id": {"$in": ids}})
+        ``None`` in ``tenants`` matches a missing ``tenant_id``, which is
+        MongoDB's own ``$in: [null]`` semantic and the rule chunks written before
+        tenants were recorded rely on.
+        """
+        return {
+            "$and": [
+                {"file_id": {"$in": list(ids)}},
+                {"user_id": {"$in": list(owners)}},
+                {"tenant_id": {"$in": list(tenants)}},
+            ]
+        }
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        # Return documents filtered by file_id
+    def get_all_ids(
+        self, owners: Sequence[str], tenants: Sequence[Optional[str]]
+    ) -> list[str]:
+        """File ids this caller's scope holds — never the collection's whole set."""
+        allowed = list(dict.fromkeys(owners))
+        if not allowed or not tenants:
+            return []
+        return self._collection.distinct(
+            "file_id",
+            {
+                "$and": [
+                    {"user_id": {"$in": allowed}},
+                    {"tenant_id": {"$in": list(tenants)}},
+                ]
+            },
+        )
+
+    def get_filtered_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> list[str]:
+        """Which of ``ids`` exist inside ``owners`` and ``tenants``."""
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return []
+        return self._collection.distinct(
+            "file_id", self._file_scope_query(wanted, allowed, tenants)
+        )
+
+    def get_documents_by_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> list[Document]:
+        """Chunks of ``ids`` owned inside ``owners`` and ``tenants``."""
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return []
         return [
             Document(
                 page_content=doc["text"],
@@ -75,8 +128,23 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
                     "page": int(doc.get("page", 0)),
                 },
             )
-            for doc in self._collection.find({"file_id": {"$in": ids}})
+            for doc in self._collection.find(
+                self._file_scope_query(wanted, allowed, tenants)
+            )
         ]
+
+    def delete_scoped(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> None:
+        """Delete the chunks of ``ids`` that ``owners``/``tenants`` actually own."""
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return
+        self._collection.delete_many(self._file_scope_query(wanted, allowed, tenants))
 
     @staticmethod
     def _candidate_id_query(wanted: List[str]) -> dict:

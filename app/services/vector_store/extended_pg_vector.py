@@ -184,31 +184,110 @@ class ExtendedPgVector(PGVector):
 
         return super()._handle_field_filter(field, value)
 
-    def get_all_ids(self) -> list[str]:
+    def get_all_ids(
+        self, owners: Sequence[str], tenants: Sequence[Optional[str]]
+    ) -> list[str]:
+        """File ids this caller's scope holds — never the deployment's whole set."""
+        allowed = list(dict.fromkeys(owners))
+        if not allowed or not tenants:
+            return []
         with Session(self._bind) as session:
-            results = session.query(self.EmbeddingStore.custom_id).all()
-            return [result[0] for result in results if result[0] is not None]
-
-    def get_filtered_ids(self, ids: list[str]) -> list[str]:
-        with Session(self._bind) as session:
-            query = session.query(self.EmbeddingStore.custom_id).filter(
-                self.EmbeddingStore.custom_id.in_(ids)
-            )
-            results = query.all()
-            return [result[0] for result in results if result[0] is not None]
-
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        with Session(self._bind) as session:
+            collection_clause = self._collection_clause(session)
+            if collection_clause is None:
+                return []
             results = (
-                session.query(self.EmbeddingStore)
-                .filter(self.EmbeddingStore.custom_id.in_(ids))
+                session.query(self.EmbeddingStore.custom_id)
+                .filter(collection_clause)
+                .filter(self._scope_clause(allowed, tenants))
+                .distinct()
                 .all()
             )
+            return [result[0] for result in results if result[0] is not None]
+
+    def get_filtered_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> list[str]:
+        """Which of ``ids`` exist inside ``owners`` and ``tenants``.
+
+        Scope is a required argument rather than an optional one: a
+        caller-supplied file id is not an authorization, and an existence answer
+        computed without the owner and tenant predicate is an oracle over every
+        file in the deployment.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return []
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed, tenants)
+            if file_clause is None:
+                return []
+            results = (
+                session.query(self.EmbeddingStore.custom_id)
+                .filter(file_clause)
+                .distinct()
+                .all()
+            )
+            return [result[0] for result in results if result[0] is not None]
+
+    def get_documents_by_ids(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> list[Document]:
+        """Chunks of ``ids`` owned inside ``owners`` and ``tenants``.
+
+        The scope goes into the SQL predicate, so a foreign chunk is never read
+        into this process rather than being filtered out after the fact.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return []
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed, tenants)
+            if file_clause is None:
+                return []
+            results = session.query(self.EmbeddingStore).filter(file_clause).all()
             return [
                 Document(page_content=result.document, metadata=result.cmetadata or {})
                 for result in results
-                if result.custom_id in ids
             ]
+
+    def delete_scoped(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> None:
+        """Delete the chunks of ``ids`` that ``owners``/``tenants`` actually own.
+
+        A file id is caller-supplied and not unique across owners — anyone may
+        upload under a chosen ``file_id`` — so the DELETE carries the scope in
+        its own predicate rather than trusting a separate existence check.
+        """
+        self._delete_scoped(ids, owners, tenants)
+
+    def _delete_scoped(
+        self,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ) -> None:
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed or not tenants:
+            return
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed, tenants)
+            if file_clause is None:
+                return
+            session.execute(delete(self.EmbeddingStore).where(file_clause))
+            session.commit()
 
     def _delete_by_metadata(self, metadata_filter: Dict[str, Any]) -> None:
         """Delete rows in this collection that exactly match metadata values."""
@@ -269,6 +348,27 @@ class ExtendedPgVector(PGVector):
         else:
             tenant_clause = tenant_column.in_(present)
         return sqlalchemy.and_(owner_column.in_(owners), tenant_clause)
+
+    def _file_scope_clause(
+        self,
+        session: Session,
+        ids: Sequence[str],
+        owners: Sequence[str],
+        tenants: Sequence[Optional[str]],
+    ):
+        """``(collection, file id, owner, tenant)`` for the file-addressed routes.
+
+        ``None`` means this store's collection does not exist yet, which is
+        indistinguishable from it holding no rows.
+        """
+        collection_clause = self._collection_clause(session)
+        if collection_clause is None:
+            return None
+        return sqlalchemy.and_(
+            collection_clause,
+            self.EmbeddingStore.custom_id.in_(list(ids)),
+            self._scope_clause(list(owners), tenants),
+        )
 
     def probe_candidate_ids(
         self,

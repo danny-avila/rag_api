@@ -25,8 +25,8 @@ async def test_get_all_ids_dispatches_to_super(store):
     with patch.object(
         ExtendedPgVector, "get_all_ids", return_value=["id1", "id2"]
     ) as mock:
-        result = await store.get_all_ids()
-    mock.assert_called_once_with()
+        result = await store.get_all_ids(["user-1"], ["__BASE__"])
+    mock.assert_called_once_with(["user-1"], ["__BASE__"])
     assert result == ["id1", "id2"]
 
 
@@ -35,8 +35,8 @@ async def test_get_filtered_ids_passes_ids(store):
     with patch.object(
         ExtendedPgVector, "get_filtered_ids", return_value=["id1"]
     ) as mock:
-        result = await store.get_filtered_ids(["id1", "id2"])
-    mock.assert_called_once_with(["id1", "id2"])
+        result = await store.get_filtered_ids(["id1", "id2"], ["user-1"], ["__BASE__"])
+    mock.assert_called_once_with(["id1", "id2"], ["user-1"], ["__BASE__"])
     assert result == ["id1"]
 
 
@@ -46,8 +46,8 @@ async def test_get_documents_by_ids_passes_ids(store):
     with patch.object(
         ExtendedPgVector, "get_documents_by_ids", return_value=docs
     ) as mock:
-        result = await store.get_documents_by_ids(["id1"])
-    mock.assert_called_once_with(["id1"])
+        result = await store.get_documents_by_ids(["id1"], ["user-1"], ["__BASE__"])
+    mock.assert_called_once_with(["id1"], ["user-1"], ["__BASE__"])
     assert result == docs
 
 
@@ -56,6 +56,13 @@ async def test_delete_passes_args(store):
     with patch.object(ExtendedPgVector, "_delete_multiple") as mock:
         await store.delete(ids=["id1"], collection_only=True)
     mock.assert_called_once_with(["id1"], True)
+
+
+@pytest.mark.asyncio
+async def test_delete_scoped_passes_scope(store):
+    with patch.object(ExtendedPgVector, "_delete_scoped") as mock:
+        await store.delete_scoped(["id1"], ["user-1"], ["__BASE__"])
+    mock.assert_called_once_with(["id1"], ["user-1"], ["__BASE__"])
 
 
 @pytest.mark.asyncio
@@ -95,9 +102,9 @@ async def test_aadd_documents_passes_args(store):
 async def test_run_in_executor_converts_stop_iteration(store):
     """StopIteration can't be set on an asyncio.Future — verify it becomes RuntimeError."""
 
-    def raises_stop():
+    def raises_stop(*args):
         raise StopIteration("exhausted")
 
     with patch.object(ExtendedPgVector, "get_all_ids", side_effect=raises_stop):
         with pytest.raises(RuntimeError):
-            await store.get_all_ids()
+            await store.get_all_ids(["user-1"], ["__BASE__"])

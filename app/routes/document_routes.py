@@ -415,12 +415,17 @@ async def cleanup_temp_file_async(file_path: str) -> None:
 
 
 @router.get("/ids")
-async def get_all_ids(request: Request):
+async def get_all_ids(request: Request, entity_id: Optional[str] = Query(None)):
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.get_all_ids(executor=request.app.state.thread_pool)
+            ids = await vector_store.get_all_ids(
+                list(scope.owners),
+                scope.tenant_values(),
+                executor=request.app.state.thread_pool,
+            )
         else:
-            ids = vector_store.get_all_ids()
+            ids = vector_store.get_all_ids(list(scope.owners), scope.tenant_values())
 
         return list(set(ids))
     except HTTPException as http_exc:
@@ -457,18 +462,32 @@ async def health_check():
 
 
 @router.get("/documents", response_model=list[DocumentResponse])
-async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
+async def get_documents_by_ids(
+    request: Request,
+    ids: list[str] = Query(...),
+    entity_id: Optional[str] = Query(None),
+):
+    """Chunks of the named files, restricted to the caller's scope.
+
+    A file id is caller-supplied and proves nothing, so the owner and tenant
+    predicate goes into the store query alongside it. A file outside the scope
+    is "not found" rather than "found but refused": distinguishing the two would
+    turn this route into an existence oracle over the whole deployment.
+    """
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners, tenants)
+            documents = vector_store.get_documents_by_ids(ids, owners, tenants)
 
         # Ensure all requested ids exist
         if not all(id in existing_ids for id in ids):
@@ -499,18 +518,34 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
 
 
 @router.delete("/documents")
-async def delete_documents(request: Request, document_ids: List[str] = Body(...)):
+async def delete_documents(
+    request: Request,
+    document_ids: List[str] = Body(...),
+    entity_id: Optional[str] = Query(None),
+):
+    """Delete the named files' chunks, restricted to the caller's scope.
+
+    The scope is part of the DELETE predicate, not a check performed beside it:
+    a file id is chosen by whoever uploaded, so two owners can hold rows under
+    the same id and only the caller's may be removed.
+    """
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                document_ids, executor=request.app.state.thread_pool
+                document_ids, owners, tenants, executor=request.app.state.thread_pool
             )
-            await vector_store.delete(
-                ids=document_ids, executor=request.app.state.thread_pool
+            await vector_store.delete_scoped(
+                document_ids,
+                owners,
+                tenants,
+                executor=request.app.state.thread_pool,
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(document_ids)
-            vector_store.delete(ids=document_ids)
+            existing_ids = vector_store.get_filtered_ids(document_ids, owners, tenants)
+            vector_store.delete_scoped(document_ids, owners, tenants)
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
@@ -924,8 +959,16 @@ async def _process_documents_batched_sync(
             ):  # any batch succeeded (i.e., any chunks for this file were inserted)
                 logger.warning("Rolling back file %s due to batch failure", file_id)
                 try:
+                    # Scoped to the writer: `file_id` is caller-supplied, so an
+                    # unscoped rollback would delete another owner's chunks that
+                    # happen to sit under the same id.
+                    owner = documents[0].metadata.get("user_id")
+                    tenant = documents[0].metadata.get("tenant_id")
                     await loop.run_in_executor(
-                        executor, lambda: vector_store.delete(ids=[file_id])
+                        executor,
+                        lambda: vector_store.delete_scoped(
+                            [file_id], [owner], [tenant]
+                        ),
                     )
                     logger.info("Rollback completed for file %s", file_id)
                 except Exception as rollback_error:
@@ -1319,19 +1362,29 @@ async def embed_file(
 
 
 @router.get("/documents/{id}/context")
-async def load_document_context(request: Request, id: str):
+async def load_document_context(
+    request: Request, id: str, entity_id: Optional[str] = Query(None)
+):
+    """Full text of one file, restricted to the caller's scope.
+
+    This route returns raw document content, so the owner and tenant predicate
+    is part of the store query exactly as it is for ``/query``.
+    """
     ids = [id]
+    scope = resolve_scope(request, entity_id)
+    owners = list(scope.owners)
+    tenants = scope.tenant_values()
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners, tenants, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners, tenants)
+            documents = vector_store.get_documents_by_ids(ids, owners, tenants)
 
         # Ensure the requested id exists
         if not all(id in existing_ids for id in ids):
