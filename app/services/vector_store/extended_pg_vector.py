@@ -1,7 +1,8 @@
 import os
 import time
 import logging
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, Any, Dict, List, Sequence, Union
+import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -217,6 +218,55 @@ class ExtendedPgVector(PGVector):
 
             session.execute(stmt)
             session.commit()
+
+    def get_vectors_by_ids(
+        self, ids: Sequence[str], owners: Sequence[str]
+    ) -> Dict[str, List[float]]:
+        """Stored chunk vectors for ``ids``, restricted to ``owners``.
+
+        A candidate id resolves against the row's ``uuid`` or the chunk
+        ``digest`` recorded in metadata — the two per-chunk handles a caller can
+        actually hold (``custom_id`` is the file id and is shared by every chunk
+        of a file, so it identifies no single vector).
+
+        Ownership is part of the SQL predicate: a foreign chunk is never
+        fetched, so it can never be scored or counted.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return {}
+
+        with Session(self._bind) as session:
+            rows = (
+                session.query(
+                    self.EmbeddingStore.uuid,
+                    self.EmbeddingStore.cmetadata,
+                    self.EmbeddingStore.embedding,
+                )
+                .filter(
+                    sqlalchemy.or_(
+                        sqlalchemy.cast(
+                            self.EmbeddingStore.uuid, sqlalchemy.String
+                        ).in_(wanted),
+                        self.EmbeddingStore.cmetadata["digest"].astext.in_(wanted),
+                    )
+                )
+                .filter(self.EmbeddingStore.cmetadata["user_id"].astext.in_(allowed))
+                .order_by(self.EmbeddingStore.uuid)
+                .all()
+            )
+
+        requested = set(wanted)
+        vectors: Dict[str, List[float]] = {}
+        for row_uuid, metadata, embedding in rows:
+            if embedding is None:
+                continue
+            vector = [float(component) for component in embedding]
+            for key in (str(row_uuid), (metadata or {}).get("digest")):
+                if key in requested and key not in vectors:
+                    vectors[key] = vector
+        return vectors
 
     def _delete_multiple(
         self, ids: Optional[list[str]] = None, collection_only: bool = False

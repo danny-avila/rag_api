@@ -22,10 +22,15 @@ from app.config import (
     logger,
     vector_store,
 )
+from app.auth import validate_startup_config
 from app.middleware import security_middleware
-from app.routes import document_routes, pgvector_routes
+from app.routes import document_routes, pgvector_routes, search_routes
 from app.services.database import PSQLDatabase, ensure_vector_indexes
 from app.services.vector_store.factory import close_vector_store_connections
+
+# Fail closed before the app exists: a deployment with broken signing
+# configuration must not reach a state where it serves requests.
+auth_settings = validate_startup_config()
 
 
 @asynccontextmanager
@@ -90,6 +95,7 @@ app.state.PDF_EXTRACT_IMAGES = PDF_EXTRACT_IMAGES
 
 # Include routers
 app.include_router(document_routes.router)
+app.include_router(search_routes.router)
 if debug_mode:
     app.include_router(router=pgvector_routes.router)
 

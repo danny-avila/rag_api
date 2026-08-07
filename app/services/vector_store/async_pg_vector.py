@@ -58,6 +58,14 @@ class AsyncPgVector(ExtendedPgVector):
         executor = executor or self._get_thread_pool()
         return await self._run_in_executor(executor, super().get_documents_by_ids, ids)
 
+    async def get_vectors_by_ids(
+        self, ids: List[str], owners: List[str], executor=None
+    ) -> Dict[str, List[float]]:
+        executor = executor or self._get_thread_pool()
+        return await self._run_in_executor(
+            executor, super().get_vectors_by_ids, ids, owners
+        )
+
     async def delete(
         self,
         ids: Optional[list[str]] = None,

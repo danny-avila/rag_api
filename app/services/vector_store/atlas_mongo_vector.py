@@ -78,6 +78,43 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             for doc in self._collection.find({"file_id": {"$in": ids}})
         ]
 
+    def get_vectors_by_ids(
+        self, ids: List[str], owners: List[str]
+    ) -> dict[str, List[float]]:
+        """Stored chunk vectors for ``ids``, restricted to ``owners``.
+
+        Mirrors the pgvector resolution: a candidate id matches the document
+        ``_id`` or its chunk ``digest``, and ownership is part of the query
+        predicate rather than a post-filter.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return {}
+
+        embedding_key = getattr(self, "_embedding_key", "embedding")
+        cursor = self._collection.find(
+            {
+                "$and": [
+                    {"$or": [{"_id": {"$in": wanted}}, {"digest": {"$in": wanted}}]},
+                    {"user_id": {"$in": allowed}},
+                ]
+            },
+            {"_id": 1, "digest": 1, embedding_key: 1},
+        ).sort("_id", 1)
+
+        requested = set(wanted)
+        vectors: dict[str, List[float]] = {}
+        for doc in cursor:
+            embedding = doc.get(embedding_key)
+            if not embedding:
+                continue
+            vector = [float(component) for component in embedding]
+            for key in (doc.get("_id"), doc.get("digest")):
+                if key in requested and key not in vectors:
+                    vectors[key] = vector
+        return vectors
+
     def delete(self, ids: Optional[list[str]] = None) -> None:
         # Delete documents by file_id
         if ids is not None:

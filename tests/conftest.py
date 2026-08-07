@@ -1,6 +1,8 @@
 # tests/conftest.py
 import os
 
+import pytest
+
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 
 # Set environment variables early so config picks up test settings.
@@ -24,6 +26,22 @@ AsyncPgVector.__post_init__ = dummy_post_init
 PGVector.__post_init__ = dummy_post_init
 
 from langchain_core.documents import Document
+
+from app import auth
+from app.services import ratelimit
+
+
+@pytest.fixture(autouse=True)
+def reset_request_scoped_settings():
+    """Auth and rate-limit settings are read once and cached, as in production.
+
+    Tests mutate the environment, so the cache is dropped around every test.
+    """
+    auth.reset_settings()
+    ratelimit.reset()
+    yield
+    auth.reset_settings()
+    ratelimit.reset()
 
 
 class DummyVectorStore:

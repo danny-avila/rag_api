@@ -25,7 +25,6 @@ from fastapi import (
 )
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from functools import lru_cache
 
 if TYPE_CHECKING:
     from app.services.vector_store.async_pg_vector import AsyncPgVector
@@ -89,6 +88,7 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
 )
+from app.services import embedding as embedding_service
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.document_loader import (
     get_loader,
@@ -97,6 +97,7 @@ from app.utils.document_loader import (
     cleanup_temp_encoding_file,
 )
 from app.utils.health import is_health_ok
+from app.utils.text import fingerprint
 
 router = APIRouter()
 
@@ -180,6 +181,44 @@ def _order_documents_by_chunk_index(documents: List[Document]) -> List[Document]
     for attempt_key in sorted(attempt_groups):
         ordered_documents.extend(order_group(attempt_groups[attempt_key]))
     return ordered_documents
+
+
+PUBLIC_OWNER = "public"
+
+
+def resolve_owner_scope(request: Request, entity_id: Optional[str] = None) -> List[str]:
+    """Owners whose chunks the caller is allowed to see.
+
+    The result goes into the vector-store predicate *before* ranking. Nothing
+    downstream re-derives authorization from what the search returned — the old
+    "inspect ``documents[0]``" check authorized an entire result set from a
+    single hit and could not see the other hits at all.
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        # No signing key configured anywhere: preserve the unauthenticated
+        # deployment's single-owner behaviour rather than opening the store.
+        return [entity_id] if entity_id else [PUBLIC_OWNER]
+
+    owners = {principal.subject}
+    if entity_id:
+        if not principal.permits_entity(entity_id):
+            logger.warning(
+                "Denied entity access | subject=%s entity=%s",
+                principal.subject,
+                entity_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized for the requested entity",
+            )
+        owners.add(entity_id)
+    return sorted(owners)
+
+
+def scoped_filter(file_clause: dict, owners: List[str]) -> dict:
+    """Combine the file predicate with the owner predicate for the store query."""
+    return {"$and": [file_clause, {"user_id": {"$in": owners}}]}
 
 
 def calculate_num_batches(total: int, batch_size: int) -> int:
@@ -511,10 +550,9 @@ async def delete_documents(request: Request, document_ids: List[str] = Body(...)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Cache the embedding function with LRU cache
-@lru_cache(maxsize=128)
-def get_cached_query_embedding(query: str):
-    return vector_store.embedding_function.embed_query(query)
+# Shared with POST /v1/rerank so a rerank following a retrieval on the same
+# query string pays no query inference at all.
+get_cached_query_embedding = embedding_service.get_cached_query_embedding
 
 
 @router.post("/query")
@@ -522,14 +560,8 @@ async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
 ):
-    if not hasattr(request.state, "user"):
-        user_authorized = body.entity_id if body.entity_id else "public"
-    else:
-        user_authorized = (
-            body.entity_id if body.entity_id else request.state.user.get("id")
-        )
-
-    authorized_documents = []
+    owners = resolve_owner_scope(request, body.entity_id)
+    query_filter = scoped_filter({"file_id": {"$eq": body.file_id}}, owners)
 
     try:
         embedding = get_cached_query_embedding(body.query)
@@ -538,46 +570,15 @@ async def query_embeddings_by_file_id(
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$eq": body.file_id}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
+                embedding, k=body.k, filter=query_filter
             )
 
-        documents = _apply_distance_threshold(documents)
-
-        if not documents:
-            return authorized_documents
-
-        document, score = documents[0]
-        doc_metadata = document.metadata
-        doc_user_id = doc_metadata.get("user_id")
-
-        if doc_user_id is None or doc_user_id == user_authorized:
-            authorized_documents = documents
-        else:
-            # If using entity_id and access denied, try again with user's actual ID
-            if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
-                if doc_user_id == user_authorized:
-                    authorized_documents = documents
-                else:
-                    if body.entity_id == doc_user_id:
-                        logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
-                        )
-                    else:
-                        logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
-                        )
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
-                )
-
-        return authorized_documents
+        return _apply_distance_threshold(documents)
 
     except HTTPException as http_exc:
         logger.error(
@@ -590,7 +591,7 @@ async def query_embeddings_by_file_id(
         logger.error(
             "Error in query embeddings | File ID: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_id,
-            body.query,
+            fingerprint(body.query),
             str(e),
             traceback.format_exc(),
         )
@@ -1464,21 +1465,25 @@ async def embed_file_upload(
 
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody):
+    owners = resolve_owner_scope(request, body.entity_id)
+    query_filter = scoped_filter({"file_id": {"$in": body.file_ids}}, owners)
+
     try:
         # Get the embedding of the query text
         embedding = get_cached_query_embedding(body.query)
 
-        # Perform similarity search with the query embedding and filter by the file_ids in metadata
+        # Perform similarity search with the query embedding, filtered by the
+        # requested file ids *and* the owners the caller is authorized for.
         if isinstance(vector_store, AsyncPgVector):
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$in": body.file_ids}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter=query_filter
             )
 
         documents = _apply_distance_threshold(documents)
@@ -1501,7 +1506,7 @@ async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody
         logger.error(
             "Error in query multiple embeddings | File IDs: %s | Query: %s | Error: %s | Traceback: %s",
             body.file_ids,
-            body.query,
+            fingerprint(body.query),
             str(e),
             traceback.format_exc(),
         )
