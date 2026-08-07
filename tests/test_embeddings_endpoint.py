@@ -465,3 +465,91 @@ class TestTaskPrefixesCountTowardTheLimit:
     def test_an_unprefixed_space_still_accepts_the_full_payload(self, backend):
         response = post([{"id": "a", "text": "x" * MAX_EMBEDDING_CHARS}])
         assert response.status_code == 200
+
+
+class FixedResponseClient:
+    """A backend that answers with whatever payload the test hands it."""
+
+    def __init__(self, payload, dimensions=8):
+        self.payload = payload
+        self.dimensions = dimensions
+
+    def embed_documents(self, texts):
+        return self.payload
+
+    def embed_query(self, text):
+        return self.payload[0]
+
+
+class TestMalformedBackendPayloadsStaySubstitutionLocked:
+    """Reading the response is as much "the backend" as calling it.
+
+    A payload that is not a list of correctly-sized numbers used to raise
+    ``TypeError`` from inside ``_finalize`` — outside the guarded call — so the
+    route's ``SpaceBackendError`` handler never saw it and the caller got an
+    unhandled 500 instead of the documented sanitized 503.
+    """
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param(None, id="null-response"),
+            pytest.param("a vector", id="string-response"),
+            pytest.param({"data": []}, id="object-response"),
+            pytest.param([None], id="null-vector"),
+            pytest.param([3.5], id="scalar-vector"),
+            pytest.param(["12345678"], id="string-vector"),
+            pytest.param([["x"] * 8], id="non-numeric-components"),
+            pytest.param([[True] * 8], id="boolean-components"),
+            pytest.param([[1.0] * 7 + [None]], id="one-null-component"),
+            pytest.param([[float("nan")] * 8], id="nan-components"),
+            pytest.param([[float("inf")] * 8], id="infinite-components"),
+        ],
+    )
+    def test_a_malformed_payload_is_a_sanitized_503(
+        self, backend, monkeypatch, payload
+    ):
+        install_fake_space(monkeypatch, FixedResponseClient(payload))
+        response = post([{"id": "a", "text": "alpha"}])
+        assert response.status_code == 503
+        assert response.json()["detail"] == f"Embedding space '{SPACE}' is unavailable"
+
+    def test_a_malformed_payload_is_a_backend_error_at_the_space(self, monkeypatch):
+        space = install_fake_space(monkeypatch, FixedResponseClient(None))
+        with pytest.raises(space_module.SpaceBackendError):
+            space.embed(["alpha"])
+
+    def test_non_finite_components_are_refused_rather_than_normalized(
+        self, monkeypatch
+    ):
+        """Normalization hides them: inf/inf is NaN and poisons every score."""
+        space = install_fake_space(
+            monkeypatch, FixedResponseClient([[float("inf")] * 8])
+        )
+        with pytest.raises(space_module.SpaceBackendError):
+            space.embed(["alpha"])
+
+    def test_a_malformed_payload_leaks_nothing_to_the_logs(
+        self, backend, caplog, monkeypatch
+    ):
+        install_fake_space(monkeypatch, FixedResponseClient(["provider-echo-of-input"]))
+        with caplog.at_level(logging.ERROR):
+            assert post([{"id": "a", "text": "alpha"}]).status_code == 503
+        assert "provider-echo-of-input" not in caplog.text
+        assert "Traceback" not in caplog.text
+        assert "SpaceBackendError" in caplog.text
+
+    def test_integral_components_are_still_accepted(self, backend, monkeypatch):
+        """A backend that answers 0/1 exactly is well-formed, not malformed."""
+        install_fake_space(monkeypatch, FixedResponseClient([[1, 0, 0, 0, 0, 0, 0, 0]]))
+        response = post([{"id": "a", "text": "alpha"}])
+        assert response.status_code == 200
+        assert response.json()["items"][0]["embedding"] == [1.0] + [0.0] * 7
+
+    def test_an_unnormalized_space_checks_its_components_too(self, monkeypatch):
+        """Without normalization nothing else would ever touch the components."""
+        space = install_fake_space(
+            monkeypatch, FixedResponseClient([["x"] * 8]), normalized=False
+        )
+        with pytest.raises(space_module.SpaceBackendError):
+            space.embed(["alpha"])

@@ -13,6 +13,7 @@ have to be rebuilt to match.
 import math
 import os
 from dataclasses import dataclass
+from numbers import Real
 from typing import Callable, Dict, List, Optional
 
 from app.config import (
@@ -53,6 +54,25 @@ class SpaceSpec:
         return self.document_prefix
 
 
+def _finite_component(component: object) -> float:
+    """One vector component, or the reason it is not one.
+
+    ``bool`` is excluded deliberately: it is a ``Real`` in Python, and a payload
+    of ``true``/``false`` is a malformed vector rather than a vector of ones and
+    zeroes. NaN and infinity are rejected here because they survive
+    normalization and poison every cosine score computed against them.
+    """
+    if isinstance(component, bool) or not isinstance(component, Real):
+        raise SpaceBackendError(
+            f"Backend returned a non-numeric vector component "
+            f"({type(component).__name__})"
+        )
+    value = float(component)
+    if not math.isfinite(value):
+        raise SpaceBackendError("Backend returned a non-finite vector component")
+    return value
+
+
 def l2_normalize(vector: List[float]) -> List[float]:
     norm = math.sqrt(sum(component * component for component in vector))
     if norm == 0.0:
@@ -80,22 +100,39 @@ class EmbeddingSpace:
                 ) from exc
         return self._client
 
-    def _finalize(self, vectors: List[List[float]], expected: int) -> List[List[float]]:
+    def _finalize(self, vectors: object, expected: int) -> List[List[float]]:
+        """Check the backend's answer against the space contract.
+
+        Everything here is a statement about a payload this process did not
+        author, so every rejection is a :class:`SpaceBackendError` — including
+        the shape violations that would otherwise surface as ``TypeError``. The
+        route translates that single class into the documented 503; anything
+        else escapes as an unhandled 500 and breaks the substitution lock.
+        """
+        if not isinstance(vectors, (list, tuple)):
+            raise SpaceBackendError(
+                f"Backend returned {type(vectors).__name__} where "
+                f"{expected} vectors were expected"
+            )
         if len(vectors) != expected:
             raise SpaceBackendError(
                 f"Backend returned {len(vectors)} vectors for {expected} inputs"
             )
-        finalized = []
-        for vector in vectors:
-            if len(vector) != self.spec.dimensions:
-                raise SpaceBackendError(
-                    f"Backend returned {len(vector)} dimensions, "
-                    f"space '{self.spec.name}' is locked to {self.spec.dimensions}"
-                )
-            finalized.append(
-                l2_normalize(vector) if self.spec.normalized else list(vector)
+        return [self._finalize_vector(vector) for vector in vectors]
+
+    def _finalize_vector(self, vector: object) -> List[float]:
+        if not isinstance(vector, (list, tuple)):
+            raise SpaceBackendError(
+                f"Backend returned a {type(vector).__name__} where a vector "
+                f"of {self.spec.dimensions} components was expected"
             )
-        return finalized
+        if len(vector) != self.spec.dimensions:
+            raise SpaceBackendError(
+                f"Backend returned {len(vector)} dimensions, "
+                f"space '{self.spec.name}' is locked to {self.spec.dimensions}"
+            )
+        components = [_finite_component(component) for component in vector]
+        return l2_normalize(components) if self.spec.normalized else components
 
     def _encoder(self, input_type: str) -> Callable[[List[str]], List[List[float]]]:
         """The batch encoder this space uses for ``input_type``.
@@ -126,13 +163,16 @@ class EmbeddingSpace:
         prepared = [prefix + text for text in texts] if prefix else list(texts)
         try:
             vectors = encoder(prepared)
+            return self._finalize(vectors, len(texts))
         except SpaceBackendError:
             raise
         except Exception as exc:
+            # Reading the response is as much "the backend" as the call itself:
+            # a malformed payload raises TypeError or ValueError from inside
+            # _finalize, and the route only knows how to sanitize one class.
             raise SpaceBackendError(
                 f"Embedding backend for space '{self.spec.name}' failed: {exc}"
             ) from exc
-        return self._finalize(vectors, len(texts))
 
     def payload_characters(self, texts: List[str], input_type: str) -> int:
         """Characters :meth:`embed` would actually send for ``texts``.
