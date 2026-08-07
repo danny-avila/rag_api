@@ -1,9 +1,13 @@
 """Embedding spaces served by ``POST /v1/embeddings``.
 
-A space is a locked tuple of (model, dimensions, normalization). ``chat-v1`` is
-substitution-locked: if its backend is unavailable, or returns vectors of the
-wrong width, the request fails with 503. It never silently falls back to
-another model, another dimensionality, or the file-search space.
+A space is a locked tuple of (model, dimensions, normalization, task prefixes).
+``chat-v1`` is substitution-locked: if its backend is unavailable, or returns
+vectors of the wrong width, the request fails with 503. It never silently falls
+back to another model, another dimensionality, or the file-search space.
+
+The task prefixes belong to that tuple because they change the vectors a model
+produces: editing one is a space change, not a tuning knob, and stored vectors
+have to be rebuilt to match.
 """
 
 import math
@@ -19,6 +23,10 @@ from app.config import (
 )
 
 
+INPUT_TYPE_QUERY = "query"
+INPUT_TYPE_DOCUMENT = "document"
+
+
 class SpaceBackendError(Exception):
     """The backend serving a space failed or answered off-contract."""
 
@@ -30,6 +38,19 @@ class SpaceSpec:
     dimensions: int
     normalized: bool = True
     dtype: str = "float32"
+    query_prefix: str = ""
+    document_prefix: str = ""
+
+    def prefix_for(self, input_type: str) -> str:
+        """The task prefix this space's model expects for ``input_type``.
+
+        Asymmetric embedding models — qwen3-embedding among them — encode a
+        query and a passage differently, usually through an instruction prefix.
+        Both prefixes default to empty, which is the symmetric case.
+        """
+        if input_type == INPUT_TYPE_QUERY:
+            return self.query_prefix
+        return self.document_prefix
 
 
 def l2_normalize(vector: List[float]) -> List[float]:
@@ -76,10 +97,35 @@ class EmbeddingSpace:
             )
         return finalized
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    def _encoder(self, input_type: str) -> Callable[[List[str]], List[List[float]]]:
+        """The batch encoder this space uses for ``input_type``.
+
+        A backend that exposes a distinct batch query encoder gets to serve
+        queries with it; otherwise the task prefix is what carries the
+        distinction, and one batched call still serves the whole request.
+        """
         client = self._client_or_raise()
+        if input_type == INPUT_TYPE_QUERY:
+            query_encoder = getattr(client, "embed_queries", None)
+            if callable(query_encoder):
+                return query_encoder
+        return client.embed_documents
+
+    def embed(
+        self, texts: List[str], input_type: str = INPUT_TYPE_DOCUMENT
+    ) -> List[List[float]]:
+        """Embed ``texts`` the way this space encodes ``input_type``.
+
+        Routing a query through the passage path returns a passage vector, which
+        an asymmetric model scores against stored passages incorrectly. The
+        caller's declared input type therefore selects the encoder and the task
+        prefix rather than being recorded and ignored.
+        """
+        encoder = self._encoder(input_type)
+        prefix = self.spec.prefix_for(input_type)
+        prepared = [prefix + text for text in texts] if prefix else list(texts)
         try:
-            vectors = client.embed_documents(texts)
+            vectors = encoder(prepared)
         except SpaceBackendError:
             raise
         except Exception as exc:
@@ -88,8 +134,11 @@ class EmbeddingSpace:
             ) from exc
         return self._finalize(vectors, len(texts))
 
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self.embed(texts, INPUT_TYPE_DOCUMENT)
+
     def embed_query(self, text: str) -> List[float]:
-        return self.embed_documents([text])[0]
+        return self.embed([text], INPUT_TYPE_QUERY)[0]
 
 
 def _int_env(name: str, default: int) -> int:
@@ -122,6 +171,8 @@ CHAT_SPACE_SPEC = SpaceSpec(
     dimensions=_int_env("RAG_CHAT_EMBEDDING_DIMENSIONS", 1024),
     normalized=True,
     dtype="float32",
+    query_prefix=os.getenv("RAG_CHAT_EMBEDDING_QUERY_PREFIX", ""),
+    document_prefix=os.getenv("RAG_CHAT_EMBEDDING_DOCUMENT_PREFIX", ""),
 )
 
 _spaces: Dict[str, EmbeddingSpace] = {
