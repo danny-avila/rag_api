@@ -4,8 +4,13 @@
 ``DELETE /documents`` addressed the store by caller-supplied file id alone. A
 file id is not an authorization: anyone who learns one — or simply lists them
 from ``/ids`` — could read another owner's document text or delete their chunks.
-The strict tokens this release introduces made that reachable from a service
-credential holding nothing but ``rag:embed``.
+The strict tokens this release introduces made that reachable from any service
+credential at all.
+
+Those routes now carry their own scope, ``rag:documents``, so a token minted to
+delete a file also has to be minted for the document plane — the inference
+scopes buy nothing here, and this scope buys no inference. The two planes are
+tested against each other in :class:`TestThePlanesAreSeparable`.
 
 The store below evaluates the owner and tenant predicate the route actually
 passes, and answers unscoped when it is passed none. A route that stops putting
@@ -21,8 +26,10 @@ from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 
 from app import auth
+from app.services import space as space_module
 from app.services.vector_store.async_pg_vector import AsyncPgVector
 from main import app
+from tests.fakes import FakeEmbeddingClient, install_fake_space
 from tests.tokens import APP_SECRET, RAG_SECRET, bearer, legacy_token, strict_token
 
 client = TestClient(app)
@@ -105,9 +112,9 @@ def strict_auth(monkeypatch):
     auth.reset_settings()
 
 
-def embed_only_token(subject: str = "attacker", **kwargs) -> str:
-    """The credential the finding is about: a strict token holding only rag:embed."""
-    return strict_token(subject=subject, scopes=("rag:embed",), **kwargs)
+def documents_token(subject: str = "attacker", **kwargs) -> str:
+    """The credential these routes now require: strict, ``rag:documents`` alone."""
+    return strict_token(subject=subject, scopes=("rag:documents",), **kwargs)
 
 
 def file_ids(rows: List[Dict[str, str]]) -> List[str]:
@@ -135,32 +142,36 @@ def delete_documents(ids, token, entity_id=None):
     return client.request("DELETE", url, json=ids, headers=bearer(token))
 
 
-class TestAnEmbedOnlyTokenCannotReadByFileId:
-    """The credential in the finding: strict, RAG-signed, ``rag:embed`` alone."""
+class TestADocumentTokenCannotReadByFileIdAlone:
+    """The credential in the finding: strict, RAG-signed, scoped to documents.
+
+    Holding the document scope is permission to address this plane, never
+    permission to address another owner's rows inside it.
+    """
 
     def test_get_documents_refuses_a_foreign_file(self, rows, strict_auth):
-        response = get_documents(["file-foreign"], embed_only_token())
+        response = get_documents(["file-foreign"], documents_token())
         assert response.status_code == 404
         assert "file-foreign content" not in response.text
 
     def test_get_context_refuses_a_foreign_file(self, rows, strict_auth):
-        response = get_context("file-foreign", embed_only_token())
+        response = get_context("file-foreign", documents_token())
         assert response.status_code == 404
         assert "file-foreign content" not in response.text
 
     def test_delete_refuses_a_foreign_file(self, rows, strict_auth):
-        response = delete_documents(["file-foreign"], embed_only_token())
+        response = delete_documents(["file-foreign"], documents_token())
         assert response.status_code == 404
         assert "file-foreign" in file_ids(rows)
 
     def test_ids_does_not_enumerate_the_deployment(self, rows, strict_auth):
-        response = client.get("/ids", headers=bearer(embed_only_token()))
+        response = client.get("/ids", headers=bearer(documents_token()))
         assert response.status_code == 200
         assert response.json() == []
 
     def test_a_mixed_request_leaks_nothing(self, rows, strict_auth):
         """One readable id alongside a foreign one must not carry it along."""
-        token = embed_only_token(subject="user-1")
+        token = documents_token(subject="user-1")
         response = get_documents(["file-owned", "file-foreign"], token)
         assert response.status_code == 404
         assert "file-foreign content" not in response.text
@@ -185,24 +196,22 @@ class TestLegacyTokensAreScopedToo:
 
 class TestTheOwnersOwnFilesStillWork:
     def test_get_documents_returns_the_callers_file(self, rows, strict_auth):
-        response = get_documents(["file-owned"], embed_only_token(subject="user-1"))
+        response = get_documents(["file-owned"], documents_token(subject="user-1"))
         assert response.status_code == 200
         assert response.json()[0]["page_content"] == "file-owned content"
 
     def test_get_context_returns_the_callers_file(self, rows, strict_auth):
-        response = get_context("file-owned", embed_only_token(subject="user-1"))
+        response = get_context("file-owned", documents_token(subject="user-1"))
         assert response.status_code == 200
         assert "file-owned content" in response.text
 
     def test_delete_removes_the_callers_file(self, rows, strict_auth):
-        response = delete_documents(["file-owned"], embed_only_token(subject="user-1"))
+        response = delete_documents(["file-owned"], documents_token(subject="user-1"))
         assert response.status_code == 200
         assert "file-owned" not in file_ids(rows)
 
     def test_ids_lists_the_callers_files(self, rows, strict_auth):
-        response = client.get(
-            "/ids", headers=bearer(embed_only_token(subject="user-1"))
-        )
+        response = client.get("/ids", headers=bearer(documents_token(subject="user-1")))
         assert sorted(response.json()) == [
             "file-collided",
             "file-owned",
@@ -212,7 +221,7 @@ class TestTheOwnersOwnFilesStillWork:
     def test_chunks_written_before_tenants_were_recorded_stay_readable(
         self, rows, strict_auth
     ):
-        response = get_documents(["file-untagged"], embed_only_token(subject="user-1"))
+        response = get_documents(["file-untagged"], documents_token(subject="user-1"))
         assert response.status_code == 200
 
 
@@ -221,7 +230,7 @@ class TestScopeIsPartOfTheDeletePredicate:
 
     def test_only_the_callers_rows_are_removed(self, rows, strict_auth):
         response = delete_documents(
-            ["file-collided"], embed_only_token(subject="user-1")
+            ["file-collided"], documents_token(subject="user-1")
         )
         assert response.status_code == 200
         survivors = [row for row in rows if row["file_id"] == "file-collided"]
@@ -229,22 +238,22 @@ class TestScopeIsPartOfTheDeletePredicate:
 
     def test_a_foreign_delete_removes_nothing_at_all(self, rows, strict_auth):
         before = list(rows)
-        assert delete_documents(["file-foreign"], embed_only_token()).status_code == 404
+        assert delete_documents(["file-foreign"], documents_token()).status_code == 404
         assert rows == before
 
 
 class TestTenantSeparation:
     def test_a_file_in_another_tenant_is_not_readable(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", tenant="tenant-a")
+        token = documents_token(subject="user-1", tenant="tenant-a")
         assert get_documents(["file-other-tenant"], token).status_code == 404
 
     def test_a_file_in_another_tenant_is_not_deletable(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", tenant="tenant-a")
+        token = documents_token(subject="user-1", tenant="tenant-a")
         assert delete_documents(["file-other-tenant"], token).status_code == 404
         assert "file-other-tenant" in file_ids(rows)
 
     def test_the_owning_tenant_still_reads_it(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", tenant="tenant-b")
+        token = documents_token(subject="user-1", tenant="tenant-b")
         assert get_documents(["file-other-tenant"], token).status_code == 200
 
 
@@ -252,24 +261,24 @@ class TestEntityScopedFiles:
     """Agent knowledge-base files are reachable exactly as they are on /query."""
 
     def test_a_permitted_entity_widens_the_scope(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", entities=("agent-7",))
+        token = documents_token(subject="user-1", entities=("agent-7",))
         response = get_documents(["file-agent"], token, entity_id="agent-7")
         assert response.status_code == 200
 
     def test_a_permitted_entity_can_be_deleted(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", entities=("agent-7",))
+        token = documents_token(subject="user-1", entities=("agent-7",))
         response = delete_documents(["file-agent"], token, entity_id="agent-7")
         assert response.status_code == 200
         assert "file-agent" not in file_ids(rows)
 
     def test_an_unlisted_entity_is_refused(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1")
+        token = documents_token(subject="user-1")
         response = get_documents(["file-agent"], token, entity_id="agent-7")
         assert response.status_code == 403
         assert "file-agent content" not in response.text
 
     def test_an_unlisted_entity_cannot_delete(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1")
+        token = documents_token(subject="user-1")
         assert (
             delete_documents(["file-agent"], token, entity_id="agent-7").status_code
             == 403
@@ -277,7 +286,7 @@ class TestEntityScopedFiles:
         assert "file-agent" in file_ids(rows)
 
     def test_the_context_route_takes_an_entity_too(self, rows, strict_auth):
-        token = embed_only_token(subject="user-1", entities=("agent-7",))
+        token = documents_token(subject="user-1", entities=("agent-7",))
         response = get_context("file-agent", token, entity_id="agent-7")
         assert response.status_code == 200
 
@@ -303,7 +312,7 @@ class TestTheScopeReachesTheStore:
         monkeypatch.setattr(AsyncPgVector, "get_documents_by_ids", record_documents)
         monkeypatch.setattr(AsyncPgVector, "delete_scoped", record_delete)
 
-        token = embed_only_token(subject="user-1")
+        token = documents_token(subject="user-1")
         get_documents(["file-owned"], token)
         get_context("file-owned", token)
         delete_documents(["file-owned"], token)
@@ -312,3 +321,104 @@ class TestTheScopeReachesTheStore:
         for call in seen:
             assert call["owners"] == ["user-1"]
             assert call["tenants"] == ["__BASE__", None]
+
+
+EMBED_BODY = {
+    "space": space_module.CHAT_SPACE_SPEC.name,
+    "input_type": "query",
+    "inputs": [{"id": "a", "text": "hello world"}],
+}
+
+RERANK_BODY = {
+    "profile": "fast-v1",
+    "query": "q",
+    "candidates": [{"id": "c1", "text": "t", "base_score": 1.0}],
+}
+
+
+@pytest.fixture
+def both_planes(monkeypatch, strict_auth):
+    """Document routes and the ``/v1`` router, mounted at the same time."""
+    monkeypatch.setenv("RAG_SEARCH_API_ENABLED", "true")
+    monkeypatch.setenv("RAG_RATE_LIMIT_ENABLED", "false")
+    auth.reset_settings()
+    install_fake_space(monkeypatch, FakeEmbeddingClient())
+
+
+def post_embeddings(token):
+    return client.post("/v1/embeddings", json=EMBED_BODY, headers=bearer(token))
+
+
+def post_rerank(token):
+    return client.post("/v1/rerank", json=RERANK_BODY, headers=bearer(token))
+
+
+def reach_every_document_route(token):
+    return [
+        client.get("/ids", headers=bearer(token)),
+        get_documents(["file-owned"], token),
+        get_context("file-owned", token),
+        delete_documents(["file-owned"], token),
+    ]
+
+
+class TestThePlanesAreSeparable:
+    """Reading documents and buying inference are distinct capabilities.
+
+    A token minted to delete a file should not also be spendable against an
+    embedding provider, and a token minted to embed should not be able to read
+    or destroy stored chunks. Neither scope substitutes for the other, in either
+    direction — that is the entire point of splitting them.
+    """
+
+    def test_a_documents_token_reaches_every_document_route(self, rows, both_planes):
+        token = documents_token(subject="user-1")
+        assert [
+            response.status_code for response in reach_every_document_route(token)
+        ] == [200, 200, 200, 200]
+
+    def test_a_documents_token_buys_no_embedding(self, rows, both_planes):
+        response = post_embeddings(documents_token(subject="user-1"))
+        assert response.status_code == 403
+        assert "rag:embed" in response.json()["detail"]
+
+    def test_a_documents_token_buys_no_rerank(self, rows, both_planes):
+        response = post_rerank(documents_token(subject="user-1"))
+        assert response.status_code == 403
+        assert "rag:rerank" in response.json()["detail"]
+
+    def test_an_embed_token_reaches_no_document_route(self, rows, both_planes):
+        token = strict_token(subject="user-1", scopes=("rag:embed",))
+        assert post_embeddings(token).status_code == 200
+        for response in reach_every_document_route(token):
+            assert response.status_code == 403
+            assert "rag:documents" in response.json()["detail"]
+
+    def test_a_rerank_token_reaches_no_document_route(self, rows, both_planes):
+        token = strict_token(subject="user-1", scopes=("rag:rerank",))
+        for response in reach_every_document_route(token):
+            assert response.status_code == 403
+
+    def test_an_embed_token_cannot_delete_a_file_it_could_before(
+        self, rows, both_planes
+    ):
+        token = strict_token(subject="user-1", scopes=("rag:embed",))
+        assert delete_documents(["file-owned"], token).status_code == 403
+        assert "file-owned" in file_ids(rows)
+
+    def test_a_legacy_token_still_reaches_both_planes(self, rows, both_planes):
+        """The ``{"id": ...}`` shape predates every scope, including this one."""
+        token = legacy_token(user_id="user-1", secret=RAG_SECRET)
+        assert [
+            response.status_code for response in reach_every_document_route(token)
+        ] == [200, 200, 200, 200]
+        assert post_embeddings(token).status_code == 200
+
+    def test_an_application_signed_legacy_token_still_reaches_the_document_routes(
+        self, rows, both_planes
+    ):
+        """``RAG_AUTH_ACCEPT_LEGACY=true`` keeps today's callers working."""
+        token = legacy_token(user_id="user-1", secret=APP_SECRET)
+        assert [
+            response.status_code for response in reach_every_document_route(token)
+        ] == [200, 200, 200, 200]

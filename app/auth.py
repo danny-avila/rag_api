@@ -26,6 +26,7 @@ from app.config import logger
 
 SCOPE_EMBED = "rag:embed"
 SCOPE_RERANK = "rag:rerank"
+SCOPE_DOCUMENTS = "rag:documents"
 
 BASE_TENANT_ID = "__BASE__"
 SYSTEM_TENANT_ID = "__SYSTEM__"
@@ -434,6 +435,15 @@ def get_principal(request: Request) -> Principal:
     return principal
 
 
+def _refuse_without_scope(principal: Principal, scope: str) -> None:
+    if principal.has_scope(scope):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Token is missing the '{scope}' scope",
+    )
+
+
 def require_scope(scope: str):
     """Dependency factory guarding a service endpoint with a single scope."""
 
@@ -450,11 +460,30 @@ def require_scope(scope: str):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="System tenant may not call the search API",
             )
-        if not principal.has_scope(scope):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Token is missing the '{scope}' scope",
-            )
+        _refuse_without_scope(principal, scope)
         return principal
 
     return dependency
+
+
+async def require_document_scope(request: Request) -> Optional[Principal]:
+    """Dependency guarding the file-addressed document routes.
+
+    The document plane and the ``/v1`` inference plane are separate
+    capabilities, so they carry separate scopes. ``rag:documents`` reads and
+    deletes stored chunks; it buys no inference. ``rag:embed`` and
+    ``rag:rerank`` spend inference budget; neither one substitutes for this.
+    A credential minted to delete a file therefore cannot be replayed against
+    an embedding provider, and vice versa.
+
+    This is deliberately not :func:`require_scope`: that one gates the ``/v1``
+    router and 503s when the search API is off, while these routes serve every
+    deployment. A deployment with no signing key configured at all has no
+    principal to check — the middleware already warns that such requests are
+    unauthenticated — so scope enforcement starts where tokens do.
+    """
+    principal: Optional[Principal] = getattr(request.state, "principal", None)
+    if principal is None:
+        return None
+    _refuse_without_scope(principal, SCOPE_DOCUMENTS)
+    return principal

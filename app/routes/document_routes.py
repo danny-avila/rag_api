@@ -14,6 +14,7 @@ from typing import List, Iterable, Optional, Union, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import (
     APIRouter,
+    Depends,
     Request,
     UploadFile,
     HTTPException,
@@ -88,7 +89,7 @@ from app.models import (
     DocumentResponse,
     QueryMultipleBody,
 )
-from app.auth import BASE_TENANT_ID
+from app.auth import BASE_TENANT_ID, require_document_scope
 from app.scope import (
     PUBLIC_OWNER,
     file_clause,
@@ -108,6 +109,10 @@ from app.utils.health import is_health_ok
 from app.utils.text import fingerprint
 
 router = APIRouter()
+
+# The file-addressed routes: they read or delete stored chunks by id and need no
+# inference capability to do it, so they are guarded by the document scope alone.
+DOCUMENT_PLANE = [Depends(require_document_scope)]
 
 _INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
 _INGESTION_ATTEMPT_STARTED_AT_NS_KEY = "_rag_ingestion_attempt_started_at_ns"
@@ -414,7 +419,7 @@ async def cleanup_temp_file_async(file_path: str) -> None:
         )
 
 
-@router.get("/ids")
+@router.get("/ids", dependencies=DOCUMENT_PLANE)
 async def get_all_ids(request: Request, entity_id: Optional[str] = Query(None)):
     scope = resolve_scope(request, entity_id)
     try:
@@ -461,7 +466,9 @@ async def health_check():
         return {"status": "DOWN", "error": str(e)}, 503
 
 
-@router.get("/documents", response_model=list[DocumentResponse])
+@router.get(
+    "/documents", response_model=list[DocumentResponse], dependencies=DOCUMENT_PLANE
+)
 async def get_documents_by_ids(
     request: Request,
     ids: list[str] = Query(...),
@@ -517,7 +524,7 @@ async def get_documents_by_ids(
         raise HTTPException(status_code=500, detail=INTERNAL_ERROR_DETAIL)
 
 
-@router.delete("/documents")
+@router.delete("/documents", dependencies=DOCUMENT_PLANE)
 async def delete_documents(
     request: Request,
     document_ids: List[str] = Body(...),
@@ -1361,7 +1368,7 @@ async def embed_file(
     }
 
 
-@router.get("/documents/{id}/context")
+@router.get("/documents/{id}/context", dependencies=DOCUMENT_PLANE)
 async def load_document_context(
     request: Request, id: str, entity_id: Optional[str] = Query(None)
 ):

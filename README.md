@@ -183,9 +183,24 @@ unrestricted entity access.
 - `RAG_AUTH_ACCEPT_LEGACY`: (Optional) default `true`. Set to `false` once every
   caller mints the full claim set.
 
-Scopes: `rag:embed` grants `POST /v1/embeddings`, `rag:rerank` grants
-`POST /v1/rerank`. The tenant claim (`tenant`, or `tenant_id`) is required for
-strict tokens; the reserved value `__SYSTEM__` is always refused.
+Scopes name a capability, and none of them substitutes for another:
+
+| Scope | Grants |
+| --- | --- |
+| `rag:embed` | `POST /v1/embeddings` |
+| `rag:rerank` | `POST /v1/rerank` |
+| `rag:documents` | `GET /ids`, `GET /documents`, `GET /documents/{id}/context`, `DELETE /documents` |
+
+The document plane and the inference plane are separate capabilities, so they
+carry separate scopes. `rag:documents` reads and deletes stored chunks and buys
+no inference; `rag:embed` and `rag:rerank` spend inference budget and reach no
+document route. A credential minted to delete one file therefore cannot be
+replayed against an embedding provider, and a leaked embedding credential
+cannot read or destroy stored content. A token carrying neither is refused
+either way — a strict token with no scopes at all is refused outright.
+
+The tenant claim (`tenant`, or `tenant_id`) is required for strict tokens; the
+reserved value `__SYSTEM__` is always refused.
 
 Callers may pass an `entity_id` to `/query` and `/query_multiple` to reach an
 agent's knowledge-base files. Strict tokens must list that id in their
@@ -212,7 +227,9 @@ Writes are scoped too: uploading under an `entity_id` the token does not permit
 is refused, so a caller cannot plant content in a knowledge base it cannot read.
 
 The file-addressed routes are scoped by the same builder, because a file id is
-caller-supplied and proves nothing about who may read it:
+caller-supplied and proves nothing about who may read it. All four require the
+`rag:documents` scope, and holding it is permission to address this plane, never
+permission to address another owner's rows inside it:
 
 | Route | Scope |
 | --- | --- |
@@ -220,6 +237,11 @@ caller-supplied and proves nothing about who may read it:
 | `GET /documents?ids=` | chunks the caller owns; anything else is `404` |
 | `GET /documents/{id}/context` | as above, for one file |
 | `DELETE /documents` | deletes only the caller's rows for those ids |
+
+A token missing `rag:documents` is refused with `403` before the store is
+touched, so the refusal says nothing about whether the file exists. Deployments
+that configure no signing key at all are unauthenticated and unchanged — scope
+enforcement starts where tokens do.
 
 Each accepts an optional `entity_id` query parameter, with the same rule as
 `/query`: strict tokens must list the id in their `entities` claim, legacy
@@ -235,6 +257,24 @@ are owned by that entity, so deleting or reading them needs `entity_id` on these
 routes just as querying them already does. A client that deletes an agent's file
 with a plain user token and no `entity_id` now gets `404` and leaves the chunks
 in place; pass the entity the file was uploaded under to remove them.
+
+**Upgrade note.** These four routes now require `rag:documents`. Strict tokens
+minted for them before the scope existed carried `rag:embed` — the smallest
+scope set that satisfied the non-empty-scopes rule — and are refused with `403`
+now that the plane has a scope of its own. Mint `rag:documents` for the calls
+that read or delete stored chunks and keep `rag:embed` for the ones that
+actually embed. Legacy `{"id": userId}` tokens predate every scope and are
+unaffected while `RAG_AUTH_ACCEPT_LEGACY` is true.
+
+The two directions are not symmetric, so the deploy order matters. Roll the
+minting change out first and this build second, or both together:
+
+- **Client first, service second — safe.** A build that does not yet require
+  `rag:documents` never inspects the scope on these routes, so a token carrying
+  it is simply accepted. The unknown scope is inert.
+- **Service first, client second — breaks.** This build refuses a token that
+  still carries only `rag:embed`, so every document read and delete returns
+  `403` until the client catches up.
 
 ### Authorize before egress
 

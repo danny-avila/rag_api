@@ -118,6 +118,13 @@ def test_missing_scope_is_forbidden(search_enabled):
     assert "rag:embed" in response.json()["detail"]
 
 
+def test_the_document_scope_does_not_buy_embedding(search_enabled):
+    """``rag:documents`` addresses stored chunks; it never spends inference."""
+    response = post_embed(strict_token(scopes=["rag:documents"]))
+    assert response.status_code == 403
+    assert "rag:embed" in response.json()["detail"]
+
+
 def test_rerank_requires_its_own_scope(search_enabled):
     body = {
         "profile": "fast-v1",
@@ -128,6 +135,11 @@ def test_rerank_requires_its_own_scope(search_enabled):
         "/v1/rerank", json=body, headers=bearer(strict_token(scopes=["rag:embed"]))
     )
     assert response.status_code == 403
+    documents_only = client.post(
+        "/v1/rerank", json=body, headers=bearer(strict_token(scopes=["rag:documents"]))
+    )
+    assert documents_only.status_code == 403
+    assert "rag:rerank" in documents_only.json()["detail"]
 
 
 def test_wrong_audience_is_rejected(search_enabled):
