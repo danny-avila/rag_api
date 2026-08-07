@@ -173,6 +173,12 @@ agent's knowledge-base files. Strict tokens must list that id in their
 at face value — which is the reason to flip `RAG_AUTH_ACCEPT_LEGACY` off once
 the migration lands.
 
+Retrieval is scoped by document owner. `/query` and `/query_multiple` put that
+scope into the vector-store predicate, so a file belonging to another owner
+matches nothing rather than being filtered out after ranking. Documents written
+before `user_id` was recorded in chunk metadata are no longer visible to any
+caller; re-embed them if you still need them.
+
 ### Search service endpoints
 
 Enabled by `RAG_SEARCH_API_ENABLED=true` (default `false`); the service refuses

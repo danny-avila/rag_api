@@ -241,6 +241,30 @@ def test_legacy_token_entity_id_never_widens_beyond_two_owners(
     assert "user-2" not in owners_in(captured_filters[0])
 
 
+def test_legacy_entity_id_is_still_trusted_until_the_flag_flips(
+    captured_filters, strict_auth, monkeypatch
+):
+    """Documents the residual transition risk, and that flipping the flag ends it.
+
+    A legacy token carries no entity list, so rag_api cannot tell a legitimate
+    agent id from a victim's user id. This is the whole reason the six LibreChat
+    call paths must migrate and RAG_AUTH_ACCEPT_LEGACY must go false.
+    """
+    body = {"query": "q", "file_id": "file-foreign", "k": 10, "entity_id": "user-2"}
+    response = client.post("/query", json=body, headers=bearer(legacy_token("user-1")))
+    assert response.status_code == 200
+    assert owners_in(captured_filters[0]) == ["user-1", "user-2"]
+
+    monkeypatch.setenv("RAG_AUTH_ACCEPT_LEGACY", "false")
+    auth.reset_settings()
+    rejected = client.post("/query", json=body, headers=bearer(legacy_token("user-1")))
+    assert rejected.status_code == 401
+    strict = client.post(
+        "/query", json=body, headers=bearer(strict_token(subject="user-1"))
+    )
+    assert strict.status_code == 403
+
+
 def test_tenant_claim_does_not_widen_owner_scope(captured_filters, strict_auth):
     token = strict_token(subject="user-1", tenant=BASE_TENANT)
     client.post(

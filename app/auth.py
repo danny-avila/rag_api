@@ -234,6 +234,12 @@ def validate_startup_config() -> AuthSettings:
             settings.algorithm,
             settings.accept_legacy,
         )
+    if settings.accept_legacy:
+        logger.warning(
+            "RAG_AUTH_ACCEPT_LEGACY=true: legacy tokens carry no entity list, so a "
+            "caller-supplied entity_id is taken at face value. Set it false once "
+            "every caller mints the full claim set."
+        )
     return settings
 
 
