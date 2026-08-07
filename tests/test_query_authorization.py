@@ -356,3 +356,49 @@ class TestTenantScope:
         response = self._query("file-owned", "__SYSTEM__")
         assert response.status_code == 403
         assert captured_filters == []
+
+
+class TestDocumentedAtlasIndex:
+    """The documented Atlas index has to cover what the predicate pre-filters on.
+
+    On Atlas the scope clauses become ``$vectorSearch`` pre-filters, and Atlas
+    rejects a pre-filter that references a path the index does not declare as a
+    filter field. An index carrying only ``file_id`` therefore makes /query and
+    /query_multiple fail outright, so the README's definition is not decoration
+    — it is part of the deployment contract, and it drifts silently.
+    """
+
+    def _documented_filter_paths(self) -> set:
+        import json
+        import re
+        from pathlib import Path
+
+        readme = Path(__file__).resolve().parents[1] / "README.md"
+        blocks = re.findall(
+            r"```json\n(.*?)\n```", readme.read_text(encoding="utf-8"), re.DOTALL
+        )
+        for block in blocks:
+            definition = json.loads(block)
+            fields = definition.get("fields")
+            if not isinstance(fields, list):
+                continue
+            if not any(field.get("type") == "vector" for field in fields):
+                continue
+            return {field["path"] for field in fields if field.get("type") == "filter"}
+        raise AssertionError("no Atlas vector index definition found in README.md")
+
+    def test_every_scoped_path_is_declared_as_a_filter_field(self):
+        from app.scope import ScopeFilter
+
+        scope = ScopeFilter(tenant="tenant-a", owners=("user-1",))
+        referenced = {key for clause in scope.scope_clauses() for key in clause}
+        documented = self._documented_filter_paths()
+        assert referenced <= documented, (
+            f"README Atlas index is missing filter fields for "
+            f"{sorted(referenced - documented)}"
+        )
+
+    def test_the_file_predicate_is_declared_too(self):
+        from app.scope import file_clause
+
+        assert set(file_clause("file-1")) <= self._documented_filter_paths()
