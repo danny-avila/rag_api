@@ -2,6 +2,7 @@
 import os
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -102,10 +103,22 @@ if debug_mode:
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.debug("Validation error: %s", exc.errors())
+    # Custom field validators put the originating exception in `ctx`, which is
+    # not JSON serializable — encoding it as its message keeps a 422 a 422.
+    errors = jsonable_encoder(exc.errors(), custom_encoder={Exception: str})
+    # Only locations and error types are logged: the `input` values carry the
+    # caller's raw text, which never belongs in these logs.
+    logger.debug(
+        "Validation error: %s",
+        [
+            {"loc": error.get("loc"), "type": error.get("type")}
+            for error in errors
+            if isinstance(error, dict)
+        ],
+    )
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors(), "message": "Request validation failed"},
+        content={"detail": errors, "message": "Request validation failed"},
     )
 
 
