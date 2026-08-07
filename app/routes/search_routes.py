@@ -170,7 +170,16 @@ async def _authorize_candidates(
     candidate from a fresh one.
     """
     if not hasattr(vector_store, "probe_candidate_ids"):
-        return
+        # No fallback: a store that cannot be probed cannot be reranked against,
+        # because there is no way to tell a foreign candidate from a fresh one.
+        logger.error(
+            "Vector store %s cannot authorize rerank candidates",
+            type(vector_store).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Candidate authorization is unavailable",
+        )
     try:
         probed = await _call_store(
             request,

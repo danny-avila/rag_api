@@ -410,3 +410,11 @@ def test_base_scores_are_optional(backend):
     ]
     payload = rerank(candidates).json()
     assert [result["id"] for result in payload["results"]] == ["c-alpha", "c-gamma"]
+
+
+def test_a_store_that_cannot_be_probed_refuses_rerank(backend, monkeypatch):
+    """There is no unauthenticated fallback path for candidate authorization."""
+    monkeypatch.delattr(vector_store, "probe_candidate_ids", raising=False)
+    response = rerank(blended_candidates())
+    assert response.status_code == 503
+    assert backend.calls == []
