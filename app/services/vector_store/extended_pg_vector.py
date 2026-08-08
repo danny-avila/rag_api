@@ -1,7 +1,8 @@
 import os
 import time
 import logging
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, Any, Dict, List, Sequence, Union
+import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
@@ -172,30 +173,101 @@ class ExtendedPgVector(PGVector):
 
         return super()._handle_field_filter(field, value)
 
-    def get_all_ids(self) -> list[str]:
-        with Session(self._bind) as session:
-            results = session.query(self.EmbeddingStore.custom_id).all()
-            return [result[0] for result in results if result[0] is not None]
+    def _collection_clause(self, session: Session):
+        """Restrict a query to the collection this store serves, or ``None``.
 
-    def get_filtered_ids(self, ids: list[str]) -> list[str]:
-        with Session(self._bind) as session:
-            query = session.query(self.EmbeddingStore.custom_id).filter(
-                self.EmbeddingStore.custom_id.in_(ids)
-            )
-            results = query.all()
-            return [result[0] for result in results if result[0] is not None]
+        ``langchain_pg_embedding`` is shared by every collection in the
+        database, so a lookup that omits ``collection_id`` can read a row this
+        store does not serve. ``None`` means the collection has not been created
+        yet, which is indistinguishable from it holding no rows.
+        """
+        collection = self.get_collection(session)
+        if collection is None:
+            return None
+        return self.EmbeddingStore.collection_id == collection.uuid
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+    def _owner_clause(self, owners: Sequence[str]):
+        return self.EmbeddingStore.cmetadata["user_id"].astext.in_(list(owners))
+
+    def _file_scope_clause(
+        self, session: Session, ids: Sequence[str], owners: Sequence[str]
+    ):
+        """``(collection, file id, owner)`` for the file-addressed routes.
+
+        ``None`` means this store's collection does not exist yet, which is
+        indistinguishable from it holding no rows.
+        """
+        collection_clause = self._collection_clause(session)
+        if collection_clause is None:
+            return None
+        return sqlalchemy.and_(
+            collection_clause,
+            self.EmbeddingStore.custom_id.in_(list(ids)),
+            self._owner_clause(owners),
+        )
+
+    def get_all_ids(self, owners: Sequence[str]) -> list[str]:
+        """File ids this caller owns — never the deployment's whole set."""
+        allowed = list(dict.fromkeys(owners))
+        if not allowed:
+            return []
         with Session(self._bind) as session:
+            collection_clause = self._collection_clause(session)
+            if collection_clause is None:
+                return []
             results = (
-                session.query(self.EmbeddingStore)
-                .filter(self.EmbeddingStore.custom_id.in_(ids))
+                session.query(self.EmbeddingStore.custom_id)
+                .filter(collection_clause)
+                .filter(self._owner_clause(allowed))
+                .distinct()
                 .all()
             )
+            return [result[0] for result in results if result[0] is not None]
+
+    def get_filtered_ids(self, ids: Sequence[str], owners: Sequence[str]) -> list[str]:
+        """Which of ``ids`` exist inside ``owners``.
+
+        Scope is a required argument rather than an optional one: a
+        caller-supplied file id is not an authorization, and an existence answer
+        computed without the owner predicate is an oracle over every file in the
+        deployment.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return []
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed)
+            if file_clause is None:
+                return []
+            results = (
+                session.query(self.EmbeddingStore.custom_id)
+                .filter(file_clause)
+                .distinct()
+                .all()
+            )
+            return [result[0] for result in results if result[0] is not None]
+
+    def get_documents_by_ids(
+        self, ids: Sequence[str], owners: Sequence[str]
+    ) -> list[Document]:
+        """Chunks of ``ids`` owned by ``owners``.
+
+        The scope goes into the SQL predicate, so a foreign chunk is never read
+        into this process rather than being filtered out after the fact.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return []
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed)
+            if file_clause is None:
+                return []
+            results = session.query(self.EmbeddingStore).filter(file_clause).all()
             return [
                 Document(page_content=result.document, metadata=result.cmetadata or {})
                 for result in results
-                if result.custom_id in ids
             ]
 
     def _delete_by_metadata(self, metadata_filter: Dict[str, Any]) -> None:
@@ -216,6 +288,24 @@ class ExtendedPgVector(PGVector):
                 stmt = stmt.where(self._handle_field_filter(field, value))
 
             session.execute(stmt)
+            session.commit()
+
+    def delete_scoped(self, ids: Sequence[str], owners: Sequence[str]) -> None:
+        """Delete the chunks of ``ids`` that ``owners`` actually own.
+
+        A file id is caller-supplied and not unique across owners — anyone may
+        upload under a chosen ``file_id`` — so the DELETE carries the scope in
+        its own predicate rather than trusting a separate existence check.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return
+        with Session(self._bind) as session:
+            file_clause = self._file_scope_clause(session, wanted, allowed)
+            if file_clause is None:
+                return
+            session.execute(delete(self.EmbeddingStore).where(file_clause))
             session.commit()
 
     def _delete_multiple(

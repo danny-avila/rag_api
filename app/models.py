@@ -42,3 +42,4 @@ class QueryMultipleBody(BaseModel):
     query: str
     file_ids: List[str]
     k: int = 4
+    entity_id: Optional[str] = None

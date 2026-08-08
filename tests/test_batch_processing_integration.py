@@ -49,7 +49,11 @@ class TestMemoryOptimization:
         # Process with batch size of 10
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 10):
             result = await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         # Verify we got all 100 IDs back
@@ -88,7 +92,11 @@ class TestMemoryOptimization:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 5):
             await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         current, peak = tracemalloc.get_traced_memory()
@@ -123,7 +131,11 @@ class TestMemoryOptimization:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 5):
             result = await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         # Verify batches were processed in order
@@ -163,6 +175,7 @@ class TestSyncBatchedMemory:
                 result = await _process_documents_batched_sync(
                     documents=docs,
                     file_id="test",
+                    user_id="testuser",
                     vector_store=mock_store,
                     executor=executor,
                 )
@@ -205,6 +218,7 @@ class TestBatchProcessingResilience:
                 await _process_documents_async_pipeline(
                     documents=docs,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=mock_store,
                     executor=None,
                 )
@@ -240,6 +254,7 @@ class TestBatchProcessingResilience:
                 await _process_documents_async_pipeline(
                     documents=docs,
                     file_id="my_unique_file_id",
+                    user_id="testuser",
                     vector_store=mock_store,
                     executor=None,
                 )
@@ -331,6 +346,7 @@ class TestConfigurationBehavior:
                 await _process_documents_async_pipeline(
                     documents=docs,
                     file_id="test",
+                    user_id="testuser",
                     vector_store=mock_store,
                     executor=None,
                 )

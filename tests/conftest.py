@@ -27,14 +27,14 @@ from langchain_core.documents import Document
 
 
 class DummyVectorStore:
-    def get_all_ids(self) -> list[str]:
+    def get_all_ids(self, owners=None) -> list[str]:
         return ["testid1", "testid2"]
 
-    def get_filtered_ids(self, ids) -> list[str]:
+    def get_filtered_ids(self, ids, owners=None) -> list[str]:
         dummy_ids = ["testid1", "testid2"]
         return [id for id in dummy_ids if id in ids]
 
-    async def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
+    async def get_documents_by_ids(self, ids: list[str], owners=None) -> list[Document]:
         return [
             Document(page_content="Test content", metadata={"file_id": id})
             for id in ids
@@ -57,6 +57,9 @@ class DummyVectorStore:
         return ids
 
     async def delete(self, ids=None, collection_only: bool = False):
+        return None
+
+    async def delete_scoped(self, ids=None, owners=None):
         return None
 
     # Implement the missing as_retriever() method
