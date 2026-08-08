@@ -487,14 +487,12 @@ async def delete_documents(
 ):
     scope = resolve_scope(request, entity_id)
     try:
+        # Resolve existence within the caller's scope *before* deleting anything.
+        # A request mixing owned and unknown ids would otherwise destroy the owned
+        # rows and still answer 404, leaving the caller to believe nothing went.
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
                 document_ids,
-                owners=scope.owners,
-                executor=request.app.state.thread_pool,
-            )
-            await vector_store.delete_scoped(
-                ids=document_ids,
                 owners=scope.owners,
                 executor=request.app.state.thread_pool,
             )
@@ -502,10 +500,18 @@ async def delete_documents(
             existing_ids = vector_store.get_filtered_ids(
                 document_ids, owners=scope.owners
             )
-            vector_store.delete_scoped(ids=document_ids, owners=scope.owners)
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
+
+        if isinstance(vector_store, AsyncPgVector):
+            await vector_store.delete_scoped(
+                ids=document_ids,
+                owners=scope.owners,
+                executor=request.app.state.thread_pool,
+            )
+        else:
+            vector_store.delete_scoped(ids=document_ids, owners=scope.owners)
 
         file_count = len(document_ids)
         return {

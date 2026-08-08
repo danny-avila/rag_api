@@ -50,6 +50,22 @@ SET cmetadata = jsonb_set(cmetadata, '{user_id}', '"<owner>"')
 WHERE cmetadata->>'user_id' IS NULL;
 ```
 
+**If this deployment ever ran without `JWT_SECRET`, check for `public` too.** With
+no signing key configured there is no caller identity to record, so every chunk
+written in that period is owned by the literal string `public`. Once a signing
+key is set, callers arrive with their own ids and none of them owns `public`, so
+that content stops being readable. Routes other than `/query` returned it to
+everybody before this release, which is exactly the hole being closed — but if
+the content is still wanted, give it a real owner first:
+
+```sql
+-- inspect before rewriting: this is content nobody was ever identified as owning
+SELECT count(*) FROM langchain_pg_embedding WHERE cmetadata->>'user_id' = 'public';
+```
+
+Deployments that never set `JWT_SECRET` are unaffected: with no key configured
+the read scope is `public` as well, so what was written is what is read.
+
 `atlas-mongo` deployments must add `user_id` to the vector search index first;
 see [Use Atlas MongoDB as Vector Database](#use-atlas-mongodb-as-vector-database).
 

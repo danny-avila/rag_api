@@ -343,6 +343,28 @@ def test_delete_without_entity_id_leaves_entity_owned_chunks(
     assert store_double == []
 
 
+def test_partial_delete_destroys_nothing_before_reporting_not_found(
+    attacker_headers, store_double
+):
+    """A delete mixing an owned id with an unknown one must remove neither.
+
+    The existence check has to run *before* the delete. With the order reversed
+    the owned rows are destroyed and the caller is still told "not found", so a
+    client that treats 404 as "nothing happened" — which is exactly how the 404
+    reads — silently loses data it never asked to delete. Reported against the
+    first version of this route and re-pinned here.
+    """
+    response = client.request(
+        "DELETE",
+        "/documents",
+        json=[ATTACKER_FILE, "file-does-not-exist"],
+        headers=attacker_headers,
+    )
+
+    assert response.status_code == 404
+    assert store_double == []
+
+
 def test_owner_still_reads_and_deletes_their_own(victim_headers, store_double):
     """The scope must not lock owners out of their own content."""
     read = client.get(
