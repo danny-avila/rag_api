@@ -1,6 +1,6 @@
 import copy
 import hashlib
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_mongodb import MongoDBAtlasVectorSearch
@@ -54,16 +54,44 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
             processed_documents.append((new_document, score))
         return processed_documents
 
-    def get_all_ids(self) -> list[str]:
-        # Return unique file_id fields in self._collection
-        return self._collection.distinct("file_id")
+    @staticmethod
+    def _owner_clause(owners: Sequence[str]) -> dict:
+        return {"user_id": {"$in": list(dict.fromkeys(owners))}}
 
-    def get_filtered_ids(self, ids: list[str]) -> list[str]:
-        # Return unique file_id fields filtered by the provided ids
-        return self._collection.distinct("file_id", {"file_id": {"$in": ids}})
+    def _file_scope_clause(self, ids: Sequence[str], owners: Sequence[str]) -> dict:
+        """``(file id, owner)`` for the file-addressed routes.
 
-    def get_documents_by_ids(self, ids: list[str]) -> list[Document]:
-        # Return documents filtered by file_id
+        Scope is a required argument rather than an optional one: a
+        caller-supplied file id is not an authorization.
+        """
+        return {
+            "file_id": {"$in": list(dict.fromkeys(ids))},
+            **self._owner_clause(owners),
+        }
+
+    def get_all_ids(self, owners: Sequence[str]) -> list[str]:
+        """File ids this caller owns — never the deployment's whole set."""
+        allowed = list(dict.fromkeys(owners))
+        if not allowed:
+            return []
+        return self._collection.distinct("file_id", self._owner_clause(allowed))
+
+    def get_filtered_ids(self, ids: Sequence[str], owners: Sequence[str]) -> list[str]:
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return []
+        return self._collection.distinct(
+            "file_id", self._file_scope_clause(wanted, allowed)
+        )
+
+    def get_documents_by_ids(
+        self, ids: Sequence[str], owners: Sequence[str]
+    ) -> list[Document]:
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return []
         return [
             Document(
                 page_content=doc["text"],
@@ -75,8 +103,21 @@ class AtlasMongoVector(MongoDBAtlasVectorSearch):
                     "page": int(doc.get("page", 0)),
                 },
             )
-            for doc in self._collection.find({"file_id": {"$in": ids}})
+            for doc in self._collection.find(self._file_scope_clause(wanted, allowed))
         ]
+
+    def delete_scoped(self, ids: Sequence[str], owners: Sequence[str]) -> None:
+        """Delete the chunks of ``ids`` that ``owners`` actually own.
+
+        A file id is caller-supplied and not unique across owners, so the delete
+        carries the scope in its own predicate rather than trusting a separate
+        existence check.
+        """
+        wanted = list(dict.fromkeys(ids))
+        allowed = list(dict.fromkeys(owners))
+        if not wanted or not allowed:
+            return
+        self._collection.delete_many(self._file_scope_clause(wanted, allowed))
 
     def delete(self, ids: Optional[list[str]] = None) -> None:
         # Delete documents by file_id

@@ -14,6 +14,79 @@ The API will evolve over time to employ different querying/re-ranking methods, e
 - **Vector Store**: Utilizes Langchain's vector store for efficient document retrieval.
 - **Asynchronous Support**: Offers async operations for enhanced performance.
 
+## Retrieval scope
+
+Chunks are owned. Every route that reads or removes stored content resolves the
+caller's owner set from the verified token and puts it into the store query
+*before* ranking, so a chunk outside that set is never read into the process.
+The owner set is built in one place — `app/scope.py` — rather than re-derived per
+route.
+
+Before this release these routes addressed the store by caller-supplied
+`file_id` alone, or authorized a whole result set from the first hit returned:
+
+- `GET /ids` listed every file id in the deployment.
+- `POST /query_multiple` performed no authorization at all, so pairing it with
+  `GET /ids` disclosed the content of every file to any authenticated caller.
+- `POST /query` authorized the whole result set from `documents[0]`, so any hit
+  behind the first was never checked. A `file_id` is chosen by whoever uploads,
+  so an attacker's own row ranking first authorized the rows behind it.
+- `GET /documents`, `GET /documents/{id}/context` and `DELETE /documents` read or
+  deleted the chunks of any file id the caller could name.
+- A chunk with no recorded `user_id` read as "belongs to everyone".
+- On the synchronous store path, a failed ingestion rolled back by `file_id`
+  alone, so an upload under someone else's file id destroyed their chunks. The
+  async pgvector pipeline already scopes its rollback to the ingestion attempt.
+
+**What changes for callers.** A caller reads and deletes only what it owns. A
+file id outside the caller's scope answers "not found" rather than "found but
+refused", so none of these routes is an existence oracle. Chunks with no
+`user_id` are owned by nobody and are no longer readable — if a deployment holds
+such rows and still needs them, stamp an owner on them before upgrading:
+
+```sql
+UPDATE langchain_pg_embedding
+SET cmetadata = jsonb_set(cmetadata, '{user_id}', '"<owner>"')
+WHERE cmetadata->>'user_id' IS NULL;
+```
+
+`atlas-mongo` deployments must add `user_id` to the vector search index first;
+see [Use Atlas MongoDB as Vector Database](#use-atlas-mongodb-as-vector-database).
+
+**Deleting entity-owned files requires `entity_id`.** Chunks embedded under an
+`entity_id` — an agent knowledge base, for instance — are owned by that entity
+rather than by the uploading user, so `DELETE /documents` needs the same
+`entity_id` that the upload used, as a query parameter alongside the JSON body of
+file ids. A delete that omits it resolves to the caller's own scope, matches
+nothing, and answers 404 with the chunks left in place. Because a 404 is
+indistinguishable from "already deleted", a caller that treats it as success will
+orphan those chunks silently.
+
+**Upgrade the client first.** Deploy order matters, in one direction only:
+
+- A client that sends `entity_id` against an *older* build is inert — the
+  parameter is simply undeclared there, so the request behaves exactly as before.
+- An *older* client against this build orphans every agent knowledge-base file it
+  tries to delete.
+
+So upgrade the client first, or both together — never this service first.
+LibreChat carries the matching change: it records the owner each embed was made
+under and sends it on delete, with `npm run migrate:embed-owners` to backfill
+files embedded before that.
+
+**`entity_id` is unchanged and still caller-asserted.** Agent knowledge bases are
+owned by an agent id rather than a user id, so a caller reading one names it via
+`entity_id`. That id now *widens* the owner set rather than replacing the
+caller's identity — the caller's own scope always remains — but nothing in a
+token minted today proves the caller may act for the entity it names. A caller
+that knows another owner's id can still name it — on read, to reach that owner's
+chunks, and on the ingestion routes, where `entity_id` is what gets stamped as the
+owner, to write into that owner's namespace. Deployments exposing this API to
+untrusted callers must continue to authorize entity access upstream. Closing this
+requires the token to carry the entity authorization, which is a coordinated
+change with the callers that mint those tokens and is tracked separately from
+this release.
+
 ## Setup
 
 ### Getting Started
@@ -201,12 +274,22 @@ The `ATLAS_MONGO_DB_URI` could be the same or different from what is used by Lib
     {
       "path": "file_id",
       "type": "filter"
+    },
+    {
+      "path": "user_id",
+      "type": "filter"
     }
   ]
 }
 ```
 
 Follow one of the [four documented methods](https://www.mongodb.com/docs/atlas/atlas-vector-search/create-index/#procedure) to create the vector index.
+
+> **Upgrading an existing Atlas deployment:** `user_id` is a required filter field
+> as of the release described under [Retrieval scope](#retrieval-scope). Retrieval
+> now filters on it, and Atlas Vector Search rejects a `$vectorSearch` pre-filter on
+> a path the index does not declare — so add it to the index definition **before**
+> deploying, or `/query` and `/query_multiple` will start returning errors.
 
 #### Create a `file_id` Index (recommended)
 

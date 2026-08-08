@@ -188,6 +188,7 @@ class TestBatchProcessing:
             result = await _process_documents_async_pipeline(
                 documents=mock_documents,
                 file_id="test_file",
+                user_id="testuser",
                 vector_store=mock_async_vector_store,
                 executor=None,
             )
@@ -205,6 +206,7 @@ class TestBatchProcessing:
             result = await _process_documents_async_pipeline(
                 documents=docs,
                 file_id="test_file",
+                user_id="testuser",
                 vector_store=mock_async_vector_store,
                 executor=None,
             )
@@ -221,6 +223,7 @@ class TestBatchProcessing:
             result = await _process_documents_async_pipeline(
                 documents=docs,
                 file_id="test_file",
+                user_id="testuser",
                 vector_store=mock_async_vector_store,
                 executor=None,
             )
@@ -236,6 +239,7 @@ class TestBatchProcessing:
             result = await _process_documents_async_pipeline(
                 documents=[],
                 file_id="test_file",
+                user_id="testuser",
                 vector_store=mock_async_vector_store,
                 executor=None,
             )
@@ -260,6 +264,7 @@ class TestBatchProcessing:
                 await _process_documents_async_pipeline(
                     documents=mock_documents,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=mock_async_vector_store,
                     executor=None,
                 )
@@ -324,6 +329,7 @@ class TestBatchProcessing:
                 await _process_documents_async_pipeline(
                     documents=mock_documents,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=mock_async_vector_store,
                     executor=None,
                 )
@@ -347,6 +353,7 @@ class TestBatchProcessing:
                 result = await _process_documents_batched_sync(
                     documents=mock_documents,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=mock_sync_vector_store,
                     executor=executor,
                 )
@@ -363,6 +370,7 @@ class TestBatchProcessing:
             result = await _process_documents_batched_sync(
                 documents=[],
                 file_id="test_file",
+                user_id="testuser",
                 vector_store=mock_sync_vector_store,
                 executor=None,
             )
@@ -389,11 +397,12 @@ class TestBatchProcessing:
                     await _process_documents_batched_sync(
                         documents=mock_documents,
                         file_id="test_file",
+                        user_id="testuser",
                         vector_store=mock_sync_vector_store,
                         executor=executor,
                     )
 
-        mock_sync_vector_store.delete.assert_called_once()
+        mock_sync_vector_store.delete_scoped.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_sync_batched_no_rollback_on_first_error(
@@ -411,6 +420,7 @@ class TestBatchProcessing:
                     await _process_documents_batched_sync(
                         documents=mock_documents,
                         file_id="test_file",
+                        user_id="testuser",
                         vector_store=mock_sync_vector_store,
                         executor=executor,
                     )
@@ -520,7 +530,11 @@ class TestBatchSizeEdgeCases:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", batch_size):
             await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         assert mock_store.aadd_documents.call_count == expected_batches
@@ -537,7 +551,11 @@ class TestBatchSizeEdgeCases:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1000):
             await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         assert mock_store.aadd_documents.call_count == 1
@@ -554,7 +572,11 @@ class TestBatchSizeEdgeCases:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
             await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         assert mock_store.aadd_documents.call_count == 5
@@ -575,7 +597,11 @@ class TestProducerConsumerPattern:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 1):
             result = await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         # If we get here without hanging, the producer signaled completion
@@ -597,6 +623,7 @@ class TestProducerConsumerPattern:
                 await _process_documents_async_pipeline(
                     documents=docs,
                     file_id="test",
+                    user_id="testuser",
                     vector_store=mock_store,
                     executor=None,
                 )
@@ -960,7 +987,11 @@ class TestProducerConsumerPattern:
 
         with patch("app.routes.document_routes.EMBEDDING_BATCH_SIZE", 2):
             result = await _process_documents_async_pipeline(
-                documents=docs, file_id="test", vector_store=mock_store, executor=None
+                documents=docs,
+                file_id="test",
+                user_id="testuser",
+                vector_store=mock_store,
+                executor=None,
             )
 
         assert len(result) == 5
@@ -1103,6 +1134,7 @@ class TestSyncBatchedMongoCompat:
                 result = await _process_documents_batched_sync(
                     documents=docs,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=LegacyMongoStore(),
                     executor=executor,
                 )
@@ -1132,6 +1164,7 @@ class TestSyncBatchedMongoCompat:
                 result = await _process_documents_batched_sync(
                     documents=docs,
                     file_id="test_file",
+                    user_id="testuser",
                     vector_store=BaseClassStore(),
                     executor=executor,
                 )

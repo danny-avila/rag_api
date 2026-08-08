@@ -45,6 +45,7 @@ from app.config import (
     PARALLEL_EXECUTION,
     RAG_DISTANCE_THRESHOLD,
 )
+from app.scope import file_clause, files_clause, resolve_scope
 
 # Warn once at import time if the user set a threshold under Atlas, where
 # the score direction is inverted (Atlas vectorSearchScore: higher = better)
@@ -390,12 +391,15 @@ async def cleanup_temp_file_async(file_path: str) -> None:
 
 
 @router.get("/ids")
-async def get_all_ids(request: Request):
+async def get_all_ids(request: Request, entity_id: str = None):
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
-            ids = await vector_store.get_all_ids(executor=request.app.state.thread_pool)
+            ids = await vector_store.get_all_ids(
+                owners=scope.owners, executor=request.app.state.thread_pool
+            )
         else:
-            ids = vector_store.get_all_ids()
+            ids = vector_store.get_all_ids(owners=scope.owners)
 
         return list(set(ids))
     except HTTPException as http_exc:
@@ -432,20 +436,24 @@ async def health_check():
 
 
 @router.get("/documents", response_model=list[DocumentResponse])
-async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
+async def get_documents_by_ids(
+    request: Request, ids: list[str] = Query(...), entity_id: str = None
+):
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners=scope.owners, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners=scope.owners, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners=scope.owners)
+            documents = vector_store.get_documents_by_ids(ids, owners=scope.owners)
 
-        # Ensure all requested ids exist
+        # A file outside the caller's scope reads as absent rather than refused,
+        # so this route is not an existence oracle over the deployment.
         if not all(id in existing_ids for id in ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
 
@@ -474,18 +482,27 @@ async def get_documents_by_ids(request: Request, ids: list[str] = Query(...)):
 
 
 @router.delete("/documents")
-async def delete_documents(request: Request, document_ids: List[str] = Body(...)):
+async def delete_documents(
+    request: Request, document_ids: List[str] = Body(...), entity_id: str = None
+):
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                document_ids, executor=request.app.state.thread_pool
+                document_ids,
+                owners=scope.owners,
+                executor=request.app.state.thread_pool,
             )
-            await vector_store.delete(
-                ids=document_ids, executor=request.app.state.thread_pool
+            await vector_store.delete_scoped(
+                ids=document_ids,
+                owners=scope.owners,
+                executor=request.app.state.thread_pool,
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(document_ids)
-            vector_store.delete(ids=document_ids)
+            existing_ids = vector_store.get_filtered_ids(
+                document_ids, owners=scope.owners
+            )
+            vector_store.delete_scoped(ids=document_ids, owners=scope.owners)
 
         if not all(id in existing_ids for id in document_ids):
             raise HTTPException(status_code=404, detail="One or more IDs not found")
@@ -522,62 +539,25 @@ async def query_embeddings_by_file_id(
     body: QueryRequestBody,
     request: Request,
 ):
-    if not hasattr(request.state, "user"):
-        user_authorized = body.entity_id if body.entity_id else "public"
-    else:
-        user_authorized = (
-            body.entity_id if body.entity_id else request.state.user.get("id")
-        )
-
-    authorized_documents = []
+    scope = resolve_scope(request, body.entity_id)
 
     try:
         embedding = get_cached_query_embedding(body.query)
+        query_filter = scope.predicate(file_clause(body.file_id))
 
         if isinstance(vector_store, AsyncPgVector):
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$eq": body.file_id}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$eq": body.file_id}}
+                embedding, k=body.k, filter=query_filter
             )
 
-        documents = _apply_distance_threshold(documents)
-
-        if not documents:
-            return authorized_documents
-
-        document, score = documents[0]
-        doc_metadata = document.metadata
-        doc_user_id = doc_metadata.get("user_id")
-
-        if doc_user_id is None or doc_user_id == user_authorized:
-            authorized_documents = documents
-        else:
-            # If using entity_id and access denied, try again with user's actual ID
-            if body.entity_id and hasattr(request.state, "user"):
-                user_authorized = request.state.user.get("id")
-                if doc_user_id == user_authorized:
-                    authorized_documents = documents
-                else:
-                    if body.entity_id == doc_user_id:
-                        logger.warning(
-                            f"Entity ID {body.entity_id} matches document user_id but user {user_authorized} is not authorized"
-                        )
-                    else:
-                        logger.warning(
-                            f"Access denied for both entity ID {body.entity_id} and user {user_authorized} to document with user_id {doc_user_id}"
-                        )
-            else:
-                logger.warning(
-                    f"Unauthorized access attempt by user {user_authorized} to a document with user_id {doc_user_id}"
-                )
-
-        return authorized_documents
+        return _apply_distance_threshold(documents)
 
     except HTTPException as http_exc:
         logger.error(
@@ -872,6 +852,7 @@ async def _process_documents_async_pipeline(
 async def _process_documents_batched_sync(
     documents: List[Document],
     file_id: str,
+    user_id: str,
     vector_store: Union["PgVector", "AtlasMongoVector"],
     executor: "ThreadPoolExecutor",
 ) -> List[str]:
@@ -881,6 +862,7 @@ async def _process_documents_batched_sync(
     Args:
         documents: List of Document objects to process
         file_id: Unique identifier for the file being processed
+        user_id: Owner of the chunks being written; scopes the rollback
         vector_store: Synchronous vector store instance (ExtendedPgVector or AtlasMongoVector)
         executor: ThreadPoolExecutor for running sync operations
 
@@ -938,7 +920,10 @@ async def _process_documents_batched_sync(
                 logger.warning("Rolling back file %s due to batch failure", file_id)
                 try:
                     await loop.run_in_executor(
-                        executor, lambda: vector_store.delete(ids=[file_id])
+                        executor,
+                        lambda: vector_store.delete_scoped(
+                            ids=[file_id], owners=[user_id]
+                        ),
                     )
                     logger.info("Rollback completed for file %s", file_id)
                 except Exception as rollback_error:
@@ -1054,7 +1039,7 @@ async def store_data_in_vector_db(
             else:
                 # Fallback to batched processing for sync vector stores
                 ids = await _process_documents_batched_sync(
-                    docs, file_id, vector_store, executor
+                    docs, file_id, user_id, vector_store, executor
                 )
 
         logger.info(
@@ -1319,21 +1304,23 @@ async def embed_file(
 
 
 @router.get("/documents/{id}/context")
-async def load_document_context(request: Request, id: str):
+async def load_document_context(request: Request, id: str, entity_id: str = None):
     ids = [id]
+    scope = resolve_scope(request, entity_id)
     try:
         if isinstance(vector_store, AsyncPgVector):
             existing_ids = await vector_store.get_filtered_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners=scope.owners, executor=request.app.state.thread_pool
             )
             documents = await vector_store.get_documents_by_ids(
-                ids, executor=request.app.state.thread_pool
+                ids, owners=scope.owners, executor=request.app.state.thread_pool
             )
         else:
-            existing_ids = vector_store.get_filtered_ids(ids)
-            documents = vector_store.get_documents_by_ids(ids)
+            existing_ids = vector_store.get_filtered_ids(ids, owners=scope.owners)
+            documents = vector_store.get_documents_by_ids(ids, owners=scope.owners)
 
-        # Ensure the requested id exists
+        # A file outside the caller's scope reads as absent rather than refused,
+        # so this route is not an existence oracle over the deployment.
         if not all(id in existing_ids for id in ids):
             raise HTTPException(
                 status_code=404, detail="The specified file_id was not found"
@@ -1464,21 +1451,23 @@ async def embed_file_upload(
 
 @router.post("/query_multiple")
 async def query_embeddings_by_file_ids(request: Request, body: QueryMultipleBody):
+    scope = resolve_scope(request, body.entity_id)
     try:
         # Get the embedding of the query text
         embedding = get_cached_query_embedding(body.query)
+        query_filter = scope.predicate(files_clause(body.file_ids))
 
         # Perform similarity search with the query embedding and filter by the file_ids in metadata
         if isinstance(vector_store, AsyncPgVector):
             documents = await vector_store.asimilarity_search_with_score_by_vector(
                 embedding,
                 k=body.k,
-                filter={"file_id": {"$in": body.file_ids}},
+                filter=query_filter,
                 executor=request.app.state.thread_pool,
             )
         else:
             documents = vector_store.similarity_search_with_score_by_vector(
-                embedding, k=body.k, filter={"file_id": {"$in": body.file_ids}}
+                embedding, k=body.k, filter=query_filter
             )
 
         documents = _apply_distance_threshold(documents)
