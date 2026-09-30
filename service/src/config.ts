@@ -36,6 +36,9 @@ export const configSchema = z
 export type Config = z.infer<typeof configSchema>;
 
 export function fromEnv(env: NodeJS.ProcessEnv): Config {
+  if (env.RAG_JWT_SECRET && env.RAG_JWT_SECRET === env.JWT_SECRET) {
+    throw new Error("RAG_JWT_SECRET must differ from JWT_SECRET");
+  }
   const number = (name: string) =>
     env[name] === undefined ? undefined : Number(env[name]);
   const enabled = env.RAG_EXTRACTION_API_ENABLED;

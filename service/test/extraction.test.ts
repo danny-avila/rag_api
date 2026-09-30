@@ -147,6 +147,9 @@ test("enabled startup requires a dedicated service key and finite limits", () =>
     ).toThrow();
   }
   expect(() => fromEnv({ RAG_EXTRACTION_API_ENABLED: "yes" })).toThrow();
+  expect(() =>
+    fromEnv({ RAG_JWT_SECRET: secret, JWT_SECRET: secret }),
+  ).toThrow();
 });
 test("rejects absent, expired, wrong-audience, and session-key tokens before parsing", async () => {
   const application = app();
