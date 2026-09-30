@@ -2,23 +2,7 @@
 import hashlib
 from enum import Enum
 from pydantic import BaseModel
-from typing import Optional, List, Literal
-
-
-class ParserProvenance(BaseModel):
-    name: Literal["anydoc"]
-    version: str
-
-
-class ExtractionResult(BaseModel):
-    profile: Literal["document-v1"]
-    text: str
-    format: Literal["markdown"]
-    completeness: Literal["complete", "partial"]
-    may_omit_content: bool
-    pages_needing_ocr: List[int]
-    truncated: bool
-    parser: ParserProvenance
+from typing import Optional, List
 
 
 class DocumentResponse(BaseModel):
