@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { SignJWT } from "jose";
-import { unzipSync, zipSync } from "fflate";
+import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +115,59 @@ test("embedded image or object cannot claim complete inspection", async () => {
     expect(result.completeness).toBe("partial");
     expect(result.may_omit_content).toBe(true);
   }
+  await clean();
+});
+test("image relationships and content types identify non-image filenames", async () => {
+  const data = unzipSync(fixture);
+  data["word/media/image.bin"] = new Uint8Array([1, 2, 3]);
+  data["[Content_Types].xml"] = strToU8(
+    strFromU8(data["[Content_Types].xml"]!).replace(
+      "</Types>",
+      '<Override PartName="/word/media/image.bin" ContentType="image/png"/></Types>',
+    ),
+  );
+  let response = await post(app(), form(zipSync(data)));
+  expect(response.status).toBe(200);
+  expect(resultSchema.parse(await response.json()).may_omit_content).toBe(true);
+  data["[Content_Types].xml"] = unzipSync(fixture)["[Content_Types].xml"]!;
+  data["word/_rels/document.xml.rels"] = strToU8(
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="art" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image.bin"/></Relationships>',
+  );
+  response = await post(app(), form(zipSync(data)));
+  expect(response.status).toBe(200);
+  expect(resultSchema.parse(await response.json()).completeness).toBe(
+    "partial",
+  );
+  await clean();
+});
+test("relationship-resolved main documents do not need a word directory", async () => {
+  const data = unzipSync(fixture);
+  for (const name of Object.keys(data)) {
+    if (!name.startsWith("word/")) continue;
+    data[name.replace("word/", "content/")] = data[name]!;
+    delete data[name];
+  }
+  for (const name of ["_rels/.rels", "[Content_Types].xml"]) {
+    data[name] = strToU8(
+      strFromU8(data[name]!).replaceAll("word/", "content/"),
+    );
+  }
+  const response = await post(app(), form(zipSync(data)));
+  expect(response.status).toBe(200);
+  const result = resultSchema.parse(await response.json());
+  expect(result.text).toBe(expectedText);
+  await clean();
+});
+test("external main-part relationships and DTD metadata are hard refusals", async () => {
+  const data = unzipSync(fixture);
+  data["_rels/.rels"] = strToU8(
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="doc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="https://example.invalid/main.xml" TargetMode="External"/></Relationships>',
+  );
+  await code(await post(app(), form(zipSync(data))), 422, "ARCHIVE_INVALID");
+  data["_rels/.rels"] = strToU8(
+    '<!DOCTYPE Relationships [<!ENTITY x SYSTEM "file:///etc/passwd">]><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">&x;</Relationships>',
+  );
+  await code(await post(app(), form(zipSync(data))), 422, "ARCHIVE_INVALID");
   await clean();
 });
 test("cover thumbnail does not cause paid OCR escalation", async () => {
@@ -270,6 +323,36 @@ test("parent caps IPC even if a child ignores its output limit", async () => {
   );
   await clean();
 });
+test("native children do not reload secrets from dotenv files", async () => {
+  await Bun.write(
+    join(tempRoot, ".env"),
+    "NATIVE_ENV_CANARY=should-not-reach-parser\n",
+  );
+  const result = {
+    profile: "document-v1",
+    text: "isolated",
+    format: "markdown",
+    completeness: "complete",
+    may_omit_content: false,
+    pages_needing_ocr: [],
+    truncated: false,
+    parser: { name: "anydoc", version: "0.1.3" },
+  };
+  const script = `const result = ${JSON.stringify(result)}; if (process.env.NATIVE_ENV_CANARY) result.text = "leaked"; console.log(JSON.stringify({ok:true,result}));`;
+  const response = await runWorker(
+    {
+      path: "unused",
+      maxOutputBytes: 4096,
+      maxEntryBytes: 4096,
+      maxArchiveBytes: 4096,
+      maxEntries: 5,
+    },
+    new AbortController().signal,
+    [process.execPath, "--cwd", tempRoot, "-e", script],
+  );
+  expect(response.text).toBe("isolated");
+});
+
 test("child crash and malformed response are sanitized and permit retry", async () => {
   for (const source of [
     "process.exit(11)",
@@ -361,6 +444,7 @@ test("overload refuses before reading or staging another request body", async ()
 test("body limit is counted for chunked requests, not trusted Content-Length", async () => {
   const application = app({ maxFileBytes: 100, maxBodyBytes: 200 });
   let pulls = 0;
+  let cancelled = false;
   const prefix =
     '--test\r\nContent-Disposition: form-data; name="file"; filename="r.docx"\r\nContent-Type: ' +
     DOCX_TYPE +
@@ -372,6 +456,9 @@ test("body limit is counted for chunked requests, not trusted Content-Length", a
         control.enqueue(
           new TextEncoder().encode(pulls === 1 ? prefix : "x".repeat(256)),
         );
+      },
+      cancel() {
+        cancelled = true;
       },
     },
     { highWaterMark: 0 },
@@ -386,5 +473,6 @@ test("body limit is counted for chunked requests, not trusted Content-Length", a
   });
   await code(await application.fetch(request), 413, "PARSER_INPUT_LIMIT");
   expect(pulls).toBeLessThan(5);
+  expect(cancelled).toBe(true);
   await clean();
 });

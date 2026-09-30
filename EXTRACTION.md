@@ -66,7 +66,10 @@ Successful response:
 ```
 
 An archive with non-thumbnail artwork or embedded objects is marked `partial`
-and `may_omit_content=true`. This is conservative omission detection, **not a
+and `may_omit_content=true`. Package relationships and content types identify
+artwork even when its filename has no image extension. The root relationship
+resolves the main document; a conventional `word/document.xml` path is not
+required. This is conservative omission detection, **not a
 proof that every source element is inspectable**. Never use partial text or a
 preview as complete content-inspection input. No automatic fallback occurs
 inside the service, so hard refusals cannot accidentally become paid OCR calls.
@@ -110,7 +113,8 @@ or health-check round trip. The Bun listener also enforces the body ceiling.
 Limits are per service process, not cluster-wide quotas. Queue wait, upload
 staging and parsing share one deadline. Cancelled queued work is removed; an
 active child is killed and reaped before cleanup and slot reuse. The child
-receives no JWT secret or provider credentials. Both sides cap serialized IPC
+receives no JWT secret or provider credentials, and Bun's automatic dotenv
+loading is disabled in it. Both sides cap serialized IPC
 output. Actual decompressed entry bytes are checked before native parsing;
 metadata-only size claims are not trusted. Graceful shutdown stops accepting
 requests and allows active operations to finish within their deadlines.
@@ -130,3 +134,8 @@ preview/sharing, token scopes, outages and mixed-version behavior end to end.
 Keep raw Markdown, rich HTML preview and complete inspection as distinct
 contracts. Expand formats or enable reranking only behind their own fidelity
 and quality gates. No measured speedup or full service parity is claimed here.
+
+The listener idle timeout is set above the overall extraction deadline so a
+parse lasting more than Bun's default ten seconds is not reset prematurely.
+`RAG_EXTRACTION_TIMEOUT_MS` may be at most 254,000, leaving one second within
+Bun's 255-second listener limit for the result or typed timeout response.

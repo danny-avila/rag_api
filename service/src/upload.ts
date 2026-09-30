@@ -47,6 +47,8 @@ export async function stageUpload(
           yield part.value;
         }
       } finally {
+        // Stop unread HTTP input before releasing the reader's lock.
+        await reader.cancel().catch(() => {});
         reader.releaseLock();
       }
     })(),

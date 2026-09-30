@@ -9,7 +9,7 @@ export const configSchema = z
     audience: z.string().min(1).default("rag-api"),
     concurrent: positive.default(2),
     queued: z.number().int().nonnegative().default(6),
-    timeoutMs: positive.max(2_147_483_647).default(30_000),
+    timeoutMs: positive.max(254_000).default(30_000),
     maxFileBytes: positive.default(15 * 1024 * 1024),
     maxBodyBytes: positive.default(16 * 1024 * 1024),
     maxOutputBytes: positive.default(15 * 1024 * 1024),

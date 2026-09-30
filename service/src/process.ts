@@ -18,7 +18,9 @@ export async function runWorker(
   command: readonly string[] = [process.execPath, workerPath],
 ): Promise<ExtractionResult> {
   signal.throwIfAborted();
-  const child = Bun.spawn([...command], {
+  const executable = command[0];
+  if (!executable) throw new ExtractionError("PARSER_UNAVAILABLE");
+  const child = Bun.spawn([executable, "--no-env-file", ...command.slice(1)], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "ignore",

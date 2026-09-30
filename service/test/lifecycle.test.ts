@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Admission } from "../src/admission";
 import { createApp } from "../src/app";
+import { configSchema } from "../src/config";
+import { listen } from "../src/server";
 import { DOCX_TYPE } from "../src/contract";
 import { runWorker, type Runner } from "../src/process";
 
@@ -70,6 +72,33 @@ test("cancelled queued work never consumes a slot and remaining work stays FIFO"
   const next = await admission.acquire(new AbortController().signal);
   next();
 });
+
+test("listener waits beyond ten seconds for the configured extraction deadline", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "rag-long-parse-"));
+  const config = configSchema.parse({
+    enabled: true,
+    secret,
+    tempRoot,
+    timeoutMs: 14_000,
+  });
+  const runner: Runner = async (request, signal) => {
+    await Bun.sleep(11_000);
+    return runWorker(request, signal);
+  };
+  const server = listen(createApp(config, runner), config, 0, "127.0.0.1");
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/v1/extract`, {
+      method: "POST",
+      headers: await headers(),
+      body: form(),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).text).toContain("Quarterly Report");
+  } finally {
+    await server.stop(true);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("actual HTTP disconnect kills the native child and cleans up before retry", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "rag-disconnect-"));
