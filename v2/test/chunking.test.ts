@@ -75,3 +75,38 @@ test("body cap rejects without reading the rest of an untrusted stream", async (
   });
   expect(cancelled).toBe(true);
 });
+
+test("the shared chunk ceiling accepts exactly 10,000 sections and rejects the next", async () => {
+  const { MAX_DOCUMENT_CHUNKS } = await import("../src/contracts");
+  const sections = (count: number) => [
+    { kind: "document" as const, index: 1, text: "# x\n".repeat(count) },
+  ];
+  const accepted = [...chunks(sections(MAX_DOCUMENT_CHUNKS))];
+  expect(accepted).toHaveLength(MAX_DOCUMENT_CHUNKS);
+  expect(accepted.at(-1)!.index).toBe(MAX_DOCUMENT_CHUNKS - 1);
+  expect(() => [...chunks(sections(MAX_DOCUMENT_CHUNKS + 1))]).toThrow(
+    "DOCUMENT_CHUNK_LIMIT",
+  );
+});
+
+test("embedding prefixes end on UTF-8 boundaries without dropping chunk content", async () => {
+  const { documentEmbeddingInput } = await import("../src/chunking");
+  const chunk = {
+    index: 0,
+    text: "正文😀",
+    page: null,
+    segment: 1,
+    start: 0,
+    end: 4,
+    section: ["章节😀"],
+  };
+  for (let limit = Buffer.byteLength(chunk.text); limit < 40; limit++) {
+    const embedded = documentEmbeddingInput(chunk, "标题😀", limit);
+    expect(Buffer.byteLength(embedded)).toBeLessThanOrEqual(limit);
+    expect(embedded.endsWith(chunk.text)).toBe(true);
+    expect(embedded.isWellFormed()).toBe(true);
+  }
+  expect(() => documentEmbeddingInput(chunk, "", 1)).toThrow(
+    "EMBEDDING_INPUT_LIMIT",
+  );
+});

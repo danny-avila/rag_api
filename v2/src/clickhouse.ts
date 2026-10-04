@@ -11,6 +11,7 @@ import { Gate } from "./limits";
 import {
   RagError,
   narrowScope,
+  MAX_DOCUMENT_CHUNKS,
   type Chunk,
   type Document,
   type Hit,
@@ -546,16 +547,28 @@ export class ClickHouseStore implements Store {
     document: Document,
     signal: AbortSignal,
   ): Promise<Chunk[]> {
+    if (document.chunkCount > MAX_DOCUMENT_CHUNKS)
+      throw new RagError("DOCUMENT_CHUNK_LIMIT", 413);
     const where = liveWhere(
       [narrowScope(scope, document.fileId)],
       document.spaceId,
     );
     const rows = await this.rows<HitRow>(
-      `SELECT chunk_index, content, page, segment, char_start, char_end, section FROM chunks WHERE ${where.sql} AND generation = {generation:String} ORDER BY chunk_index ASC LIMIT 10000`,
-      { ...where.params, generation: document.generation },
+      `SELECT chunk_index, content, page, segment, char_start, char_end, section FROM chunks WHERE ${where.sql} AND generation = {generation:String} ORDER BY chunk_index ASC LIMIT {limit:UInt32}`,
+      {
+        ...where.params,
+        generation: document.generation,
+        limit: MAX_DOCUMENT_CHUNKS + 1,
+      },
       signal,
       { select_sequential_consistency: "1" },
     );
+    if (
+      rows.length !== document.chunkCount ||
+      rows.some((row, index) => row.chunk_index !== index)
+    ) {
+      throw new RagError("CONTEXT_INCOMPLETE", 503);
+    }
     return rows.map((row) => ({
       index: row.chunk_index,
       text: row.content,

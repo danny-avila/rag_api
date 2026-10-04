@@ -42,3 +42,66 @@ test("publication is a scoped semi-join filter; the outer vector scan stays elig
   expect(sql).not.toContain(" JOIN ");
   expect(sql).not.toContain("LIMIT 1 BY");
 });
+
+test("context never silently returns a clipped, missing, or duplicate chunk sequence", async () => {
+  const { ClickHouseStore, databaseClient } = await import("../src/clickhouse");
+  const { MAX_DOCUMENT_CHUNKS, ingestSchema } =
+    await import("../src/contracts");
+  const { Pipeline } = await import("../src/pipeline");
+  const { MemoryStore, provider, signal } = await import("./helpers");
+  const scope = { tenantId: "tenant-a", namespaceId: "library-a" };
+  const document = await new Pipeline(new MemoryStore(), provider).ingest(
+    scope,
+    "file-a",
+    "user",
+    "key",
+    ingestSchema.parse({
+      segments: [{ kind: "document", index: 1, text: "alpha" }],
+    }),
+    signal(),
+  );
+  const client = databaseClient({
+    url: "http://127.0.0.1:1",
+    database: "test",
+    username: "default",
+    password: "",
+  });
+  const store = new ClickHouseStore(client, "test", 64);
+  const row = {
+    chunk_index: 0,
+    content: "alpha",
+    page: null,
+    segment: 1,
+    char_start: 0,
+    char_end: 5,
+    section: [],
+  };
+  let rows = [row];
+  let calls = 0;
+  store.rows = async <T>(query: string, params: Record<string, unknown>) => {
+    calls++;
+    expect(query).toContain("LIMIT {limit:UInt32}");
+    expect(params.limit).toBe(MAX_DOCUMENT_CHUNKS + 1);
+    return rows as T[];
+  };
+  try {
+    expect(await store.context(scope, document, signal())).toHaveLength(1);
+    for (const invalid of [[], [row, row], [{ ...row, chunk_index: 1 }]]) {
+      rows = invalid;
+      await expect(
+        store.context(scope, document, signal()),
+      ).rejects.toMatchObject({ code: "CONTEXT_INCOMPLETE" });
+    }
+    const before = calls;
+    await expect(
+      store.context(
+        scope,
+        { ...document, chunkCount: MAX_DOCUMENT_CHUNKS + 1 },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "DOCUMENT_CHUNK_LIMIT" });
+    expect(calls).toBe(before);
+  } finally {
+    await store.close();
+  }
+});

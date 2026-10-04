@@ -259,3 +259,134 @@ test("a lost receipt cannot make a late retry resurrect an older revision", asyn
     updated.generation,
   );
 });
+
+test("a stale ifMatch cannot resurrect a deleted generation, but deliberate recreation still works", async () => {
+  const store = new MemoryStore();
+  const pipeline = new Pipeline(store, provider);
+  const original = await pipeline.ingest(
+    scope,
+    "file-a",
+    "user",
+    "original",
+    input(),
+    signal(),
+  );
+  await pipeline.delete(scope, "file-a", "user", "delete", signal());
+  const inserts = store.events.filter((event) => event === "insert").length;
+  await expect(
+    new Pipeline(store, provider).ingest(
+      scope,
+      "file-a",
+      "user",
+      "stale-edit",
+      { ...input("changed"), ifMatch: original.generation },
+      signal(),
+    ),
+  ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  expect(store.events.filter((event) => event === "insert")).toHaveLength(
+    inserts,
+  );
+  expect((await store.get(scope, "file-a"))!.state).toBe("deleted");
+  const recreated = await pipeline.ingest(
+    scope,
+    "file-a",
+    "user",
+    "recreate",
+    input("new"),
+    signal(),
+  );
+  expect(recreated.state).toBe("ready");
+  expect(recreated.generation).not.toBe(original.generation);
+  const updated = await pipeline.ingest(
+    scope,
+    "file-a",
+    "user",
+    "live-edit",
+    { ...input("edited"), ifMatch: recreated.generation },
+    signal(),
+  );
+  expect(updated.generation).not.toBe(recreated.generation);
+});
+
+test("excess Markdown sections cannot publish a context that would be truncated", async () => {
+  const store = new MemoryStore();
+  const pipeline = new Pipeline(store, provider);
+  const original = await pipeline.ingest(
+    scope,
+    "file-a",
+    "user",
+    "original",
+    input(),
+    signal(),
+  );
+  await expect(
+    pipeline.ingest(
+      scope,
+      "file-a",
+      "user",
+      "too-many",
+      input("# x\n".repeat(10001)),
+      signal(),
+    ),
+  ).rejects.toMatchObject({ code: "DOCUMENT_CHUNK_LIMIT", status: 413 });
+  expect((await store.get(scope, "file-a"))!.generation).toBe(
+    original.generation,
+  );
+  expect(store.events.filter((event) => event === "publish")).toHaveLength(1);
+});
+
+test("production embedding requests budget Unicode title and nested headings while preserving source text", async () => {
+  const { openAICompatible } = await import("../src/embeddings");
+  const requests: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { input: string[] };
+      requests.push(...body.input);
+      if (body.input.some((text) => Buffer.byteLength(text) > 8191))
+        return new Response(null, { status: 400 });
+      return Response.json({
+        data: body.input.map((_, index) => ({
+          index,
+          embedding: [1, 0, 0, 0, 0, 0, 0, 0],
+        })),
+      });
+    },
+  });
+  try {
+    const adapter = openAICompatible({
+      endpoint: `http://127.0.0.1:${server.port}/embeddings`,
+      apiKey: "test",
+      model: "test",
+      dimensions: 8,
+    });
+    const store = new MemoryStore();
+    const text =
+      Array.from(
+        { length: 6 },
+        (_, index) => `${"#".repeat(index + 1)} ${"章".repeat(512)}\n`,
+      ).join("") + "文".repeat(1500);
+    const document = await new Pipeline(store, adapter).ingest(
+      scope,
+      "file-a",
+      "user",
+      "unicode",
+      { ...input(text), title: "書".repeat(512) },
+      signal(),
+    );
+    expect(document.chunkCount).toBeGreaterThan(0);
+    expect(
+      requests.every(
+        (text) =>
+          text.isWellFormed() &&
+          Buffer.byteLength(text) <= adapter.maxInputBytes,
+      ),
+    ).toBe(true);
+    for (const chunk of store.chunks)
+      expect(chunk.text).toBe(text.slice(chunk.start, chunk.end));
+    expect(store.chunks.at(-1)!.section).toHaveLength(6);
+  } finally {
+    await server.stop(true);
+  }
+});

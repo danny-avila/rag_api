@@ -36,6 +36,7 @@ const spaceId = `synthetic-${dimensions}`;
 const provider: EmbeddingProvider = {
   spaceId,
   dimensions,
+  maxInputBytes: 8191,
   async embedQuery() {
     return reference;
   },

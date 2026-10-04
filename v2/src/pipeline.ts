@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chunks } from "./chunking";
+import { chunks, documentEmbeddingInput } from "./chunking";
 import {
   RagError,
   narrowScope,
@@ -113,7 +113,7 @@ export class Pipeline {
                 input,
                 provenance.sourceClass,
                 this.provider.spaceId,
-                "chunk-1500-overlap150-v1",
+                "chunk-1500-overlap150-budgeted-prefix-v2",
               ]),
             )
             .digest("hex");
@@ -125,7 +125,10 @@ export class Pipeline {
             signal,
           );
           if (replay) return replay;
-          if (input.ifMatch && current?.generation !== input.ifMatch)
+          if (
+            input.ifMatch &&
+            (current?.state !== "ready" || current.generation !== input.ifMatch)
+          )
             throw new RagError("PRECONDITION_FAILED", 409);
           const generation = randomBytes(16).toString("hex");
           let chunkCount = 0;
@@ -142,9 +145,11 @@ export class Pipeline {
             if (insertionError) throw insertionError;
             const embeddings = await this.provider.embedDocuments(
               batch.map((chunk) =>
-                [input.title, chunk.section.join(" > "), chunk.text]
-                  .filter(Boolean)
-                  .join("\n\n"),
+                documentEmbeddingInput(
+                  chunk,
+                  input.title,
+                  this.provider.maxInputBytes,
+                ),
               ),
               signal,
             );

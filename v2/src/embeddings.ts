@@ -6,6 +6,7 @@ import { RagError } from "./contracts";
 export interface EmbeddingProvider {
   readonly spaceId: string;
   readonly dimensions: number;
+  readonly maxInputBytes: number;
   embedQuery(text: string, signal: AbortSignal): Promise<readonly number[]>;
   embedDocuments(
     texts: readonly string[],
@@ -61,7 +62,7 @@ export function openAICompatible(options: {
         url.href,
         options.model,
         options.dimensions,
-        "raw-query/title-section-document-v1",
+        "raw-query/title-section-document-budgeted-v2",
       ]),
     )
     .digest("hex");
@@ -145,6 +146,7 @@ export function openAICompatible(options: {
   return {
     spaceId,
     dimensions: options.dimensions,
+    maxInputBytes: 8191,
     embedQuery: async (text, signal) => (await embed([text], signal))[0]!,
     embedDocuments: embed,
   };
@@ -162,8 +164,9 @@ export function deterministicProvider(dimensions = 64): EmbeddingProvider {
     return vector;
   };
   return {
-    spaceId: `test-only-token-hash-${dimensions}-v1`,
+    spaceId: `test-only-token-hash-${dimensions}-v2`,
     dimensions,
+    maxInputBytes: 8191,
     async embedQuery(text, signal) {
       signal.throwIfAborted();
       return embed(text);

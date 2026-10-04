@@ -220,6 +220,16 @@ for (const quantized of [false, true]) {
         });
         expect(response.status).toBe(200);
         await pipeline.delete(scope, "file-a", "user-a", "delete", signal());
+        await expect(
+          pipeline.ingest(
+            scope,
+            "file-a",
+            "user-a",
+            "stale-edit",
+            { ...input, ifMatch: updated.generation },
+            signal(),
+          ),
+        ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
         expect(
           await store.search(
             [scope],
@@ -229,6 +239,33 @@ for (const quantized of [false, true]) {
             signal(),
           ),
         ).toEqual([]);
+        if (!quantized) {
+          const { MAX_DOCUMENT_CHUNKS } = await import("../src/contracts");
+          const complete = await pipeline.ingest(
+            scope,
+            "ceiling",
+            "user-a",
+            "ceiling",
+            ingestSchema.parse({
+              segments: [
+                {
+                  kind: "document",
+                  index: 1,
+                  text: "# x\n".repeat(MAX_DOCUMENT_CHUNKS),
+                },
+              ],
+            }),
+            AbortSignal.timeout(30000),
+          );
+          const context = await store.context(
+            scope,
+            complete,
+            AbortSignal.timeout(10000),
+          );
+          expect(complete.chunkCount).toBe(MAX_DOCUMENT_CHUNKS);
+          expect(context).toHaveLength(MAX_DOCUMENT_CHUNKS);
+          expect(context.at(-1)!.index).toBe(MAX_DOCUMENT_CHUNKS - 1);
+        }
       } finally {
         await store?.close();
         await admin.command({

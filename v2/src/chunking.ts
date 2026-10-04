@@ -1,4 +1,9 @@
-import type { Chunk, Segment } from "./contracts";
+import {
+  MAX_DOCUMENT_CHUNKS,
+  RagError,
+  type Chunk,
+  type Segment,
+} from "./contracts";
 
 function boundary(text: string, position: number): number {
   const code = text.charCodeAt(position - 1);
@@ -46,7 +51,9 @@ export function* chunks(
           Math.min(position + size, section.end),
         );
         const text = segment.text.slice(position, end);
-        if (text.trim())
+        if (text.trim()) {
+          if (index >= MAX_DOCUMENT_CHUNKS)
+            throw new RagError("DOCUMENT_CHUNK_LIMIT", 413);
           yield {
             index: index++,
             text,
@@ -56,6 +63,7 @@ export function* chunks(
             end,
             section: section.path,
           };
+        }
         if (end >= section.end) break;
         position = Math.max(
           position + 1,
@@ -64,4 +72,23 @@ export function* chunks(
       }
     }
   }
+}
+
+export function documentEmbeddingInput(
+  chunk: Chunk,
+  title: string,
+  maxInputBytes: number,
+): string {
+  const textBytes = Buffer.byteLength(chunk.text);
+  if (!Number.isSafeInteger(maxInputBytes) || textBytes > maxInputBytes) {
+    throw new RagError("EMBEDDING_INPUT_LIMIT", 422);
+  }
+  const header = [title, chunk.section.join(" > ")]
+    .filter(Boolean)
+    .join("\n\n");
+  const bytes = Buffer.from(header);
+  let end = Math.min(bytes.length, Math.max(0, maxInputBytes - textBytes - 2));
+  while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
+  const prefix = bytes.subarray(0, end).toString("utf8").trimEnd();
+  return prefix ? `${prefix}\n\n${chunk.text}` : chunk.text;
 }
