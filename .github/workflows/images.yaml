@@ -57,6 +57,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Registry names must be lowercase, and the repository owner is not guaranteed to be.
+      - name: Resolve image name
+        env:
+          IMAGE_NAME: ${{ matrix.image_name }}
+        run: printf 'GHCR_IMAGE=ghcr.io/%s/%s\n' "${GITHUB_REPOSITORY_OWNER,,}" "$IMAGE_NAME" >> "$GITHUB_ENV"
+
       # Build and push Docker images for each target
       - name: Build and push Docker images
         uses: docker/build-push-action@v5
@@ -65,9 +71,65 @@ jobs:
           file: ${{ matrix.file }}
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:latest
           platforms: linux/amd64,linux/arm64
           target: ${{ matrix.target }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # After the repository moved to another owner, deployments still pull the old GHCR
+  # namespace. Copying each published tag there keeps them updating until the deprecation
+  # window closes. Copies are cross-repo blob mounts within GHCR, so no image data is
+  # rebuilt or re-uploaded.
+  #
+  # It runs in its own job so the credential that can write to the legacy namespace lives
+  # in an environment, out of reach of workflows on other branches, and so a mirror failure
+  # cannot fail a publish.
+  #
+  # Set the LEGACY_GHCR_OWNER variable and the LEGACY_GHCR_TOKEN secret (a token with
+  # write:packages for that owner) to turn this on.
+  mirror:
+    name: Mirror ${{ matrix.image_name }} to the legacy namespace
+    if: ${{ vars.LEGACY_GHCR_OWNER != '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    environment: legacy-mirror
+    strategy:
+      fail-fast: false
+      matrix:
+        image_name: [librechat-rag-api-dev, librechat-rag-api-dev-lite]
+
+    steps:
+      - name: Copy the published tags
+        env:
+          LEGACY_OWNER: ${{ vars.LEGACY_GHCR_OWNER }}
+          LEGACY_TOKEN: ${{ secrets.LEGACY_GHCR_TOKEN }}
+          IMAGE_NAME: ${{ matrix.image_name }}
+          TAGS: "${{ github.sha }} latest"
+        run: |
+          set -euo pipefail
+
+          legacy_owner="${LEGACY_OWNER,,}"
+          if [ "$legacy_owner" = "${GITHUB_REPOSITORY_OWNER,,}" ]; then
+            echo "Legacy owner matches the current owner; nothing to mirror."
+            exit 0
+          fi
+          if [ -z "$LEGACY_TOKEN" ]; then
+            echo "::warning::LEGACY_GHCR_OWNER is set but LEGACY_GHCR_TOKEN is not; skipping the mirror."
+            exit 0
+          fi
+
+          # Registry names must be lowercase, and the repository owner is not guaranteed to be.
+          source_image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}"
+          legacy_image="ghcr.io/${legacy_owner}/${IMAGE_NAME}"
+
+          # This login reads both namespaces: it replaces the default ghcr.io credential.
+          echo "$LEGACY_TOKEN" | docker login ghcr.io -u "$legacy_owner" --password-stdin
+
+          for tag in $TAGS; do
+            echo "Mirroring ${source_image}:${tag} -> ${legacy_image}:${tag}"
+            docker buildx imagetools create -t "${legacy_image}:${tag}" "${source_image}:${tag}"
+          done
