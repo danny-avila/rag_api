@@ -437,7 +437,12 @@ async def get_existing_file_ids(request: Request, body: ExistsRequestBody):
                 executor=request.app.state.thread_pool,
             )
         else:
-            found = vector_store.get_filtered_ids(body.file_ids, owners=scope.owners)
+            found = await run_in_executor(
+                request.app.state.thread_pool,
+                vector_store.get_filtered_ids,
+                body.file_ids,
+                scope.owners,
+            )
 
         present = set(found)
         return {
