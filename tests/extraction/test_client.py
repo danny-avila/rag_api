@@ -25,7 +25,8 @@ async def test_raw_upload_and_valid_segments(processor, input_file, format):
     assert (method, path) == ("POST", "/v1/extract-text")
     assert body == Path(input_file).read_bytes()
     assert headers == {
-        "Host": "extraction",
+        "Host": processor.url.removeprefix("http://"),
+        "Authorization": f"Bearer {processor.token}",
         "Connection": "close",
         "Content-Length": str(len(body)),
         "Content-Type": "application/octet-stream",
@@ -197,8 +198,12 @@ async def test_capabilities_rechecked_after_service_change(processor, input_file
     assert [r[0] for r in processor.requests] == ["GET", "POST", "GET"]
 
 
-async def test_outage_is_safe(input_file, tmp_path):
-    client = ExtractionClient(ExtractionSettings(socket=str(tmp_path / "missing")))
+async def test_outage_is_safe(input_file, processor, monkeypatch):
+    async def unavailable(*args, **kwargs):
+        raise ConnectionRefusedError("private endpoint")
+
+    monkeypatch.setattr(asyncio, "open_connection", unavailable)
+    client = processor.client()
     with pytest.raises(ExtractionError, match="UNAVAILABLE"):
         await client.extract(input_file, "pdf")
 
@@ -208,17 +213,22 @@ def test_default_settings_require_service_without_environment(monkeypatch):
         "RAG_EXTRACTION_ENABLED",
         "RAG_EXTRACTION_FORMATS",
         "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_URL",
+        "RAG_EXTRACTION_TOKEN_FILE",
         "RAG_EXTRACTION_DEADLINE_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
     settings = ExtractionSettings.from_env()
-    assert settings.socket == "/socket/extraction.sock" and settings.deadline == 10
+    assert settings.url == "http://extraction:8000" and settings.deadline == 10
+    assert settings.token_file == "/run/extraction/token"
     assert not hasattr(settings, "enabled") and not hasattr(settings, "formats")
 
 
 @pytest.mark.parametrize(
     "key,value",
     [
+        ("RAG_EXTRACTION_SOCKET", "/socket/old.sock"),
+        ("RAG_EXTRACTION_SOCKET", ""),
         ("RAG_EXTRACTION_ENABLED", "false"),
         ("RAG_EXTRACTION_ENABLED", "true"),
         ("RAG_EXTRACTION_ENABLED", ""),
@@ -236,8 +246,9 @@ def test_obsolete_opt_out_configuration_is_rejected(monkeypatch, key, value):
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"socket": "relative"},
-        {"socket": ""},
+        {"token_file": "relative"},
+        {"token_file": ""},
+        {"token_file": "/bad\x00path"},
         {"deadline": 0},
         {"deadline": 11},
         {"deadline": True},
@@ -253,7 +264,8 @@ def test_required_config_is_validated(kwargs):
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("RAG_EXTRACTION_SOCKET", "relative"),
+        ("RAG_EXTRACTION_URL", "relative"),
+        ("RAG_EXTRACTION_TOKEN_FILE", "relative"),
         ("RAG_EXTRACTION_DEADLINE_SECONDS", "stale"),
     ],
 )

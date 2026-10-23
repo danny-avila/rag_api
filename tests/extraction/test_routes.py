@@ -169,6 +169,11 @@ async def test_migrated_routes_parse_once_and_keep_caller_metadata(
     assert result["filename"] == f"report.{format}"
     assert result["known_type"] is True
     assert [r[0] for r in processor.requests] == ["GET", "POST"]
+    assert all(
+        request[2]["Authorization"] == f"Bearer {processor.token}"
+        and request[2]["Authorization"] != client.headers["Authorization"]
+        for request in processor.requests
+    )
     if route == "/text":
         assert result["text"] == (
             "First page café\nSecond page"
@@ -222,7 +227,7 @@ async def test_selected_format_failure_never_falls_back_or_persists(
         processor.error = (422, "UNSUPPORTED_CONTENT")
     elif failure == "outage":
         routes.extraction_client = ExtractionClient(
-            ExtractionSettings(socket="/socket/missing.sock")
+            ExtractionSettings(token_file="/run/extraction/missing-token")
         )
     elif failure == "incompatible":
         processor.capabilities["version"] = 2
@@ -345,18 +350,23 @@ async def test_no_extraction_configuration_still_requires_service(
         "RAG_EXTRACTION_ENABLED",
         "RAG_EXTRACTION_FORMATS",
         "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_URL",
+        "RAG_EXTRACTION_TOKEN_FILE",
         "RAG_EXTRACTION_DEADLINE_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RAG_EXTRACTION_TOKEN_FILE", processor.token_file)
     defaults = ExtractionSettings.from_env()
     routes.extraction_client = ExtractionClient(defaults)
-    connect = asyncio.open_unix_connection
+    connect = asyncio.open_connection
 
-    async def disposable_socket(path, **kwargs):
-        assert path == "/socket/extraction.sock"
-        return await connect(processor.socket, **kwargs)
+    async def disposable_endpoint(host, port, **kwargs):
+        assert (host, port) == ("extraction", 8000)
+        return await connect(
+            "127.0.0.1", int(processor.url.rsplit(":", 1)[1]), **kwargs
+        )
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", disposable_socket)
+    monkeypatch.setattr(asyncio, "open_connection", disposable_endpoint)
     response = await post(client, uploads, route, format)
     assert response.status_code == 200, response.text
     assert [r[0] for r in processor.requests] == ["GET", "POST"]
@@ -852,7 +862,7 @@ async def test_disconnect_before_queued_sync_mutation_prevents_write(
         connection = ASGIConnection(app, request, await request.aread())
         try:
             await asyncio.wait_for(submitted.wait(), 1)
-            assert blocker_entered.is_set()
+            assert await asyncio.to_thread(blocker_entered.wait, 1)
             connection.disconnect()
             await asyncio.sleep(0.05)
             assert "http.disconnect" in connection.received
@@ -1248,7 +1258,7 @@ async def test_repeated_cancellation_cannot_abandon_upload_unlink(
 
 @pytest.mark.parametrize("route", ROUTES)
 @pytest.mark.parametrize("format", ["pdf", "docx"])
-async def test_default_socket_unavailable_fails_closed_without_affecting_text(
+async def test_default_service_unavailable_fails_closed_without_affecting_text(
     api, processor, monkeypatch, route, format
 ):
     client, store, uploads = api
@@ -1256,16 +1266,19 @@ async def test_default_socket_unavailable_fails_closed_without_affecting_text(
         "RAG_EXTRACTION_ENABLED",
         "RAG_EXTRACTION_FORMATS",
         "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_URL",
+        "RAG_EXTRACTION_TOKEN_FILE",
         "RAG_EXTRACTION_DEADLINE_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RAG_EXTRACTION_TOKEN_FILE", processor.token_file)
     routes.extraction_client = ExtractionClient(ExtractionSettings.from_env())
 
-    async def unavailable(path, **kwargs):
-        assert path == "/socket/extraction.sock"
-        raise FileNotFoundError()
+    async def unavailable(host, port, **kwargs):
+        assert (host, port) == ("extraction", 8000)
+        raise ConnectionRefusedError()
 
-    monkeypatch.setattr(asyncio, "open_unix_connection", unavailable)
+    monkeypatch.setattr(asyncio, "open_connection", unavailable)
     response = await post(client, uploads, route, format)
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "UNAVAILABLE"
@@ -1275,3 +1288,33 @@ async def test_default_socket_unavailable_fails_closed_without_affecting_text(
     )
     plaintext = await post(client, uploads, "/text", "txt", b"plain text", "text/plain")
     assert plaintext.status_code == 200 and plaintext.json()["text"] == "plain text"
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("failure", ["missing", "wrong", "extract-unauthorized"])
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_service_auth_failure_is_unavailable_not_user_unauthorized(
+    api, processor, route, failure, format, caplog
+):
+    client, store, uploads = api
+    if failure == "missing":
+        Path(processor.token_file).unlink()
+    elif failure == "wrong":
+        Path(processor.token_file).write_text("cd" * 32)
+    else:
+        processor.error = (401, "UNAUTHORIZED")
+    response = await post(client, uploads, route, format)
+    assert response.status_code == 503
+    assert response.json()["detail"] == {"code": "UNAVAILABLE"}
+    assert not store.calls and not store.persisted and not store.rollbacks
+    assert (
+        len(processor.requests)
+        == {"missing": 0, "wrong": 1, "extract-unauthorized": 2}[failure]
+    )
+    assert "Bearer" not in caplog.text and processor.token not in caplog.text
+    assert "cd" * 32 not in caplog.text
+    assert len(list(uploads.rglob(f"*.{format}"))) == (
+        1 if route == "/local/embed" else 0
+    )
+    plaintext = await post(client, uploads, "/text", "txt", b"plain text", "text/plain")
+    assert plaintext.status_code == 200

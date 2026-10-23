@@ -1,4 +1,4 @@
-"""Bounded v1 extraction transport. Only caller-owned bytes cross the socket."""
+"""Bounded v1 extraction transport. Only caller-owned bytes and service auth cross HTTP."""
 
 import asyncio
 import hashlib
@@ -6,7 +6,10 @@ import json
 import math
 import os
 import re
+import ssl
+import stat
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import aiofiles
 
@@ -18,6 +21,7 @@ CAPABILITY_BYTES = 8192
 CHUNK_BYTES = 64 * 1024
 OPERATION = "document.extract-text"
 ERROR_STATUS = {
+    "UNAUTHORIZED": 401,
     "INVALID_REQUEST": 400,
     "INPUT_LIMIT": 413,
     "OUTPUT_LIMIT": 413,
@@ -48,20 +52,65 @@ class ExtractionError(Exception):
         super().__init__(code)
 
 
+def _endpoint(url):
+    try:
+        if (
+            not isinstance(url, str)
+            or not 1 <= len(url) <= 2048
+            or any(ord(char) <= 32 or ord(char) >= 127 for char in url)
+            or "?" in url
+            or "#" in url
+            or "\\" in url
+        ):
+            raise ValueError()
+        endpoint = urlsplit(url)
+        if (
+            endpoint.scheme not in {"http", "https"}
+            or not endpoint.hostname
+            or endpoint.username is not None
+            or endpoint.password is not None
+            or endpoint.path not in {"", "/"}
+            or endpoint.netloc.endswith(":")
+            or not 1
+            <= (endpoint.port or (443 if endpoint.scheme == "https" else 80))
+            <= 65535
+            or endpoint.port == 0
+            or not re.fullmatch(r"[a-zA-Z0-9.:-]+", endpoint.hostname)
+        ):
+            raise ValueError()
+        authority = (
+            f"[{endpoint.hostname}]" if ":" in endpoint.hostname else endpoint.hostname
+        )
+        if endpoint.port is not None:
+            authority += f":{endpoint.port}"
+        if endpoint.netloc.lower() != authority:
+            raise ValueError()
+        if endpoint.scheme == "http" and not (
+            endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
+            or (endpoint.hostname == "extraction" and endpoint.port == 8000)
+        ):
+            raise ValueError()
+        return endpoint
+    except ValueError:
+        raise ValueError(
+            "RAG_EXTRACTION_URL must be an HTTPS origin or local HTTP extraction origin"
+        ) from None
+
+
 @dataclass(frozen=True)
 class ExtractionSettings:
-    socket: str = "/socket/extraction.sock"
+    url: str = "http://extraction:8000"
+    token_file: str = "/run/extraction/token"
     deadline: float = 10.0
 
     def __post_init__(self):
+        _endpoint(self.url)
         if (
-            not isinstance(self.socket, str)
-            or not os.path.isabs(self.socket)
-            or "\x00" in self.socket
+            not isinstance(self.token_file, str)
+            or not os.path.isabs(self.token_file)
+            or "\x00" in self.token_file
         ):
-            raise ValueError(
-                "RAG_EXTRACTION_SOCKET must be an absolute Unix socket path"
-            )
+            raise ValueError("RAG_EXTRACTION_TOKEN_FILE must be an absolute file path")
         if (
             type(self.deadline) not in (int, float)
             or not math.isfinite(self.deadline)
@@ -71,15 +120,42 @@ class ExtractionSettings:
 
     @classmethod
     def from_env(cls):
-        for key in ("RAG_EXTRACTION_ENABLED", "RAG_EXTRACTION_FORMATS"):
+        for key in (
+            "RAG_EXTRACTION_ENABLED",
+            "RAG_EXTRACTION_FORMATS",
+            "RAG_EXTRACTION_SOCKET",
+        ):
             if key in os.environ:
                 raise ValueError(
-                    f"{key} is obsolete; PDF/DOCX service extraction is required"
+                    f"{key} is obsolete; authenticated PDF/DOCX service extraction is required"
                 )
+        try:
+            deadline = float(os.getenv("RAG_EXTRACTION_DEADLINE_SECONDS", "10"))
+        except ValueError:
+            raise ValueError(
+                "RAG_EXTRACTION_DEADLINE_SECONDS must be in (0, 10]"
+            ) from None
         return cls(
-            socket=os.getenv("RAG_EXTRACTION_SOCKET", "/socket/extraction.sock"),
-            deadline=float(os.getenv("RAG_EXTRACTION_DEADLINE_SECONDS", "10")),
+            url=os.getenv("RAG_EXTRACTION_URL", "http://extraction:8000"),
+            token_file=os.getenv("RAG_EXTRACTION_TOKEN_FILE", "/run/extraction/token"),
+            deadline=deadline,
         )
+
+
+def _read_token(path):
+    descriptor = os.open(
+        path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 64:
+            raise ExtractionError("UNAVAILABLE")
+        token = os.read(descriptor, 65)
+        if not re.fullmatch(b"[0-9a-f]{64}", token):
+            raise ExtractionError("UNAVAILABLE")
+        return token.decode("ascii")
+    finally:
+        os.close(descriptor)
 
 
 def _object(pairs):
@@ -207,12 +283,27 @@ class ExtractionClient:
     def __init__(self, settings: ExtractionSettings):
         self.settings = settings
         self._admitted = 0
+        self._endpoint = _endpoint(settings.url)
+        self._ssl = (
+            ssl.create_default_context() if self._endpoint.scheme == "https" else None
+        )
 
     async def _request(
-        self, method: str, *, file=None, size=0, format=None, maximum=CAPABILITY_BYTES
+        self,
+        method: str,
+        token: str,
+        *,
+        file=None,
+        size=0,
+        format=None,
+        maximum=CAPABILITY_BYTES,
     ):
-        reader, writer = await asyncio.open_unix_connection(
-            self.settings.socket, limit=HEADER_BYTES
+        reader, writer = await asyncio.open_connection(
+            self._endpoint.hostname,
+            self._endpoint.port or (443 if self._ssl else 80),
+            ssl=self._ssl,
+            server_hostname=self._endpoint.hostname if self._ssl else None,
+            limit=HEADER_BYTES,
         )
         # At most one chunk may be queued without drain, including on cancellation.
         writer.transport.set_write_buffer_limits(high=CHUNK_BYTES, low=CHUNK_BYTES // 2)
@@ -220,7 +311,8 @@ class ExtractionClient:
         try:
             path = "/v1/extract-text" if file is not None else "/v1/capabilities"
             headers = (
-                f"{method} {path} HTTP/1.1\r\nHost: extraction\r\nConnection: close\r\n"
+                f"{method} {path} HTTP/1.1\r\nHost: {self._endpoint.netloc}\r\n"
+                f"Authorization: Bearer {token}\r\nConnection: close\r\n"
             )
             if file is not None:
                 headers += (
@@ -283,12 +375,31 @@ class ExtractionClient:
                     and type(value["error"]["code"]) is str
                     and ERROR_STATUS.get(value["error"]["code"]) == status
                 ):
-                    raise ExtractionError(value["error"]["code"])
+                    code = value["error"]["code"]
+                    # Service authentication is not the RAG caller's authentication.
+                    raise ExtractionError(
+                        "UNAVAILABLE" if code == "UNAUTHORIZED" else code
+                    )
                 raise ExtractionError("INVALID_RESPONSE")
             return value, digest.hexdigest()
         finally:
             # Abort instead of flushing pending input on timeout/cancellation.
             writer.transport.abort()
+            closed = asyncio.create_task(writer.wait_closed())
+            cancelled = False
+            while not closed.done():
+                try:
+                    await asyncio.shield(closed)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except OSError:
+                    break
+            try:
+                closed.result()
+            except OSError:
+                pass
+            if cancelled:
+                raise asyncio.CancelledError()
 
     async def extract(self, file_path: str, format: str):
         if format not in {"pdf", "docx"}:
@@ -302,11 +413,15 @@ class ExtractionClient:
                     stat = await asyncio.to_thread(os.fstat, file.fileno())
                     if not 0 < stat.st_size <= INPUT_BYTES:
                         raise ExtractionError("INPUT_LIMIT")
-                    # No cache: each job checks the current socket's contract before upload.
-                    capabilities, _ = await self._request("GET")
+                    token = await asyncio.to_thread(
+                        _read_token, self.settings.token_file
+                    )
+                    # No cache: authenticate and check the current service before upload.
+                    capabilities, _ = await self._request("GET", token)
                     limits = validate_capabilities(capabilities, format, stat.st_size)
                     result, digest = await self._request(
                         "POST",
+                        token,
                         file=file,
                         size=stat.st_size,
                         format=format,

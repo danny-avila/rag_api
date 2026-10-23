@@ -1,4 +1,9 @@
 services:
+  extraction-init: !override
+    extends:
+      file: extraction-compose.yaml
+      service: extraction-init
+
   extraction: !override
     extends:
       file: extraction-compose.yaml
@@ -17,8 +22,7 @@ services:
 
   fastapi:
     build: .
-    group_add:
-      - '10001'
+    networks: [default, extraction]
     environment:
       - DB_HOST=db
       - DB_PORT=5432
@@ -27,7 +31,7 @@ services:
       - "8000:8000"
     volumes:
       - ./uploads:/app/uploads
-      - extraction-socket:/socket:ro
+      - extraction-credentials:/run/extraction:ro
     depends_on:
       db:
         condition: service_started
@@ -37,5 +41,9 @@ services:
       - .env
 
 volumes:
-  extraction-socket:
+  extraction-credentials:
   pgdata2:
+
+networks:
+  extraction:
+    internal: true

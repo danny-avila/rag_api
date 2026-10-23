@@ -2,9 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
-import os
-import tempfile
-from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -34,14 +32,19 @@ CAPABILITIES = {
 
 
 class Processor:
-    def __init__(self, socket):
-        self.socket = socket
+    def __init__(self, token_file):
+        self.url = None
+        self.token_file = str(token_file)
+        self.token = "ab" * 32
+        token_file.write_text(self.token)
         self.capabilities = copy.deepcopy(CAPABILITIES)
         self.requests = []
         self.mutate = lambda value: value
         self.raw = None
         self.error = None
         self.hold = False
+        self.hold_caps = False
+        self.caps_entered = asyncio.Event()
         self.before_response = None
         self.entered = asyncio.Event()
         self.closed = asyncio.Event()
@@ -50,7 +53,9 @@ class Processor:
 
     def client(self, deadline=10):
         return ExtractionClient(
-            ExtractionSettings(socket=self.socket, deadline=deadline)
+            ExtractionSettings(
+                url=self.url, token_file=self.token_file, deadline=deadline
+            )
         )
 
     async def handle(self, reader, writer):
@@ -64,7 +69,15 @@ class Processor:
             length = int(fields.get("Content-Length", "0"))
             body = await reader.readexactly(length)
             self.requests.append((method, path, fields, body))
-            if path == "/v1/capabilities":
+            if fields.get("Authorization") != f"Bearer {self.token}":
+                value = {"error": {"code": "UNAUTHORIZED"}}
+                status = 401
+            elif path == "/v1/capabilities":
+                self.caps_entered.set()
+                if self.hold_caps:
+                    await reader.read()
+                    self.closed.set()
+                    return
                 value = self.capabilities
                 status = 200
             else:
@@ -125,18 +138,15 @@ class Processor:
 
 
 @pytest.fixture
-async def processor():
-    # Keep AF_UNIX path below 108 bytes even in long worktree/pytest directories.
-    with tempfile.TemporaryDirectory(
-        prefix="rag-", dir=os.environ.get("TMPDIR")
-    ) as directory:
-        service = Processor(str(Path(directory, "s")))
-        server = await asyncio.start_unix_server(service.handle, path=service.socket)
-        async with server:
-            yield service
-        for task in list(service.active):
-            task.cancel()
-        await asyncio.gather(*service.active, return_exceptions=True)
+async def processor(tmp_path):
+    service = Processor(tmp_path / "token")
+    server = await asyncio.start_server(service.handle, host="127.0.0.1", port=0)
+    service.url = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    async with server:
+        yield service
+    for task in list(service.active):
+        task.cancel()
+    await asyncio.gather(*service.active, return_exceptions=True)
 
 
 @pytest.fixture
@@ -144,3 +154,33 @@ def input_file(tmp_path):
     file = tmp_path / "input"
     file.write_bytes(b"caller-owned opaque document bytes")
     return str(file)
+
+
+@pytest.fixture(scope="session")
+def tls_certificate(tmp_path_factory):
+    directory = tmp_path_factory.mktemp("extraction-tls")
+    certificate, key = directory / "certificate.pem", directory / "key.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    return certificate, key
