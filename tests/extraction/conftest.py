@@ -42,6 +42,7 @@ class Processor:
         self.raw = None
         self.error = None
         self.hold = False
+        self.before_response = None
         self.entered = asyncio.Event()
         self.closed = asyncio.Event()
         self.active = set()
@@ -101,6 +102,8 @@ class Processor:
                     writer.write(self.raw)
                     await writer.drain()
                     return
+                if self.before_response is not None:
+                    self.before_response()
             wire = json.dumps(value).encode("utf-8")
             writer.write(
                 f"HTTP/1.1 {status} Result\r\nContent-Type: application/json; charset=utf-8\r\n"

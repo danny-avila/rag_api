@@ -341,12 +341,40 @@ def _make_unique_temp_path(user_id: str, filename: str) -> Optional[str]:
     return str(Path(RAG_UPLOAD_DIR, user_id, unique_name).resolve())
 
 
+async def _extract_for_request(request: Optional[Request], file_path: str, format: str):
+    if request is None:
+        return await extraction_client.extract(file_path, format)
+
+    async def wait_for_disconnect():
+        # FastAPI has already consumed the multipart/JSON body before this route.
+        while (await request.receive())["type"] != "http.disconnect":
+            pass
+
+    disconnected = asyncio.create_task(wait_for_disconnect())
+    extraction = asyncio.create_task(extraction_client.extract(file_path, format))
+    try:
+        await asyncio.wait(
+            (disconnected, extraction), return_when=asyncio.FIRST_COMPLETED
+        )
+        if disconnected.done():
+            disconnected.result()
+            raise ExtractionError("CANCELLED", status_code=499)
+        return extraction.result()
+    finally:
+        disconnected.cancel()
+        extraction.cancel()
+        # Drain both tasks before cleanup or persistence, including ASGI cancellation.
+        with CancelScope(shield=True):
+            await asyncio.gather(disconnected, extraction, return_exceptions=True)
+
+
 async def load_file_content(
     filename: str,
     content_type: str,
     file_path: str,
     executor,
     raw_text: bool = False,
+    request: Optional[Request] = None,
 ) -> tuple:
     """Load file content using appropriate loader.
 
@@ -360,7 +388,7 @@ async def load_file_content(
         try:
             if format == "pdf" and PDF_EXTRACT_IMAGES:
                 raise ExtractionError("UNSUPPORTED_CONTENT")
-            segments = await extraction_client.extract(file_path, format)
+            segments = await _extract_for_request(request, file_path, format)
         except ExtractionError as error:
             raise HTTPException(
                 status_code=error.status_code,
@@ -1164,6 +1192,7 @@ async def embed_local_file(
             document.file_content_type,
             file_path,
             request.app.state.thread_pool,
+            request=request,
         )
 
         result = await store_data_in_vector_db(
@@ -1266,6 +1295,7 @@ async def embed_file(
             file.content_type,
             validated_file_path,
             request.app.state.thread_pool,
+            request=request,
         )
 
         logger.debug(
@@ -1424,6 +1454,7 @@ async def embed_file_upload(
             uploaded_file.content_type,
             validated_temp_file_path,
             request.app.state.thread_pool,
+            request=request,
         )
 
         result = await store_data_in_vector_db(
@@ -1562,6 +1593,7 @@ async def extract_text_from_file(
             validated_temp_file_path,
             request.app.state.thread_pool,
             raw_text=True,
+            request=request,
         )
 
         # Extract text content from loaded documents

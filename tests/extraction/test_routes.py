@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from langchain_core.documents import Document
 
+from app.config import LogMiddleware
 from app.middleware import security_middleware
 from app.routes import document_routes as routes
 from app.services.extraction_client import ExtractionClient, ExtractionSettings
@@ -69,6 +70,7 @@ class RecordingStore(AsyncPgVector):
 @pytest.fixture
 async def api(processor, monkeypatch, tmp_path):
     app = FastAPI()
+    app.add_middleware(LogMiddleware)
     app.middleware("http")(security_middleware)
     app.include_router(routes.router)
     store = RecordingStore()
@@ -361,3 +363,137 @@ async def test_disabled_by_default_keeps_existing_loader(api, processor, monkeyp
     assert response.json()["text"] == "legacy extraction"
     get_loader.assert_called_once()
     assert not processor.requests
+
+
+class ASGIConnection:
+    """Deliver the complete upload, then a server disconnect without cancelling app."""
+
+    def __init__(self, app, request, body):
+        self.incoming = asyncio.Queue()
+        self.received = []
+        self.sent = []
+        chunks = [body[:17], body[17:53], body[53:]]
+        for index, chunk in enumerate(chunks):
+            self.incoming.put_nowait(
+                {
+                    "type": "http.request",
+                    "body": chunk,
+                    "more_body": index < len(chunks) - 1,
+                }
+            )
+        self.scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": request.method,
+            "scheme": "http",
+            "path": request.url.path,
+            "raw_path": request.url.raw_path,
+            "query_string": request.url.query,
+            "root_path": "",
+            "headers": [(key.lower(), value) for key, value in request.headers.raw],
+            "client": ("127.0.0.1", 12345),
+            "server": ("rag", 80),
+        }
+        self.task = asyncio.create_task(app(self.scope, self.receive, self.send))
+
+    async def receive(self):
+        message = await self.incoming.get()
+        self.received.append(message["type"])
+        return message
+
+    async def send(self, message):
+        self.sent.append(message)
+
+    def disconnect(self):
+        self.incoming.put_nowait({"type": "http.disconnect"})
+
+    async def close(self):
+        if not self.task.done():
+            self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+
+
+def disconnect_request(client, uploads, route, format):
+    filename = f"report.{format}"
+    if route == "/local/embed":
+        (uploads / filename).write_bytes(b"opaque document bytes")
+        return client.build_request(
+            "POST",
+            route,
+            json={
+                "filepath": filename,
+                "filename": filename,
+                "file_content_type": MIMES[format],
+                "file_id": "caller-file",
+            },
+        )
+    return client.build_request(
+        "POST",
+        route,
+        data={"file_id": "caller-file"},
+        files={
+            "uploaded_file" if route == "/embed-upload" else "file": (
+                filename,
+                b"opaque document bytes",
+                MIMES[format],
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_asgi_disconnect_stops_extraction_and_cleans_upload(
+    api, processor, route, format
+):
+    client, store, uploads = api
+    processor.hold = True
+    request = disconnect_request(client, uploads, route, format)
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        await asyncio.wait_for(processor.entered.wait(), 1)
+        assert connection.received == ["http.request"] * 3
+        connection.disconnect()
+        await asyncio.wait_for(processor.closed.wait(), 0.5)
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert "http.disconnect" in connection.received
+        assert connection.task.cancelling() == 0
+        assert not store.calls and not store.persisted and not store.rollbacks
+        assert not any(
+            message["type"] == "http.response.start" and 200 <= message["status"] < 300
+            for message in connection.sent
+        )
+        assert len(list(uploads.rglob(f"*.{format}"))) == (
+            1 if route == "/local/embed" else 0
+        )
+        assert routes.extraction_client._admitted == 0
+    finally:
+        await connection.close()
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_asgi_disconnect_wins_over_processor_success(
+    api, processor, route, format
+):
+    client, store, uploads = api
+    request = disconnect_request(client, uploads, route, format)
+    body = await request.aread()
+    processor.before_response = lambda: connection.disconnect()
+    connection = ASGIConnection(client._transport.app, request, body)
+    try:
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert connection.received == ["http.request"] * 3 + ["http.disconnect"]
+        assert connection.task.cancelling() == 0
+        assert not store.calls and not store.persisted and not store.rollbacks
+        assert not any(
+            message["type"] == "http.response.start" and 200 <= message["status"] < 300
+            for message in connection.sent
+        )
+        assert len(list(uploads.rglob(f"*.{format}"))) == (
+            1 if route == "/local/embed" else 0
+        )
+        assert routes.extraction_client._admitted == 0
+    finally:
+        await connection.close()
