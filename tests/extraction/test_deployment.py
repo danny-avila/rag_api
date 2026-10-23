@@ -36,9 +36,12 @@ def render(directory, *files):
         [*command, "config", "--no-env-resolution", "--format", "json"],
         capture_output=True,
         text=True,
-        check=True,
         timeout=15,
     )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"Compose render failed ({result.returncode}):\n{result.stderr}"
+        )
     return json.loads(result.stdout)
 
 
@@ -97,10 +100,15 @@ def test_standard_deployment_requires_one_hardened_processor(tmp_path, recipe, c
     )
 
 
-def test_combined_recipes_share_one_processor_and_socket(tmp_path):
-    config = render(
-        stage_compose_files(tmp_path), "docker-compose.yaml", "api-compose.yaml"
-    )
+@pytest.mark.parametrize(
+    "recipes",
+    [
+        ("docker-compose.yaml", "api-compose.yaml"),
+        ("api-compose.yaml", "docker-compose.yaml"),
+    ],
+)
+def test_combined_recipes_share_one_processor_and_socket(tmp_path, recipes):
+    config = render(stage_compose_files(tmp_path), *recipes)
     assert set(config["services"]) == {"db", "fastapi", "rag_api", "extraction"}
     assert_hardened_processor(config["services"]["extraction"])
     for caller in ("fastapi", "rag_api"):
@@ -110,3 +118,21 @@ def test_combined_recipes_share_one_processor_and_socket(tmp_path):
             if item["target"] == "/socket"
         )
         assert mount["source"] == "extraction-socket" and mount["read_only"] is True
+
+
+def test_render_failure_includes_stderr_without_dumping_model(monkeypatch, tmp_path):
+    diagnostic = "services.extraction.security_opt items at 0 and 1 are equal"
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="do not dump the rendered application model",
+            stderr=diagnostic,
+        ),
+    )
+    with pytest.raises(AssertionError, match="security_opt") as caught:
+        render(tmp_path, "docker-compose.yaml", "api-compose.yaml")
+    assert diagnostic in str(caught.value)
+    assert "do not dump" not in str(caught.value)

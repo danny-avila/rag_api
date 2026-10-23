@@ -1,5 +1,5 @@
 services:
-  extraction:
+  extraction: !override
     extends:
       file: extraction-compose.yaml
       service: extraction

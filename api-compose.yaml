@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  extraction:
+  extraction: !override
     extends:
       file: extraction-compose.yaml
       service: extraction
