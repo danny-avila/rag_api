@@ -19,6 +19,7 @@ from app.services.vector_store.async_pg_vector import AsyncPgVector
 
 ROUTES = ["/text", "/embed", "/embed-upload", "/local/embed"]
 MIMES = {
+    "txt": "text/plain",
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
@@ -83,10 +84,15 @@ async def api(processor, monkeypatch, tmp_path):
     monkeypatch.setattr(routes, "PARALLEL_EXECUTION", 1)
     monkeypatch.setenv("JWT_SECRET", "test-extraction-secret")
     # The migrated path must never construct either legacy parser.
-    monkeypatch.setattr(
-        "app.utils.document_loader.PyPDFLoader",
-        Mock(side_effect=AssertionError("local PDF parser")),
-    )
+    local_loader = routes.get_loader
+
+    def no_migrated_local_loader(filename, content_type, *args, **kwargs):
+        assert (
+            routes.extraction_format(filename, content_type) is None
+        ), "local migrated parser"
+        return local_loader(filename, content_type, *args, **kwargs)
+
+    monkeypatch.setattr(routes, "get_loader", no_migrated_local_loader)
     monkeypatch.setattr(
         "app.utils.document_loader.Docx2txtLoader",
         Mock(side_effect=AssertionError("local DOCX parser")),
@@ -216,7 +222,7 @@ async def test_selected_format_failure_never_falls_back_or_persists(
         processor.error = (422, "UNSUPPORTED_CONTENT")
     elif failure == "outage":
         routes.extraction_client = ExtractionClient(
-            ExtractionSettings(enabled=True, socket="/socket/missing.sock")
+            ExtractionSettings(socket="/socket/missing.sock")
         )
     elif failure == "incompatible":
         processor.capabilities["version"] = 2
@@ -329,40 +335,32 @@ async def test_requested_pdf_image_extraction_is_not_silently_downgraded(
     assert not processor.requests and not store.calls
 
 
-async def test_format_policy_leaves_unselected_formats_on_existing_path(
-    api, processor, monkeypatch
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_no_extraction_configuration_still_requires_service(
+    api, processor, monkeypatch, route, format
 ):
     client, store, uploads = api
-    routes.extraction_client = ExtractionClient(
-        ExtractionSettings(
-            enabled=True,
-            socket=processor.socket,
-            formats=frozenset({"docx"}),
-        )
-    )
-    local = Mock()
-    local.lazy_load.return_value = [Document(page_content="existing PDF path")]
-    get_loader = Mock(return_value=(local, True, "pdf"))
-    monkeypatch.setattr(routes, "get_loader", get_loader)
-    response = await post(client, uploads, "/text")
-    assert response.status_code == 200
-    assert response.json()["text"] == "existing PDF path"
-    get_loader.assert_called_once()
-    assert not processor.requests
+    for key in (
+        "RAG_EXTRACTION_ENABLED",
+        "RAG_EXTRACTION_FORMATS",
+        "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_DEADLINE_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    defaults = ExtractionSettings.from_env()
+    routes.extraction_client = ExtractionClient(defaults)
+    connect = asyncio.open_unix_connection
 
+    async def disposable_socket(path, **kwargs):
+        assert path == "/socket/extraction.sock"
+        return await connect(processor.socket, **kwargs)
 
-async def test_disabled_by_default_keeps_existing_loader(api, processor, monkeypatch):
-    client, store, uploads = api
-    routes.extraction_client = ExtractionClient(ExtractionSettings())
-    local = Mock()
-    local.lazy_load.return_value = [Document(page_content="legacy extraction")]
-    get_loader = Mock(return_value=(local, True, "pdf"))
-    monkeypatch.setattr(routes, "get_loader", get_loader)
-    response = await post(client, uploads, "/text")
-    assert response.status_code == 200
-    assert response.json()["text"] == "legacy extraction"
-    get_loader.assert_called_once()
-    assert not processor.requests
+    monkeypatch.setattr(asyncio, "open_unix_connection", disposable_socket)
+    response = await post(client, uploads, route, format)
+    assert response.status_code == 200, response.text
+    assert [r[0] for r in processor.requests] == ["GET", "POST"]
+    assert response.json()["known_type"] is True
 
 
 class ASGIConnection:
@@ -700,25 +698,15 @@ async def test_disconnect_after_uncancellable_storage_starts_drains_without_undo
 
 
 @pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
-@pytest.mark.parametrize("policy", ["disabled", "unselected"])
-async def test_legacy_request_keeps_post_extraction_disconnect_behavior(
-    api, monkeypatch, route, policy
+async def test_unmigrated_text_keeps_post_extraction_disconnect_behavior(
+    api, monkeypatch, route
 ):
     import threading
 
     client, store, uploads = api
-    if policy == "disabled":
-        routes.extraction_client = ExtractionClient(ExtractionSettings())
-    else:
-        routes.extraction_client = ExtractionClient(
-            ExtractionSettings(
-                enabled=True,
-                formats=frozenset({"docx"}),
-            )
-        )
     loader = Mock()
     loader.lazy_load.return_value = [Document(page_content="legacy text")]
-    monkeypatch.setattr(routes, "get_loader", Mock(return_value=(loader, True, "pdf")))
+    monkeypatch.setattr(routes, "get_loader", Mock(return_value=(loader, True, "txt")))
     entered = threading.Event()
     release = threading.Event()
     prepare = routes._prepare_documents_sync
@@ -729,7 +717,7 @@ async def test_legacy_request_keeps_post_extraction_disconnect_behavior(
         return prepare(*args)
 
     monkeypatch.setattr(routes, "_prepare_documents_sync", delayed_prepare)
-    request = disconnect_request(client, uploads, route, "pdf")
+    request = disconnect_request(client, uploads, route, "txt")
     connection = ASGIConnection(client._transport.app, request, await request.aread())
     try:
         assert await asyncio.to_thread(entered.wait, 1)
@@ -1256,3 +1244,34 @@ async def test_repeated_cancellation_cannot_abandon_upload_unlink(
         wrapper_release.set()
         unlink_release.set()
         await connection.close()
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_default_socket_unavailable_fails_closed_without_affecting_text(
+    api, processor, monkeypatch, route, format
+):
+    client, store, uploads = api
+    for key in (
+        "RAG_EXTRACTION_ENABLED",
+        "RAG_EXTRACTION_FORMATS",
+        "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_DEADLINE_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    routes.extraction_client = ExtractionClient(ExtractionSettings.from_env())
+
+    async def unavailable(path, **kwargs):
+        assert path == "/socket/extraction.sock"
+        raise FileNotFoundError()
+
+    monkeypatch.setattr(asyncio, "open_unix_connection", unavailable)
+    response = await post(client, uploads, route, format)
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "UNAVAILABLE"
+    assert not store.calls and not store.persisted and not processor.requests
+    assert len(list(uploads.rglob(f"*.{format}"))) == (
+        1 if route == "/local/embed" else 0
+    )
+    plaintext = await post(client, uploads, "/text", "txt", b"plain text", "text/plain")
+    assert plaintext.status_code == 200 and plaintext.json()["text"] == "plain text"

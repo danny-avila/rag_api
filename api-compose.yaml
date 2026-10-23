@@ -1,14 +1,26 @@
 version: '3.8'
 
 services:
+  extraction:
+    extends:
+      file: extraction-compose.yaml
+      service: extraction
+
   rag_api:
     build: .
+    group_add:
+      - '10001'
+    depends_on:
+      extraction:
+        condition: service_healthy
     ports:
       - "8000:8000"
     volumes:
       - ./uploads:/app/uploads
+      - extraction-socket:/socket:ro
     env_file:
       - .env
 
 volumes:
+  extraction-socket:
   pgdata2:

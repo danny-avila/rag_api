@@ -50,41 +50,35 @@ class ExtractionError(Exception):
 
 @dataclass(frozen=True)
 class ExtractionSettings:
-    enabled: bool = False
     socket: str = "/socket/extraction.sock"
     deadline: float = 10.0
-    formats: frozenset[str] = frozenset({"pdf", "docx"})
 
     def __post_init__(self):
-        if not self.enabled:
-            return
-        if not os.path.isabs(self.socket) or "\x00" in self.socket:
+        if (
+            not isinstance(self.socket, str)
+            or not os.path.isabs(self.socket)
+            or "\x00" in self.socket
+        ):
             raise ValueError(
                 "RAG_EXTRACTION_SOCKET must be an absolute Unix socket path"
             )
-        if not math.isfinite(self.deadline) or not 0 < self.deadline <= 10:
+        if (
+            type(self.deadline) not in (int, float)
+            or not math.isfinite(self.deadline)
+            or not 0 < self.deadline <= 10
+        ):
             raise ValueError("RAG_EXTRACTION_DEADLINE_SECONDS must be in (0, 10]")
-        if not self.formats or not self.formats <= {"pdf", "docx"}:
-            raise ValueError("RAG_EXTRACTION_FORMATS must select pdf and/or docx")
 
     @classmethod
     def from_env(cls):
-        enabled = os.getenv("RAG_EXTRACTION_ENABLED", "false").lower() in (
-            "true",
-            "1",
-            "yes",
-            "on",
-        )
-        if not enabled:
-            return cls()
+        for key in ("RAG_EXTRACTION_ENABLED", "RAG_EXTRACTION_FORMATS"):
+            if key in os.environ:
+                raise ValueError(
+                    f"{key} is obsolete; PDF/DOCX service extraction is required"
+                )
         return cls(
-            enabled=True,
             socket=os.getenv("RAG_EXTRACTION_SOCKET", "/socket/extraction.sock"),
             deadline=float(os.getenv("RAG_EXTRACTION_DEADLINE_SECONDS", "10")),
-            formats=frozenset(
-                part.strip().lower()
-                for part in os.getenv("RAG_EXTRACTION_FORMATS", "pdf,docx").split(",")
-            ),
         )
 
 
@@ -297,7 +291,7 @@ class ExtractionClient:
             writer.transport.abort()
 
     async def extract(self, file_path: str, format: str):
-        if format not in self.settings.formats or format not in {"pdf", "docx"}:
+        if format not in {"pdf", "docx"}:
             raise ExtractionError("UNSUPPORTED_CONTENT")
         if self._admitted >= 2:
             raise ExtractionError("BUSY")

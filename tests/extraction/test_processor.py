@@ -1,13 +1,19 @@
-"""Opt-in real client qualification against the shipped hardened processor image."""
+"""Current Python client qualification against the default hardened deployment."""
 
-import os
+import json
 import subprocess
-import time
 import uuid
 from pathlib import Path
 
 import aiofiles
 import pytest
+
+from tests.extraction.test_deployment import (
+    assert_hardened_processor,
+    compose_command,
+    render,
+    stage_compose_files,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -21,69 +27,73 @@ def docker(*args, check=True):
     return result
 
 
-def test_python_client_to_hardened_processor():
-    image = os.getenv("RAG_EXTRACTION_TEST_IMAGE")
-    if not image:
-        pytest.skip(
-            "RAG_EXTRACTION_TEST_IMAGE must name a built Code Interpreter extraction runtime"
-        )
+def test_python_client_to_default_hardened_processor(tmp_path):
+    directory = stage_compose_files(tmp_path)
+    assert_hardened_processor(
+        render(directory, "docker-compose.yaml")["services"]["extraction"]
+    )
     run_id = uuid.uuid4().hex
-    name = f"rag-extraction-{run_id}"
-    volume = f"rag-extraction-{run_id}"
+    project = f"rag-extraction-{run_id}"
+    volume = f"{project}_extraction-socket"
     caller = f"rag-extraction-caller-{run_id}"
+    compose = compose_command(directory, project, "docker-compose.yaml")
+    image = f"{project}-extraction"
+
+    def run_compose(*args, check=True, timeout=40):
+        result = subprocess.run(
+            [*compose, *args], capture_output=True, text=True, timeout=timeout
+        )
+        if check:
+            assert result.returncode == 0, result.stdout + result.stderr
+        return result
+
     root = Path(__file__).resolve().parents[2]
     client = root / "app/services/extraction_client.py"
     fixtures = Path(__file__).parent / "fixtures"
     library = Path(aiofiles.__file__).parent
-    docker("volume", "create", volume)
     try:
-        docker(
-            "run",
-            "-d",
-            "--name",
-            name,
-            "--init",
-            "--network",
-            "none",
-            "--read-only",
-            "--user",
-            "10001:10001",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--memory",
-            "768m",
-            "--cpus",
-            "2",
-            "--pids-limit",
-            "32",
-            "--tmpfs",
-            "/jobs:rw,noexec,nosuid,nodev,size=96m,nr_inodes=1024,uid=10001,gid=10001,mode=0700",
-            "--mount",
-            f"type=volume,src={volume},dst=/socket",
-            image,
+        run_compose("build", "extraction", timeout=240)
+        run_compose("up", "-d", "--wait", "--wait-timeout", "30", "extraction")
+        name = run_compose("ps", "-q", "extraction").stdout.strip()
+        image = docker("inspect", "--format", "{{.Config.Image}}", name).stdout.strip()
+        runtime = json.loads(docker("inspect", name).stdout)[0]
+        host = runtime["HostConfig"]
+        assert (
+            host["NetworkMode"] == "none"
+            and host["ReadonlyRootfs"]
+            and not host["Privileged"]
         )
-        for _ in range(30):
-            status = docker(
-                "inspect", "--format", "{{.State.Health.Status}}", name
-            ).stdout.strip()
-            if status == "healthy":
-                break
-            if status == "unhealthy":
-                pytest.fail(
-                    "Hardened extraction processor failed its isolation/health probe"
-                )
-            time.sleep(1)
-        else:
-            pytest.fail("Hardened extraction processor did not become healthy")
+        assert (
+            host["CapDrop"] == ["ALL"]
+            and "no-new-privileges:true" in host["SecurityOpt"]
+        )
+        assert runtime["Config"]["User"] == "10001:10001"
+        assert host["Memory"] == 768 * 1024 * 1024 and host["NanoCpus"] == 2 * 10**9
+        assert host["PidsLimit"] == 32 and set(host["Tmpfs"]) == {"/jobs"}
+        assert (
+            len(runtime["Mounts"]) == 1
+            and runtime["Mounts"][0]["Destination"] == "/socket"
+        )
         script = """
 import asyncio
+import errno
+import os
+import stat
 import sys
 sys.path.insert(0, "/")
 from client import ExtractionClient, ExtractionSettings
 async def check():
-    client = ExtractionClient(ExtractionSettings(enabled=True))
+    settings = ExtractionSettings.from_env()
+    assert settings.socket == "/socket/extraction.sock"
+    assert stat.S_IMODE(os.stat("/socket").st_mode) == 0o770
+    assert stat.S_IMODE(os.stat(settings.socket).st_mode) == 0o660
+    try:
+        open("/socket/not-writable", "wb")
+    except OSError as error:
+        assert error.errno == errno.EROFS
+    else:
+        raise AssertionError("caller socket mount is writable")
+    client = ExtractionClient(settings)
     pdf = await client.extract("/fixtures/pages.pdf", "pdf")
     assert pdf == [
         {"kind": "page", "index": 1, "text": "First page text"},
@@ -106,7 +116,7 @@ print("Python client to hardened PDF/DOCX processor passed")
             "none",
             "--read-only",
             "--user",
-            "10001:10001",
+            "65532:65532",
             "--group-add",
             "10001",
             "--cap-drop",
@@ -140,5 +150,6 @@ print("Python client to hardened PDF/DOCX processor passed")
         )
     finally:
         docker("rm", "-f", caller, check=False)
-        docker("rm", "-f", name, check=False)
-        docker("volume", "rm", volume, check=False)
+        run_compose("down", "-v", "--remove-orphans", check=False)
+        if image:
+            docker("image", "rm", image, check=False)

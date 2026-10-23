@@ -50,7 +50,7 @@ class Processor:
 
     def client(self, deadline=10):
         return ExtractionClient(
-            ExtractionSettings(enabled=True, socket=self.socket, deadline=deadline)
+            ExtractionSettings(socket=self.socket, deadline=deadline)
         )
 
     async def handle(self, reader, writer):

@@ -198,30 +198,74 @@ async def test_capabilities_rechecked_after_service_change(processor, input_file
 
 
 async def test_outage_is_safe(input_file, tmp_path):
-    client = ExtractionClient(
-        ExtractionSettings(enabled=True, socket=str(tmp_path / "missing"))
-    )
+    client = ExtractionClient(ExtractionSettings(socket=str(tmp_path / "missing")))
     with pytest.raises(ExtractionError, match="UNAVAILABLE"):
         await client.extract(input_file, "pdf")
 
 
-def test_disabled_settings_ignore_unrelated_stale_values(monkeypatch):
-    monkeypatch.delenv("RAG_EXTRACTION_ENABLED", raising=False)
-    monkeypatch.setenv("RAG_EXTRACTION_DEADLINE_SECONDS", "stale")
-    assert not ExtractionSettings.from_env().enabled
+def test_default_settings_require_service_without_environment(monkeypatch):
+    for key in (
+        "RAG_EXTRACTION_ENABLED",
+        "RAG_EXTRACTION_FORMATS",
+        "RAG_EXTRACTION_SOCKET",
+        "RAG_EXTRACTION_DEADLINE_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    settings = ExtractionSettings.from_env()
+    assert settings.socket == "/socket/extraction.sock" and settings.deadline == 10
+    assert not hasattr(settings, "enabled") and not hasattr(settings, "formats")
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("RAG_EXTRACTION_ENABLED", "false"),
+        ("RAG_EXTRACTION_ENABLED", "true"),
+        ("RAG_EXTRACTION_ENABLED", ""),
+        ("RAG_EXTRACTION_FORMATS", "docx"),
+        ("RAG_EXTRACTION_FORMATS", "pdf,docx"),
+        ("RAG_EXTRACTION_FORMATS", ""),
+    ],
+)
+def test_obsolete_opt_out_configuration_is_rejected(monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match="obsolete"):
+        ExtractionSettings.from_env()
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"socket": "relative"},
+        {"socket": ""},
         {"deadline": 0},
         {"deadline": 11},
+        {"deadline": True},
         {"deadline": float("nan")},
-        {"formats": frozenset()},
-        {"formats": frozenset({"doc"})},
+        {"deadline": float("inf")},
     ],
 )
-def test_opt_in_config_is_validated(kwargs):
+def test_required_config_is_validated(kwargs):
     with pytest.raises(ValueError):
-        ExtractionSettings(enabled=True, **kwargs)
+        ExtractionSettings(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("RAG_EXTRACTION_SOCKET", "relative"),
+        ("RAG_EXTRACTION_DEADLINE_SECONDS", "stale"),
+    ],
+)
+def test_invalid_environment_never_disables_extraction(monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        ExtractionSettings.from_env()
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{"enabled": False}, {"formats": frozenset({"docx"})}]
+)
+def test_client_constructor_cannot_opt_out(kwargs):
+    with pytest.raises(TypeError):
+        ExtractionSettings(**kwargs)

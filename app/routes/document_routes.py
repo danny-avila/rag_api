@@ -382,9 +382,8 @@ def _with_extraction_request(file_argument, content_type="content_type"):
         async def wrapped(*args, **kwargs):
             arguments = signature.bind(*args, **kwargs).arguments
             file = arguments[file_argument]
-            settings = extraction_client.settings
             format = extraction_format(file.filename, getattr(file, content_type))
-            if not settings.enabled or format not in settings.formats:
+            if format is None:
                 return await handler(*args, **kwargs)
 
             request = arguments["request"]
@@ -515,8 +514,7 @@ async def load_file_content(
     parsed.
     """
     format = extraction_format(filename, content_type)
-    settings = extraction_client.settings
-    if settings.enabled and format in settings.formats:
+    if format is not None:
         try:
             if format == "pdf" and PDF_EXTRACT_IMAGES:
                 raise ExtractionError("UNSUPPORTED_CONTENT")
@@ -526,7 +524,7 @@ async def load_file_content(
                 status_code=error.status_code,
                 detail={"code": error.code},
             ) from None
-        # Service pages are one-based; PyPDFLoader metadata is zero-based.
+        # Service pages are one-based; RAG metadata remains zero-based.
         documents = [
             Document(
                 page_content=segment["text"],
