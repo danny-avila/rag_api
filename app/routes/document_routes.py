@@ -362,6 +362,9 @@ class _ExtractionRequest:
         if self.disconnected:
             raise asyncio.CancelledError()
 
+    def begin_cleanup(self):
+        self.cleanup_started = True
+
     def start_uncancellable_storage(self):
         with self._mutation_lock:
             self.checkpoint()
@@ -408,16 +411,17 @@ def _with_extraction_request(file_argument, content_type="content_type"):
                     raise HTTPException(status_code=499, detail={"code": "CANCELLED"})
                 return operation.result()
             finally:
-                if not operation.done() and not (
-                    lifecycle.finish_storage or lifecycle.cleanup_started
+                if (
+                    not operation.done()
+                    and not operation.cancelling()
+                    and not (lifecycle.finish_storage or lifecycle.cleanup_started)
                 ):
                     operation.cancel()
                 disconnected.cancel()
                 # Do not clean uploads or return while workers/rollback can still run.
-                with CancelScope(shield=True):
-                    await asyncio.gather(
-                        operation, disconnected, return_exceptions=True
-                    )
+                await _drain_request_worker(
+                    asyncio.gather(operation, disconnected, return_exceptions=True)
+                )
 
         return wrapped
 
@@ -425,13 +429,31 @@ def _with_extraction_request(file_argument, content_type="content_type"):
 
 
 async def _drain_request_worker(future):
-    """Caller cancellation must not abandon a submitted executor worker."""
-    try:
-        return await asyncio.shield(future)
-    except asyncio.CancelledError:
-        with CancelScope(shield=True):
-            await asyncio.gather(future, return_exceptions=True)
-        raise
+    """Defer repeated cancellation until submitted work or cleanup has finished."""
+    cancellation = None
+    with CancelScope(shield=True):
+        while True:
+            try:
+                result = await asyncio.shield(future)
+                break
+            except asyncio.CancelledError as error:
+                lifecycle = _active_extraction_request.get()
+                if lifecycle is not None:
+                    lifecycle.begin_cleanup()
+                # Executor futures can store CancelledError without being cancelled.
+                if future.cancelled() or (
+                    future.done()
+                    and isinstance(future.exception(), asyncio.CancelledError)
+                ):
+                    raise
+                cancellation = error
+            except Exception:
+                if cancellation is not None:
+                    raise cancellation
+                raise
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 async def _run_sync_request_store(executor, store, documents, ids):
@@ -551,11 +573,16 @@ async def cleanup_temp_file_async(file_path: str) -> None:
     """Clean up temporary file asynchronously."""
     lifecycle = _active_extraction_request.get()
     if lifecycle is not None:
-        lifecycle.cleanup_started = True
+        lifecycle.begin_cleanup()
     try:
         # Starlette cancellation scopes must not interrupt upload cleanup.
         with CancelScope(shield=True):
-            await aiofiles.os.remove(file_path)
+            if lifecycle is None:
+                await aiofiles.os.remove(file_path)
+            else:
+                await _drain_request_worker(
+                    asyncio.create_task(aiofiles.os.remove(file_path))
+                )
     except Exception as e:
         logger.error(
             "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
@@ -955,42 +982,7 @@ async def _process_documents_async_pipeline(
     producer_task = None
     consumer_tasks: List[asyncio.Task] = []
 
-    try:
-        # Start producer and consumers concurrently
-        producer_task = asyncio.create_task(batch_producer())
-        consumer_tasks = [
-            asyncio.create_task(embedding_consumer()) for _ in range(consumer_count)
-        ]
-
-        # Wait for all tasks to complete
-        await asyncio.gather(producer_task, *consumer_tasks, return_exceptions=False)
-        lifecycle = _active_extraction_request.get()
-        if lifecycle is not None:
-            lifecycle.checkpoint()
-
-        for batch_num in range(1, num_batches + 1):
-            all_ids.extend(successful_batch_ids[batch_num])
-
-        logger.info(
-            "Async pipeline completed | user_id=%s | file_id=%s | inserted_ids=%d | %s",
-            user_id,
-            file_id,
-            len(all_ids),
-            get_process_memory_details(),
-        )
-
-        return all_ids
-
-    except (Exception, asyncio.CancelledError) as e:
-        failure_event.set()
-        logger.error(
-            "Pipeline failed | user_id=%s | file_id=%s | inserted_batches=%d | error=%s | %s",
-            user_id,
-            file_id,
-            len(successful_batch_ids),
-            e,
-            get_process_memory_details(),
-        )
+    async def cleanup_failed_pipeline():
         if producer_task is not None or consumer_tasks:
             # if one of the tasks is still running, cancel it
             if producer_task is not None and not producer_task.done():
@@ -1038,6 +1030,49 @@ async def _process_documents_async_pipeline(
                     cleanup_error,
                     get_process_memory_details(),
                 )
+
+    try:
+        # Start producer and consumers concurrently
+        producer_task = asyncio.create_task(batch_producer())
+        consumer_tasks = [
+            asyncio.create_task(embedding_consumer()) for _ in range(consumer_count)
+        ]
+
+        # Wait for all tasks to complete
+        await asyncio.gather(producer_task, *consumer_tasks, return_exceptions=False)
+        lifecycle = _active_extraction_request.get()
+        if lifecycle is not None:
+            lifecycle.checkpoint()
+
+        for batch_num in range(1, num_batches + 1):
+            all_ids.extend(successful_batch_ids[batch_num])
+
+        logger.info(
+            "Async pipeline completed | user_id=%s | file_id=%s | inserted_ids=%d | %s",
+            user_id,
+            file_id,
+            len(all_ids),
+            get_process_memory_details(),
+        )
+
+        return all_ids
+
+    except (Exception, asyncio.CancelledError) as e:
+        failure_event.set()
+        logger.error(
+            "Pipeline failed | user_id=%s | file_id=%s | inserted_batches=%d | error=%s | %s",
+            user_id,
+            file_id,
+            len(successful_batch_ids),
+            e,
+            get_process_memory_details(),
+        )
+        lifecycle = _active_extraction_request.get()
+        if lifecycle is None:
+            await cleanup_failed_pipeline()
+        else:
+            lifecycle.begin_cleanup()
+            await _drain_request_worker(asyncio.create_task(cleanup_failed_pipeline()))
 
         # Re-raise the original error
         raise

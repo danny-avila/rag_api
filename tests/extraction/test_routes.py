@@ -883,3 +883,376 @@ async def test_disconnect_before_queued_sync_mutation_prevents_write(
             blocker_release.set()
             await connection.close()
             app.state.thread_pool = original_executor
+
+
+@pytest.fixture
+def freeze_disconnect_wrapper(monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    original_wait = asyncio.wait
+    state = {}
+
+    async def frozen_wait(tasks, **kwargs):
+        result = await original_wait(tasks, **kwargs)
+        watcher = next(
+            (
+                task
+                for task in tasks
+                if "_with_extraction_request" in task.get_coro().__qualname__
+                and task.get_coro().__name__ == "wait_for_disconnect"
+            ),
+            None,
+        )
+        if watcher in result[0]:
+            state["operation"] = next(task for task in tasks if task is not watcher)
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(asyncio, "wait", frozen_wait)
+    return entered, release, state
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+async def test_completed_batch_disconnect_cannot_cancel_queued_attempt_rollback(
+    api, monkeypatch, freeze_disconnect_wrapper, route, format, repeat_cancel
+):
+    import threading
+
+    client, store, uploads = api
+    app = client._transport.app
+    original_executor = app.state.thread_pool
+    monkeypatch.setattr(routes, "EMBEDDING_BATCH_SIZE", 500)
+    wrapper_entered, wrapper_release, state = freeze_disconnect_wrapper
+    insert_entered = asyncio.Event()
+    insert_release = asyncio.Event()
+    rollback_queued = asyncio.Event()
+    worker_entered = threading.Event()
+    worker_release = threading.Event()
+    events = []
+    queued_deletes = []
+    old = Document(
+        page_content="old attempt",
+        metadata={
+            "file_id": "caller-file",
+            "user_id": "caller",
+            "_rag_ingestion_attempt_id": "old",
+        },
+    )
+    store.persisted.append(old)
+    insert = store.aadd_documents
+
+    def occupy_worker():
+        worker_entered.set()
+        assert worker_release.wait(3), "test rollback executor gate timed out"
+
+    async def final_insert(*args, executor=None, **kwargs):
+        executor.submit(occupy_worker)
+        insert_entered.set()
+        await insert_release.wait()
+        result = await insert(*args, executor=executor, **kwargs)
+        events.append("insert:commit")
+        return result
+
+    def delete_current_attempt(metadata):
+        events.append("rollback:execute")
+        store.rollbacks.append(metadata)
+        store.persisted = [
+            doc
+            for doc in store.persisted
+            if not all(
+                doc.metadata.get(key) == value for key, value in metadata.items()
+            )
+        ]
+
+    async def queued_rollback(metadata, executor=None):
+        future = asyncio.get_running_loop().run_in_executor(
+            executor, delete_current_attempt, metadata
+        )
+        queued_deletes.append(future)
+        events.append("rollback:queued")
+        rollback_queued.set()
+        await future
+
+    monkeypatch.setattr(store, "aadd_documents", final_insert)
+    monkeypatch.setattr(store, "delete_by_metadata", queued_rollback)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        app.state.thread_pool = executor
+        request = disconnect_request(client, uploads, route, format)
+        connection = ASGIConnection(app, request, await request.aread())
+        try:
+            await asyncio.wait_for(insert_entered.wait(), 1)
+            assert await asyncio.to_thread(worker_entered.wait, 1)
+            connection.disconnect()
+            await asyncio.wait_for(wrapper_entered.wait(), 1)
+            insert_release.set()
+            await asyncio.wait_for(rollback_queued.wait(), 1)
+            assert len(store.persisted) > 1 and not store.rollbacks
+            wrapper_release.set()
+            await asyncio.sleep(0.05)
+            assert state["operation"].cancelling() == 0
+            if repeat_cancel:
+                for _ in range(2):
+                    state["operation"].cancel()
+                    await asyncio.sleep(0)
+                await asyncio.sleep(0.05)
+            assert not connection.task.done(), events
+            assert not queued_deletes[0].cancelled(), events
+            assert list(uploads.rglob(f"*.{format}"))
+            worker_release.set()
+            await asyncio.wait_for(asyncio.shield(connection.task), 1)
+            assert events == ["insert:commit", "rollback:queued", "rollback:execute"]
+            assert store.persisted == [old]
+            assert len(store.rollbacks) == 1
+            assert store.rollbacks[0]["_rag_ingestion_attempt_id"] != "old"
+            assert connection.task.cancelling() == 0
+            assert [
+                m["status"]
+                for m in connection.sent
+                if m["type"] == "http.response.start"
+            ] == [499]
+            assert len(list(uploads.rglob(f"*.{format}"))) == (
+                1 if route == "/local/embed" else 0
+            )
+        finally:
+            wrapper_release.set()
+            insert_release.set()
+            worker_release.set()
+            await connection.close()
+            app.state.thread_pool = original_executor
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+async def test_disconnect_drain_owns_pending_insert_until_attempt_rollback(
+    api, monkeypatch, freeze_disconnect_wrapper, route, repeat_cancel
+):
+    import threading
+
+    client, store, uploads = api
+    app = client._transport.app
+    original_executor = app.state.thread_pool
+    monkeypatch.setattr(routes, "EMBEDDING_BATCH_SIZE", 1)
+    monkeypatch.setattr(routes, "PARALLEL_EXECUTION", 2)
+    wrapper_entered, wrapper_release, state = freeze_disconnect_wrapper
+    second_batch = asyncio.Event()
+    insert_draining = asyncio.Event()
+    worker_entered = threading.Event()
+    worker_release = threading.Event()
+    insert_tasks = []
+    insert_futures = []
+    events = []
+    old = Document(
+        page_content="old",
+        metadata={
+            "file_id": "caller-file",
+            "user_id": "caller",
+            "_rag_ingestion_attempt_id": "old",
+        },
+    )
+    store.persisted.append(old)
+    original_queue = asyncio.Queue
+    original_gather = asyncio.gather
+
+    class ControlledQueue(original_queue):
+        async def get(self):
+            item = await super().get()
+            if isinstance(item, tuple) and len(item) == 4 and item[2] >= 2:
+                await second_batch.wait()
+            return item
+
+    def observe_gather(*tasks, **kwargs):
+        if insert_tasks and insert_tasks[0] in tasks:
+            insert_draining.set()
+        return original_gather(*tasks, **kwargs)
+
+    def commit_after_release(documents):
+        events.append("insert:start")
+        worker_entered.set()
+        assert worker_release.wait(3), "test insert executor gate timed out"
+        store.calls.append(copy.deepcopy(documents))
+        store.persisted.extend(copy.deepcopy(documents))
+        events.append("insert:commit")
+        return ["new-row"]
+
+    async def blocked_insert(documents, ids=None, executor=None):
+        insert_tasks.append(asyncio.current_task())
+        future = asyncio.get_running_loop().run_in_executor(
+            executor, commit_after_release, documents
+        )
+        insert_futures.append(future)
+        return await future
+
+    def remove_attempt(metadata):
+        events.append("rollback")
+        store.rollbacks.append(metadata)
+        store.persisted = [
+            doc
+            for doc in store.persisted
+            if not all(
+                doc.metadata.get(key) == value for key, value in metadata.items()
+            )
+        ]
+
+    async def rollback(metadata, executor=None):
+        await asyncio.get_running_loop().run_in_executor(
+            executor, remove_attempt, metadata
+        )
+
+    monkeypatch.setattr(asyncio, "Queue", ControlledQueue)
+    monkeypatch.setattr(asyncio, "gather", observe_gather)
+    monkeypatch.setattr(store, "aadd_documents", blocked_insert)
+    monkeypatch.setattr(store, "delete_by_metadata", rollback)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        app.state.thread_pool = executor
+        request = disconnect_request(client, uploads, route, "pdf")
+        connection = ASGIConnection(app, request, await request.aread())
+        try:
+            assert await asyncio.to_thread(worker_entered.wait, 1)
+            connection.disconnect()
+            await asyncio.wait_for(wrapper_entered.wait(), 1)
+            second_batch.set()
+            await asyncio.wait_for(insert_draining.wait(), 1)
+            assert state["operation"].cancelling() == 0
+            wrapper_release.set()
+            await asyncio.sleep(0.05)
+            assert state["operation"].cancelling() == 0
+            if repeat_cancel:
+                # The real disconnect started cleanup; stress subsequent owner cancellation.
+                state["operation"].cancel()
+                await asyncio.sleep(0)
+                state["operation"].cancel()
+                await asyncio.sleep(0.05)
+            assert not connection.task.done()
+            assert not insert_futures[0].cancelled()
+            assert not insert_tasks[0].cancelled()
+            assert store.persisted == [old] and not store.rollbacks
+            assert list(uploads.rglob("*.pdf"))
+            worker_release.set()
+            await asyncio.wait_for(asyncio.shield(connection.task), 1)
+            assert events == ["insert:start", "insert:commit", "rollback"]
+            assert len(insert_tasks) == 1 and len(store.calls) == 1
+            assert store.persisted == [old]
+            assert store.rollbacks[0]["_rag_ingestion_attempt_id"] != "old"
+            assert [
+                m["status"]
+                for m in connection.sent
+                if m["type"] == "http.response.start"
+            ] == [499]
+            assert len(list(uploads.rglob("*.pdf"))) == (
+                1 if route == "/local/embed" else 0
+            )
+            assert connection.task.cancelling() == 0
+        finally:
+            second_batch.set()
+            wrapper_release.set()
+            worker_release.set()
+            await connection.close()
+            app.state.thread_pool = original_executor
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+async def test_repeated_cancellation_during_preparation_still_drains_without_writes(
+    api, monkeypatch, freeze_disconnect_wrapper, route
+):
+    import threading
+
+    client, store, uploads = api
+    wrapper_entered, wrapper_release, state = freeze_disconnect_wrapper
+    worker_entered = threading.Event()
+    worker_release = threading.Event()
+    worker_done = threading.Event()
+    futures = []
+    prepare = routes._prepare_documents_sync
+    drain = routes._drain_request_worker
+
+    def blocked_prepare(*args):
+        worker_entered.set()
+        assert worker_release.wait(3), "test preparation executor gate timed out"
+        result = prepare(*args)
+        worker_done.set()
+        return result
+
+    async def observe_drain(future):
+        if routes._active_extraction_request.get() is not None and not futures:
+            futures.append(future)
+        return await drain(future)
+
+    monkeypatch.setattr(routes, "_prepare_documents_sync", blocked_prepare)
+    monkeypatch.setattr(routes, "_drain_request_worker", observe_drain)
+    request = disconnect_request(client, uploads, route, "pdf")
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        assert await asyncio.to_thread(worker_entered.wait, 1)
+        connection.disconnect()
+        await asyncio.wait_for(wrapper_entered.wait(), 1)
+        wrapper_release.set()
+        await asyncio.sleep(0.05)
+        for _ in range(2):
+            state["operation"].cancel()
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
+        assert not connection.task.done() and not worker_done.is_set()
+        assert not futures[0].cancelled()
+        assert not store.calls and not store.persisted and not store.rollbacks
+        assert list(uploads.rglob("*.pdf"))
+        worker_release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert worker_done.is_set()
+        assert not store.calls and not store.persisted and not store.rollbacks
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [499]
+        assert len(list(uploads.rglob("*.pdf"))) == (
+            1 if route == "/local/embed" else 0
+        )
+        assert connection.task.cancelling() == 0
+    finally:
+        wrapper_release.set()
+        worker_release.set()
+        await connection.close()
+
+
+async def test_repeated_cancellation_cannot_abandon_upload_unlink(
+    api, monkeypatch, freeze_disconnect_wrapper
+):
+    client, _, uploads = api
+    wrapper_entered, wrapper_release, state = freeze_disconnect_wrapper
+    unlink_entered = asyncio.Event()
+    unlink_release = asyncio.Event()
+    unlink_tasks = []
+    remove = routes.aiofiles.os.remove
+
+    async def delayed_remove(*args, **kwargs):
+        unlink_tasks.append(asyncio.current_task())
+        unlink_entered.set()
+        await unlink_release.wait()
+        await remove(*args, **kwargs)
+
+    monkeypatch.setattr(routes.aiofiles.os, "remove", delayed_remove)
+    request = disconnect_request(client, uploads, "/text", "pdf")
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        await asyncio.wait_for(unlink_entered.wait(), 1)
+        connection.disconnect()
+        await asyncio.wait_for(wrapper_entered.wait(), 1)
+        wrapper_release.set()
+        await asyncio.sleep(0.05)
+        for _ in range(2):
+            state["operation"].cancel()
+            await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
+        assert not connection.task.done() and not unlink_tasks[0].cancelled()
+        assert list(uploads.rglob("*.pdf"))
+        unlink_release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert not list(uploads.rglob("*.pdf"))
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [499]
+    finally:
+        wrapper_release.set()
+        unlink_release.set()
+        await connection.close()
