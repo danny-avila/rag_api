@@ -497,3 +497,389 @@ async def test_asgi_disconnect_wins_over_processor_success(
         assert routes.extraction_client._admitted == 0
     finally:
         await connection.close()
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+@pytest.mark.parametrize("phase", ["preparation", "insertion"])
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_disconnect_after_extraction_drains_and_preserves_old_rows(
+    api, processor, monkeypatch, route, phase, format
+):
+    import threading
+
+    client, store, uploads = api
+    monkeypatch.setattr(routes, "EMBEDDING_BATCH_SIZE", 1)
+    old = Document(
+        page_content="previous attempt",
+        metadata={
+            "file_id": "caller-file",
+            "user_id": "caller",
+            "_rag_ingestion_attempt_id": "old",
+        },
+    )
+    store.persisted.append(old)
+    events = []
+    preparation_entered = threading.Event()
+    preparation_release = threading.Event()
+    insert_entered = asyncio.Event()
+    insert_release = asyncio.Event()
+    prepare = routes._prepare_documents_sync
+    insert = store.aadd_documents
+    rollback = store.delete_by_metadata
+
+    def delayed_prepare(*args):
+        events.append("preparation:start")
+        preparation_entered.set()
+        assert preparation_release.wait(3), "test preparation gate timed out"
+        result = prepare(*args)
+        events.append("preparation:done")
+        return result
+
+    async def delayed_insert(*args, **kwargs):
+        events.append("insert:start")
+        insert_entered.set()
+        await insert_release.wait()
+        result = await insert(*args, **kwargs)
+        events.append("insert:commit")
+        return result
+
+    async def track_rollback(*args, **kwargs):
+        events.append("rollback")
+        return await rollback(*args, **kwargs)
+
+    if phase == "preparation":
+        monkeypatch.setattr(routes, "_prepare_documents_sync", delayed_prepare)
+    else:
+        monkeypatch.setattr(store, "aadd_documents", delayed_insert)
+    monkeypatch.setattr(store, "delete_by_metadata", track_rollback)
+    request = disconnect_request(client, uploads, route, format)
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        if phase == "preparation":
+            assert await asyncio.to_thread(preparation_entered.wait, 1)
+        else:
+            await asyncio.wait_for(insert_entered.wait(), 1)
+        assert [r[0] for r in processor.requests] == ["GET", "POST"]
+        events.append("disconnect:queued")
+        connection.disconnect()
+        await asyncio.sleep(0.05)
+        assert not connection.task.done()
+        assert not store.rollbacks
+        assert list(uploads.rglob(f"*.{format}"))
+        preparation_release.set()
+        insert_release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        statuses = [
+            message["status"]
+            for message in connection.sent
+            if message["type"] == "http.response.start"
+        ]
+        assert store.persisted == [old]
+        assert statuses == [499]
+        assert connection.task.cancelling() == 0
+        if phase == "preparation":
+            assert not store.calls and not store.rollbacks
+            assert events.index("preparation:done") > events.index("disconnect:queued")
+        else:
+            assert events == [
+                "insert:start",
+                "disconnect:queued",
+                "insert:commit",
+                "rollback",
+            ]
+            assert store.rollbacks[0]["_rag_ingestion_attempt_id"] != "old"
+        assert len(list(uploads.rglob(f"*.{format}"))) == (
+            1 if route == "/local/embed" else 0
+        )
+    finally:
+        preparation_release.set()
+        insert_release.set()
+        await connection.close()
+
+
+class SyncRecordingStore:
+    def __init__(self, entered, release, events, old):
+        self.entered = entered
+        self.release = release
+        self.events = events
+        self.calls = []
+        self.persisted = [old]
+        self.rollbacks = []
+
+    def add_documents(self, documents, ids=None):
+        self.calls.append(copy.deepcopy(documents))
+        self.events.append("insert:start")
+        self.entered.set()
+        assert self.release.wait(3), "test sync insertion gate timed out"
+        self.persisted.extend(copy.deepcopy(documents))
+        self.events.append("insert:commit")
+        return [
+            f"sync-row-{len(self.calls)}-{index}" for index in range(len(documents))
+        ]
+
+    def delete_scoped(self, *args, **kwargs):
+        self.rollbacks.append((args, kwargs))
+        raise AssertionError("disconnect must not delete previous attempts by file_id")
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+@pytest.mark.parametrize("mode", ["async_single", "sync_single", "sync_batch"])
+@pytest.mark.parametrize("format", ["pdf", "docx"])
+async def test_disconnect_after_uncancellable_storage_starts_drains_without_undo(
+    api, processor, monkeypatch, route, mode, format
+):
+    import threading
+
+    client, store, uploads = api
+    monkeypatch.setattr(
+        routes, "EMBEDDING_BATCH_SIZE", 1 if mode == "sync_batch" else 0
+    )
+    old = Document(
+        page_content="previous attempt",
+        metadata={
+            "file_id": "caller-file",
+            "user_id": "caller",
+            "_rag_ingestion_attempt_id": "old",
+        },
+    )
+    events = []
+    sync_entered = threading.Event()
+    sync_release = threading.Event()
+    async_entered = asyncio.Event()
+    async_release = asyncio.Event()
+    if mode.startswith("sync"):
+        store = SyncRecordingStore(sync_entered, sync_release, events, old)
+        monkeypatch.setattr(routes, "vector_store", store)
+    else:
+        store.persisted.append(old)
+        insert = store.aadd_documents
+
+        async def delayed_insert(*args, **kwargs):
+            events.append("insert:start")
+            async_entered.set()
+            await async_release.wait()
+            result = await insert(*args, **kwargs)
+            events.append("insert:commit")
+            return result
+
+        monkeypatch.setattr(store, "aadd_documents", delayed_insert)
+    request = disconnect_request(client, uploads, route, format)
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        if mode.startswith("sync"):
+            assert await asyncio.to_thread(sync_entered.wait, 1)
+        else:
+            await asyncio.wait_for(async_entered.wait(), 1)
+        events.append("disconnect:queued")
+        connection.disconnect()
+        await asyncio.sleep(0.05)
+        assert "http.disconnect" in connection.received
+        assert not connection.task.done()
+        assert store.persisted == [old] and not store.rollbacks
+        assert list(uploads.rglob(f"*.{format}"))
+        sync_release.set()
+        async_release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert old in store.persisted
+        assert len(store.persisted) == (3 if format == "pdf" else 2)
+        assert not store.rollbacks
+        assert events.index("insert:commit") > events.index("disconnect:queued")
+        expected_calls = 2 if mode == "sync_batch" and format == "pdf" else 1
+        assert len(store.calls) == expected_calls
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [499]
+        assert connection.task.cancelling() == 0
+        assert len(list(uploads.rglob(f"*.{format}"))) == (
+            1 if route == "/local/embed" else 0
+        )
+    finally:
+        sync_release.set()
+        async_release.set()
+        await connection.close()
+
+
+@pytest.mark.parametrize("route", ["/embed", "/embed-upload", "/local/embed"])
+@pytest.mark.parametrize("policy", ["disabled", "unselected"])
+async def test_legacy_request_keeps_post_extraction_disconnect_behavior(
+    api, monkeypatch, route, policy
+):
+    import threading
+
+    client, store, uploads = api
+    if policy == "disabled":
+        routes.extraction_client = ExtractionClient(ExtractionSettings())
+    else:
+        routes.extraction_client = ExtractionClient(
+            ExtractionSettings(
+                enabled=True,
+                formats=frozenset({"docx"}),
+            )
+        )
+    loader = Mock()
+    loader.lazy_load.return_value = [Document(page_content="legacy text")]
+    monkeypatch.setattr(routes, "get_loader", Mock(return_value=(loader, True, "pdf")))
+    entered = threading.Event()
+    release = threading.Event()
+    prepare = routes._prepare_documents_sync
+
+    def delayed_prepare(*args):
+        entered.set()
+        assert release.wait(3), "test legacy preparation gate timed out"
+        return prepare(*args)
+
+    monkeypatch.setattr(routes, "_prepare_documents_sync", delayed_prepare)
+    request = disconnect_request(client, uploads, route, "pdf")
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        connection.disconnect()
+        await asyncio.sleep(0.05)
+        release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert "http.disconnect" not in connection.received
+        assert len(store.persisted) == 1
+        assert not store.rollbacks
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [200]
+    finally:
+        release.set()
+        await connection.close()
+
+
+@pytest.mark.parametrize("disconnect", [False, True])
+async def test_selected_sync_partial_failure_retains_old_and_committed_rows(
+    api, monkeypatch, disconnect
+):
+    import threading
+
+    client, _, uploads = api
+    monkeypatch.setattr(routes, "EMBEDDING_BATCH_SIZE", 1)
+    entered = threading.Event()
+    release = threading.Event()
+    events = []
+    old = Document(
+        page_content="old", metadata={"file_id": "caller-file", "user_id": "caller"}
+    )
+    store = SyncRecordingStore(entered, release, events, old)
+    insert = store.add_documents
+
+    def fail_second_batch(documents, ids=None):
+        if store.calls:
+            raise RuntimeError("second sync batch failed")
+        return insert(documents, ids)
+
+    monkeypatch.setattr(store, "add_documents", fail_second_batch)
+    monkeypatch.setattr(routes, "vector_store", store)
+    request = disconnect_request(client, uploads, "/embed", "pdf")
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        if disconnect:
+            connection.disconnect()
+            await asyncio.sleep(0.05)
+            assert "http.disconnect" in connection.received
+        release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert len(store.persisted) == 2 and old in store.persisted
+        assert not store.rollbacks
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [499 if disconnect else 500]
+    finally:
+        release.set()
+        await connection.close()
+
+
+async def test_disconnect_during_upload_cleanup_waits_for_removal(api, monkeypatch):
+    client, _, uploads = api
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    remove = routes.aiofiles.os.remove
+
+    async def delayed_remove(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        await remove(*args, **kwargs)
+
+    monkeypatch.setattr(routes.aiofiles.os, "remove", delayed_remove)
+    request = disconnect_request(client, uploads, "/text", "pdf")
+    connection = ASGIConnection(client._transport.app, request, await request.aread())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        connection.disconnect()
+        await asyncio.sleep(0.05)
+        assert not connection.task.done()
+        release.set()
+        await asyncio.wait_for(asyncio.shield(connection.task), 1)
+        assert not list(uploads.rglob("*.pdf"))
+        assert [
+            m["status"] for m in connection.sent if m["type"] == "http.response.start"
+        ] == [499]
+    finally:
+        release.set()
+        await connection.close()
+
+
+@pytest.mark.parametrize("batch_size", [0, 1])
+async def test_disconnect_before_queued_sync_mutation_prevents_write(
+    api, monkeypatch, batch_size
+):
+    import threading
+
+    client, _, uploads = api
+    app = client._transport.app
+    original_executor = app.state.thread_pool
+    monkeypatch.setattr(routes, "EMBEDDING_BATCH_SIZE", batch_size)
+    blocker_entered = threading.Event()
+    blocker_release = threading.Event()
+    submitted = asyncio.Event()
+    old = Document(
+        page_content="old", metadata={"file_id": "caller-file", "user_id": "caller"}
+    )
+    store = SyncRecordingStore(threading.Event(), threading.Event(), [], old)
+    monkeypatch.setattr(routes, "vector_store", store)
+    prepare = routes._prepare_documents_sync
+    run_sync = routes._run_sync_request_store
+
+    def blocker():
+        blocker_entered.set()
+        assert blocker_release.wait(3), "test executor gate timed out"
+
+    def prepare_then_block_executor(*args):
+        docs = prepare(*args)
+        app.state.thread_pool.submit(blocker)
+        return docs
+
+    async def observe_submission(*args):
+        submitted.set()
+        return await run_sync(*args)
+
+    monkeypatch.setattr(routes, "_prepare_documents_sync", prepare_then_block_executor)
+    monkeypatch.setattr(routes, "_run_sync_request_store", observe_submission)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        app.state.thread_pool = executor
+        request = disconnect_request(client, uploads, "/embed", "pdf")
+        connection = ASGIConnection(app, request, await request.aread())
+        try:
+            await asyncio.wait_for(submitted.wait(), 1)
+            assert blocker_entered.is_set()
+            connection.disconnect()
+            await asyncio.sleep(0.05)
+            assert "http.disconnect" in connection.received
+            assert not connection.task.done()
+            assert not store.calls
+            blocker_release.set()
+            await asyncio.wait_for(asyncio.shield(connection.task), 1)
+            assert store.persisted == [old]
+            assert not store.calls and not store.rollbacks
+            assert [
+                m["status"]
+                for m in connection.sent
+                if m["type"] == "http.response.start"
+            ] == [499]
+        finally:
+            blocker_release.set()
+            await connection.close()
+            app.state.thread_pool = original_executor
