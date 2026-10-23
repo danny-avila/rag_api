@@ -32,6 +32,18 @@ _BINARY_FILE_EXTENSIONS = frozenset(
 )
 
 
+def extraction_format(filename: str, content_type: str) -> Optional[str]:
+    """Identify migrated formats independently of text/Markdown MIME overrides."""
+    extension = filename.rsplit(".", 1)[-1].lower()
+    if extension == "pdf" or content_type == "application/pdf":
+        return "pdf"
+    if extension == "docx" or content_type == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ):
+        return "docx"
+    return None
+
+
 def detect_file_encoding(filepath: str) -> str:
     """
     Detect the encoding of a file using BOM markers and chardet for broader support.

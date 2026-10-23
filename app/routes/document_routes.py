@@ -7,6 +7,7 @@ import hashlib
 import traceback
 import aiofiles
 import aiofiles.os
+from anyio import CancelScope
 import asyncio
 import time
 from shutil import copyfileobj
@@ -44,8 +45,11 @@ from app.config import (
     EMBEDDING_MAX_QUEUE_SIZE,
     PARALLEL_EXECUTION,
     RAG_DISTANCE_THRESHOLD,
+    EXTRACTION_SETTINGS,
+    PDF_EXTRACT_IMAGES,
 )
 from app.scope import file_clause, files_clause, resolve_scope
+from app.services.extraction_client import ExtractionClient, ExtractionError
 
 # Warn once at import time if the user set a threshold under Atlas, where
 # the score direction is inverted (Atlas vectorSearchScore: higher = better)
@@ -94,6 +98,7 @@ from app.services.vector_store.async_pg_vector import AsyncPgVector
 from app.utils.async_utils import run_in_executor
 from app.utils.document_loader import (
     get_loader,
+    extraction_format,
     clean_text,
     process_documents,
     cleanup_temp_encoding_file,
@@ -101,6 +106,7 @@ from app.utils.document_loader import (
 from app.utils.health import is_health_ok
 
 router = APIRouter()
+extraction_client = ExtractionClient(EXTRACTION_SETTINGS)
 
 _INGESTION_ATTEMPT_ID_KEY = "_rag_ingestion_attempt_id"
 _INGESTION_ATTEMPT_STARTED_AT_NS_KEY = "_rag_ingestion_attempt_started_at_ns"
@@ -348,6 +354,31 @@ async def load_file_content(
     the ``/text`` endpoint) so text-formatted files are not semantically
     parsed.
     """
+    format = extraction_format(filename, content_type)
+    settings = extraction_client.settings
+    if settings.enabled and format in settings.formats:
+        try:
+            if format == "pdf" and PDF_EXTRACT_IMAGES:
+                raise ExtractionError("UNSUPPORTED_CONTENT")
+            segments = await extraction_client.extract(file_path, format)
+        except ExtractionError as error:
+            raise HTTPException(
+                status_code=error.status_code,
+                detail={"code": error.code},
+            ) from None
+        # Service pages are one-based; PyPDFLoader metadata is zero-based.
+        documents = [
+            Document(
+                page_content=segment["text"],
+                metadata={
+                    "source": file_path,
+                    **({"page": segment["index"] - 1} if format == "pdf" else {}),
+                },
+            )
+            for segment in segments
+        ]
+        return documents, True, format
+
     loader = None
     try:
         loader, known_type, file_ext = get_loader(
@@ -381,7 +412,9 @@ def extract_text_from_documents(documents: List[Document], file_ext: str) -> str
 async def cleanup_temp_file_async(file_path: str) -> None:
     """Clean up temporary file asynchronously."""
     try:
-        await aiofiles.os.remove(file_path)
+        # Starlette cancellation scopes must not interrupt upload cleanup.
+        with CancelScope(shield=True):
+            await aiofiles.os.remove(file_path)
     except Exception as e:
         logger.error(
             "Failed to remove temporary file | Path: %s | Error: %s | Traceback: %s",
@@ -1114,7 +1147,6 @@ async def embed_local_file(
             detail=ERROR_MESSAGES.FILE_NOT_FOUND,
         )
 
-    loader = None
     try:
         logger.info(
             "Ingestion started | %s",
@@ -1127,12 +1159,11 @@ async def embed_local_file(
                 temp_file_path=file_path,
             ),
         )
-        loader, known_type, file_ext = get_loader(
-            document.filename, document.file_content_type, file_path
-        )
-        loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(
-            request.app.state.thread_pool, lambda: list(loader.lazy_load())
+        data, known_type, file_ext = await load_file_content(
+            document.filename,
+            document.file_content_type,
+            file_path,
+            request.app.state.thread_pool,
         )
 
         result = await store_data_in_vector_db(
@@ -1147,7 +1178,7 @@ async def embed_local_file(
             temp_file_path=file_path,
         )
 
-        if result:
+        if result and "error" not in result:
             return {
                 "status": True,
                 "file_id": document.file_id,
@@ -1188,10 +1219,6 @@ async def embed_local_file(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT(e),
             )
-    finally:
-        # Clean up temporary UTF-8 file if it was created for encoding conversion
-        if loader is not None:
-            cleanup_temp_encoding_file(loader)
 
 
 @router.post("/embed")
@@ -1261,23 +1288,11 @@ async def embed_file(
             temp_file_path=validated_file_path,
         )
 
-        if not result:
-            response_status = False
-            response_message = "Failed to process/store the file data."
+        if not result or "error" in result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
             )
-        elif "error" in result:
-            response_status = False
-            response_message = "Failed to process/store the file data."
-            if isinstance(result["error"], str):
-                response_message = result["error"]
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="An unspecified error occurred.",
-                )
     except HTTPException as http_exc:
         response_status = False
         response_message = f"HTTP Exception: {http_exc.detail}"
@@ -1423,7 +1438,7 @@ async def embed_file_upload(
             temp_file_path=validated_temp_file_path,
         )
 
-        if not result:
+        if not result or "error" in result:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to process/store the file data.",
